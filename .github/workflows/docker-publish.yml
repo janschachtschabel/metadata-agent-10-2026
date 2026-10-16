@@ -8,14 +8,11 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
-env:
-  IMAGE_NAME: ${{ github.repository }}
-
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04   # pinned: ubuntu-latest moves to 26.04 from 2026-10-19
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Run the test suite
         run: |
           pip install uv==0.7.13
@@ -25,7 +22,7 @@ jobs:
 
   build-and-push:
     needs: test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04   # pinned: ubuntu-latest moves to 26.04 from 2026-10-19
     env:
       # Publish only outside pull requests (their code must not run next to the
       # DockerHub password, and an unmerged change must not be published) and
@@ -33,14 +30,14 @@ jobs:
       # builds and checks the image, it just does not push it.
       PUBLISH: ${{ github.event_name != 'pull_request' && secrets.DOCKERHUB_PASSWORD != '' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: azure/docker-login@v1
+      - uses: actions/checkout@v7
+      - uses: docker/login-action@v4   # Docker Hub by default
         if: env.PUBLISH == 'true'
         with:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
       - name: Inject slug/short variables
-        uses: rlespinasse/github-slug-action@v4
+        uses: rlespinasse/github-slug-action@v5
       - name: Build Docker image
         run: docker build --tag ${{ github.repository }}:${{ env.GITHUB_REF_SLUG }} .
       - name: Publish to DockerHub

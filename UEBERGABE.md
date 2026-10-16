@@ -14,6 +14,8 @@ Anforderungen erfüllt sind, steht in
 |---|---|
 | Repo | API: <https://scm.edu-sharing.com/edu-sharing/projects/wlo/metaservices/metadata-agent>; Webkomponente: <https://scm.edu-sharing.com/edu-sharing/projects/wlo/metaservices/metadata-agent-webcomponent> (das gebaute Widget liegt im API-Repo unter `src/static/widget/`). Ob T6 Zugriff hat, ist noch zu bestätigen. |
 | CI | `.gitlab-ci.yml` baut bei jedem Push auf `main`/`develop` ein Image mit dem Branch als Tag und bei jedem Git-Tag ein Image mit der Version (z.B. `v2.1.0`). Produktion nur mit Versions-Tags. |
+| GitLab-CI/CD-Variablen | Die Docker-Jobs in `.gitlab-ci.yml` brauchen: `DIND_IMAGE`, `DIND_HOST`, `DIND_DRIVER`, `DIND_TLS_CERTDIR` (Docker-in-Docker), `DOCKER_REGISTRY`, `DOCKER_USERNAME`, `DOCKER_PASSWORD` (maskiert). Test- und Ruff-Jobs brauchen keine. Die Webkomponente braucht keine eigenen Variablen. |
+| GitHub-Spiegel | `.github/workflows/docker-publish.yml`: Tests und Image-Bau bei jedem Push; nach DockerHub nur mit Secret `DOCKERHUB_PASSWORD` |
 | Image | Multi-Stage auf `python:3.13-slim`, läuft als Nutzer `appuser` (UID 1000), `.dockerignore` vorhanden, HEALTHCHECK auf `/health`. Enthält Chromium für Screenshots (~400 MB), daher größer als ein reiner API-Dienst. |
 | Daten im Image | nur die Schemata (wenige MB); keine Modelle oder Korpora |
 
