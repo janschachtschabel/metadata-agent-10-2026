@@ -26,12 +26,16 @@ jobs:
   build-and-push:
     needs: test
     runs-on: ubuntu-latest
+    env:
+      # Publish only outside pull requests (their code must not run next to the
+      # DockerHub password, and an unmerged change must not be published) and
+      # only where the secret exists — a fork or a fresh copy of the repo still
+      # builds and checks the image, it just does not push it.
+      PUBLISH: ${{ github.event_name != 'pull_request' && secrets.DOCKERHUB_PASSWORD != '' }}
     steps:
       - uses: actions/checkout@v4
-      # Pull requests only build: their code must not run next to the
-      # DockerHub password, and an unmerged change must not be published.
       - uses: azure/docker-login@v1
-        if: github.event_name != 'pull_request'
+        if: env.PUBLISH == 'true'
         with:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
@@ -40,5 +44,8 @@ jobs:
       - name: Build Docker image
         run: docker build --tag ${{ github.repository }}:${{ env.GITHUB_REF_SLUG }} .
       - name: Publish to DockerHub
-        if: github.event_name != 'pull_request'
+        if: env.PUBLISH == 'true'
         run: docker push ${{ github.repository }}:${{ env.GITHUB_REF_SLUG }}
+      - name: Not published
+        if: env.PUBLISH != 'true'
+        run: echo "::notice::Image built but not published (pull request or no DOCKERHUB_PASSWORD secret)."
