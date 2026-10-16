@@ -1,135 +1,98 @@
 # Steckbrief: Metadata Agent API
 
-Stand 16.10.2026, Version 2.1.0. Status-Werte wie in der Vorlage: **ungeprüft**,
-**offen**, **in Arbeit**, **erfüllt**, **nicht anwendbar**. Einzelheiten zu
-jedem Punkt stehen in [UEBERGABE.md](../UEBERGABE.md); die Abdeckung der
-Anforderungen von Team 6 in [team6-anforderungen.md](team6-anforderungen.md).
+Entstanden aus der ausführlichen Beschreibung unter [UEBERGABE.md](../UEBERGABE.md)
+(Stand 16.10.2026, Version 2.1.0).
 
 | | |
 |---|---|
-| **Service** | Metadata Agent API – erschließt Bildungsinhalte mit KI (Webkomponente `metadata-agent-canvas` inklusive) |
+| **Service** | Metadata Agent API (inkl. Webkomponente `metadata-agent-canvas`) |
 | **Technischer Owner** | **[eintragen]** |
-| **Readiness Status** | **Handlungsbedarf** |
+| **Readiness Status** | Handlungsbedarf |
 | **Offene Punkte** | 10 |
-| **Kritische offene Punkte** | 2 |
-| **Jira** | **[Ticket eintragen, z.B. GEN-357 „Planung der Anpassungen für eine saubere Übergabe an die IT“]** |
-
-**Die zwei kritischen Punkte** (ohne sie kann T6 nicht übernehmen):
-1. **2.1.0 ist im GitLab-Repo weder committet noch getaggt.** Auf GitHub liegt
-   der Stand seit 16.10.2026 (private Repos, siehe Repository-Link); die
-   GitLab-CI, die das Image für die eigene Registry baut, braucht aber Commit und
-   Git-Tag `v2.1.0` im GitLab-Repo. Dort heißen die letzten Tags `0.0.x`.
-2. **Der Weg über den B-API-Proxy ist nicht getestet.** Dafür muss 2.1.0 auf
-   Staging laufen und der Dienst in der B-API mit `forwardApiKey` eingetragen
-   sein. Prüfablauf: DEPLOYMENT.md, „Nach dem Deployment prüfen“.
-
-## Kurzprofil
-
-| | |
-|---|---|
-| Zweck | erzeugt aus Text, Webseite oder Repository-Eintrag Metadaten (Titel, Beschreibung, Schlagworte, Bildungsstufe, Inhaltsart …) und schreibt sie ins WLO-Repository |
-| Nutzung | Webkomponente in edu-sharing → B-API-Proxy (`forwardApiKey`) → Agent |
-| Ports | 8000 öffentlich (API, `/docs`, `/widget/*`); intern optional 9000 (`/health`, `/ready`, `/metrics`) |
-| Abhängigkeiten | B-API LLM (OpenAI, AcademicCloud, Router), Textextraktion, edu-sharing Repository (Service-Account), Photon-Geocoder |
-| Zustand | zustandslos, keine Datenbank, keine Volumes; ein Worker je Container, skaliert über Replicas |
-| Antwortzeit `/generate` | 12–22 s mit `gpt-6-luna`, bis 90 s mit AcademicCloud → Ingress-Timeout mindestens 120 s |
-| Kosten je Erschließung | 0,007–0,017 € mit `gpt-6-luna` (Input-Caching aktiv), gebucht auf den Key des Aufrufers |
-| Image | `python:3.13-slim`, Multi-Stage, Nutzer `appuser`; Chromium für Screenshots (~400 MB) |
-
-## Architektur
-
-![Architektur-Map](architektur/metadata-agent-architektur.png)
-
-![Anfrageablauf über die B-API](architektur/metadata-agent-ablauf.png)
-
-Beide auch interaktiv und als SVG unter [architektur/](architektur/README.md).
+| **Kritische Offene Punkte** | 2 |
+| **Jira** | **[eintragen, z.B. GEN-357]** |
 
 ## Stammdaten & API
 
 | Punkt | Text oder Link | Status |
 |---|---|---|
-| Anzeigename und Beschreibung | `Metadata Agent API`; „Erschließt Bildungsinhalte mit KI: Aus einem Text, einer Webseite oder einem Repository-Eintrag erzeugt der Dienst passende Metadaten wie Titel, Beschreibung, Schlagworte, Bildungsstufe und Inhaltsart.“ (`info.summary` der Spec) | erfüllt |
-| Repository-Link | GitLab: <https://scm.edu-sharing.com/edu-sharing/projects/wlo/metaservices/metadata-agent>, Webkomponente: <https://scm.edu-sharing.com/edu-sharing/projects/wlo/metaservices/metadata-agent-webcomponent>. GitHub (privat, aktueller Stand 2.1.0, MIT-Lizenz): <https://github.com/janschachtschabel/metadata-agent-10-2026>, <https://github.com/janschachtschabel/metadata-agent-webcomponent-10-2026>. Zugriff für T6 bestätigen | offen |
-| OpenAPI Spec | `/openapi.json`, aus dem Code erzeugt (FastAPI); alle 16 Operationen beschrieben; Swagger UI unter `/docs` ohne Dritt-Server | erfüllt |
-| Pipeline und Git-Tags | GitLab (`.gitlab-ci.yml`): Branch-Images für `main`/`develop`, Versions-Image je Git-Tag; benötigte CI/CD-Variablen in UEBERGABE §1. GitHub Actions: Tests (1.589 bestanden) und Image-Bau grün, Push nach DockerHub nur mit Secret. **Kritisch:** im GitLab-Repo 2.1.0 noch nicht committet, Tag `v2.1.0` fehlt | offen |
-| Endpunkte (öffentliche und Infrastruktur) | Port 8000: API, `/docs`, `/openapi.json`, `/widget/*`. Interner Port (`METADATA_AGENT_INTERNAL_PORT`, z.B. 9000): `/health`, `/ready`, `/metrics`. Nicht in der Spec: `/health`, `/ready`, `/debug/*`; `/debug/*` standardmäßig aus, am Ingress zusätzlich sperren | erfüllt |
-| Header | ein: `Authorization: Bearer` (B-API-Proxy, `forwardApiKey`), `x-client-trace-id`/`x-request-id`/`x-b3-*`/`b3`; aus: `X-Request-ID` (UEBERGABE §2) | erfüllt |
-| Content-Types | API nur `application/json` (Bilder base64 im JSON). Widget-Dateien: JS, CSS, `woff2`, HTML, JSON – mit Wolli abstimmen | offen |
-| Antwortzeiten | `/generate` mit `gpt-6-luna` 12–22 s (gemessen 16.10.2026), mit AcademicCloud bis 90 s → Proxy-/Ingress-Timeout mindestens 120 s; `/extract-field`, `/detect-content-type` wenige Sekunden; Screenshots höchstens 90 s | erfüllt |
-| Asynchrone Job-Endpunkte | keine; nötig nur, falls im Proxy keine 120 s möglich sind | offen |
+| Anzeigename und Beschreibung | `Metadata Agent API`: erzeugt aus Text, Webseite oder Repository-Eintrag Metadaten (Titel, Beschreibung, Schlagworte, Bildungsstufe …) und schreibt sie ins WLO-Repository (`info.summary` der Spec) | erfüllt |
+| Repository-Link | GitLab: [metadata-agent](https://scm.edu-sharing.com/edu-sharing/projects/wlo/metaservices/metadata-agent), [metadata-agent-webcomponent](https://scm.edu-sharing.com/edu-sharing/projects/wlo/metaservices/metadata-agent-webcomponent). GitHub (privat, 2.1.0): [metadata-agent-10-2026](https://github.com/janschachtschabel/metadata-agent-10-2026), [metadata-agent-webcomponent-10-2026](https://github.com/janschachtschabel/metadata-agent-webcomponent-10-2026). Zugriff für T6 offen | offen |
+| OpenAPI Spec | `/openapi.json` aus dem Code; 16 Operationen beschrieben; Swagger UI `/docs` ohne Dritt-Server | erfüllt |
+| Pipeline und Git-Tags | GitLab-CI: Branch-Images und Versions-Image je Tag (Variablen: UEBERGABE §1). GitHub Actions grün (1.589 Tests). **Kritisch:** 2.1.0 im GitLab-Repo nicht committet, Tag `v2.1.0` fehlt | offen |
+| Endpunkte (öffentliche und Infrastruktur) | Port 8000: API, `/docs`, `/openapi.json`, `/widget/*`. Interner Port (z.B. 9000): `/health`, `/ready`, `/metrics`. `/debug/*` standardmäßig aus, am Ingress sperren | erfüllt |
+| spezielle Header und Content-Types | ein: `Authorization: Bearer` (B-API, `forwardApiKey`), `x-client-trace-id`, B3; aus: `X-Request-ID`. API nur JSON; Widget-Dateien (JS, CSS, `woff2`, HTML) mit Wolli abstimmen | offen |
+| Asynchrone Job-Endpunkte | keine. `/generate` dauert 12–22 s (`gpt-6-luna`), bis 90 s (AcademicCloud) → Timeout ≥ 120 s; Async nur nötig, falls der Proxy das nicht erlaubt | offen |
 
-## B-API & Authentifizierung
+## Architektur
 
 | Punkt | Text oder Link | Status |
 |---|---|---|
-| Variante | A: über die B-API geroutet | erfüllt |
-| Virtueller Key | wird gebraucht (der Dienst ruft LLMs auf); der weitergereichte Key gilt nur je Anfrage, wird nicht gespeichert oder geloggt (`METADATA_AGENT_B_API_AUTH_MODE`) | erfüllt |
-| Berechtigungen des Keys | LLM-Endpunkte der B-API (`openai`, bei Routing `router`); **kein** `LLM_ROUTE_MANAGE` | erfüllt |
-| Modell-Routing | Standard `b-api-openai` / `gpt-6-luna`. Optional `b-api-router` mit `provider/modell` oder einer Route, die ein Admin in der B-API anlegt (Muster in ENV-PARAMETER.md). Qwen-Route inhaltlich ausreichend, GWDG-Kontingent (~10 Aufrufe/min) aber zu knapp | erfüllt |
-| Eintrag in der B-API mit `forwardApiKey` | Dienst unter `/api/v1/proxy/<dienst>` mit `forwardApiKey` registrieren; danach Konsolentests aus DEPLOYMENT.md. **Kritisch**, siehe oben | offen |
-| Ohne B-API: LLM-Zugang per Env | `B_API_KEY` (wie 2.0.x, abwärtskompatibel) oder `OPENAI_API_KEY` mit `METADATA_AGENT_OPENAI_API_BASE` | erfüllt |
-| Ohne B-API: Auth für Aufrufer | keine eigene Auth-Schicht; ohne B-API muss ein Proxy den Zugang absichern | nicht anwendbar |
+| Übersicht | Widget in edu-sharing → B-API-Proxy → Agent → B-API LLM, Textextraktion, edu-sharing, Photon-Geocoder. Grafiken: [Map](architektur/metadata-agent-architektur.png), [Ablauf](architektur/metadata-agent-ablauf.png), [interaktiv](architektur/README.md) | erfüllt |
+| zustandslos oder zustandsbehaftet | zustandslos; keine Sitzungen, kein Cache, keine Volumes | erfüllt |
+| Horizontale Skalierbarkeit | ja, über Replicas (ein Worker je Container); GWDG-Limit (~10 Aufrufe/min) gilt für alle Pods gemeinsam | erfüllt |
 
-## Monitoring & Logging
+## Deployment und Infrastruktur
 
 | Punkt | Text oder Link | Status |
 |---|---|---|
-| Prometheus-Endpunkt | `/metrics` nur auf dem internen Port (`prometheus-client`) | erfüllt |
-| Applikationsmetriken | `metadata_agent_http_requests_total`/`…_duration_seconds`, `metadata_agent_llm_requests_total`/`…_duration_seconds` (Provider, Ergebnis), `metadata_agent_generations_total` (`success`/`partial`/`failed`) | erfüllt |
-| Alarmregeln | vier Regeln als Vorschlag (UEBERGABE §4); in den Helm-Chart übernehmen | in Arbeit |
-| Log-Format | stdout; `METADATA_AGENT_LOG_FORMAT=json` mit `trace_id`, sonst Text; `METADATA_AGENT_LOG_LEVEL` | erfüllt |
-| Tracing (B3, `x-client-trace-id`) | wird an B-API, Textextraktion und Repository durchgereicht, nie an Fremddienste | erfüllt |
-
-## Build & Image
-
-| Punkt | Text oder Link | Status |
-|---|---|---|
-| Dockerfile | Multi-Stage, `python:3.13-slim`, Nutzer `appuser`, `.dockerignore`, HEALTHCHECK | erfüllt |
-| Image-Größe | nur Laufzeit-Abhängigkeiten; Chromium für Screenshots (~400 MB) macht das Image dennoch groß | erfüllt |
-| Daten im Image | nur Schemata (8 MB), Widget (2,5 MB), Swagger UI (1,8 MB); keine Modelle | erfüllt |
-
-## Betrieb
-
-| Punkt | Text oder Link | Status |
-|---|---|---|
-| Zustand und Skalierung | zustandslos, horizontal skalierbar; ein Worker je Container; GWDG-Limit gilt für alle Pods gemeinsam | erfüllt |
-| Architekturübersicht | siehe oben und [architektur/](architektur/README.md) | erfüllt |
-| Datenbank | keine (kein SQLite, kein Redis, keine Volumes) | nicht anwendbar |
+| Docker-Files | `Dockerfile` (Multi-Stage, `python:3.13-slim`, Nutzer `appuser`, HEALTHCHECK) und `docker-compose.yml` im Repo | erfüllt |
+| HELM-Chart und Beispiel-Values | Beispiel-Values in UEBERGABE §6 (Probes, Ingress `proxy-read-timeout 120`, `proxy-body-size 20m`); Chart baut T6 daraus | erfüllt |
 | Abschaltbare Komponenten | keine; nur der interne Port ist optional | nicht anwendbar |
-| Ressourcen-Baseline | Requests 500m / 512Mi, Limits 2 CPU / 2Gi – geschätzt; unter Last messen (`docker stats` während `/generate` mit Screenshot) | offen |
-| Große Datenmengen | keine | nicht anwendbar |
-| Env-Variablen mit Defaults | [ENV-PARAMETER.md](../ENV-PARAMETER.md), per Test mit dem Code abgeglichen | erfüllt |
-| Beispiel-Values-YAML und Secrets | UEBERGABE §6; Secrets: `B_API_KEY`, `OPENAI_API_KEY` (nur ohne B-API), `WLO_GUEST_USERNAME`, `WLO_GUEST_PASSWORD` | erfüllt |
-| Dockerfile und docker-compose.yml | im Repo, als Referenz | erfüllt |
-| Beispiel-Konfiguration aktuell | `.env.template`, `docker-compose.yml` und Helm-Werte (UEBERGABE §6) am 16.10.2026 gegen den Code geprüft: keine unbekannten oder entfernten Variablen. Compose enthält jetzt auch Auth-Modus, Router und Betriebswerte; die Helm-Werte zeigen Ingress-Annotationen für Timeout und Body-Größe. Einen Helm-Chart baut T6 aus den Beispielwerten | erfüllt |
+| Datenbank | keine | nicht anwendbar |
+| Quelle und Volume-Größe für große Daten | keine; im Image nur Schemata (8 MB), Widget (2,5 MB), Swagger UI (1,8 MB) | nicht anwendbar |
 
-## Übergabe & Wartung
+## Security und Konfiguration
 
 | Punkt | Text oder Link | Status |
 |---|---|---|
-| Kosteninformationen | Gemessen 16.10.2026 mit `gpt-6-luna`, je Erschließung: 0,007 € (kurze Seite) bis 0,017 € (lange Seite, 66.000 Zeichen); Input-Caching greift für 66–93 % der Eingabe-Tokens (UEBERGABE §7). Gebucht auf den Key des Aufrufers | erfüllt |
-| Abrechnungsweg der B-API | OpenAI verlangt für Datenresidenz-Endpunkte 10 % Aufschlag (Azure EU laut früherer Auswertung 20 %); welchen Weg die B-API nutzt, klären | offen |
-| Ansprechperson T4 | **[Name, Kontakt]** | offen |
-| Updates (Abhängigkeiten, Patches, Modellwechsel) | **[wer]** stößt an; Modelle wechseln ohne Code-Änderung über Env oder Route | offen |
-| Prototyp-Entscheidung | Dienst ist bereits produktiv (2.0.x) | nicht anwendbar |
+| Authentifizierungskonzept | mit B-API (Variante A): Proxy reicht den Key per `forwardApiKey` durch, der Dienst nutzt ihn nur je Anfrage (`B_API_AUTH_MODE`). **Kritisch:** Eintrag in der B-API und Staging-Test fehlen | offen |
+| mit B-API: Routing, virtueller Key, Berechtigungen | Standard `gpt-6-luna` (`b-api-openai`), optional `b-api-router` mit Route oder `provider/modell`. Virtueller Key nötig; Rechte: LLM-Endpunkte (`openai`, `router`), kein `LLM_ROUTE_MANAGE` | erfüllt |
+| ohne B-API: LLM-Keys und Authentifizierung | `B_API_KEY` (wie 2.0.x) oder `OPENAI_API_KEY`; keine eigene Auth-Schicht, Zugang muss ein Proxy absichern | erfüllt |
+| Env-Variablen inklusive Defaults | [ENV-PARAMETER.md](../ENV-PARAMETER.md), per Test mit dem Code abgeglichen; `.env.template` | erfüllt |
+| Benötigte Secrets (ohne Werte) | `B_API_KEY`, `OPENAI_API_KEY` (nur ohne B-API), `WLO_GUEST_USERNAME`, `WLO_GUEST_PASSWORD` | erfüllt |
 
-## Offene Punkte (Kurzliste)
+## Monitoring und Betrieb
+
+| Punkt | Text oder Link | Status |
+|---|---|---|
+| Prometheus-Endpunkt | `/metrics` auf dem internen Port | erfüllt |
+| Applikationsmetriken und Alarmregeln | HTTP-Anfragen, LLM-Aufrufe (Provider, Ergebnis, Dauer), Erschließungen (`success`/`partial`/`failed`). Vier Alarmregeln als Vorschlag (UEBERGABE §4), noch nicht im Chart | in Arbeit |
+| Log-Format und x-client-trace-id | stdout, JSON mit `trace_id` oder Text; Trace-Header gehen an B-API, Textextraktion und Repository, nie an Fremddienste | erfüllt |
+
+## Ressourcen und Kosten
+
+| Punkt | Text oder Link | Status |
+|---|---|---|
+| CPU, RAM und Storage | geschätzt 500m / 512Mi (Requests) bis 2 CPU / 2Gi (Limits), kein Storage; Image groß durch Chromium (~400 MB). Unter Last messen | offen |
+| Erwartete LLM-Kosten | 0,007–0,017 € je Erschließung mit `gpt-6-luna`, Input-Caching 66–93 % (gemessen 16.10.2026, UEBERGABE §7); gebucht auf den Key des Aufrufers | erfüllt |
+| Kosten externer APIs | Photon-Geocoder kostenlos; Datenresidenz-Aufschlag der B-API (OpenAI 10 %, Azure EU 20 %) klären | offen |
+
+## Übergabe
+
+| Punkt | Text oder Link | Status |
+|---|---|---|
+| Ansprechperson in T4 | **[Name, Kontakt]**; wer Updates anstößt, ist offen | offen |
+| Bekannte Einschränkungen und offene Punkte | siehe unten | erfüllt |
+| Links zu Betriebsdokumentation und Nachweisen | [UEBERGABE.md](../UEBERGABE.md), [DEPLOYMENT.md](../DEPLOYMENT.md), [ENV-PARAMETER.md](../ENV-PARAMETER.md), [team6-anforderungen.md](team6-anforderungen.md), [Audit 15.10.2026](audits/2026-10-15-audit.md), [CHANGELOG](../CHANGELOG.md) | erfüllt |
+
+## Offene Punkte
 
 **Kritisch**
-1. 2.1.0 im GitLab-Repo committen und als `v2.1.0` taggen (API und Webkomponente), damit die GitLab-CI das Versions-Image baut.
-2. Staging-Test über den B-API-Proxy: Dienst mit `forwardApiKey` eintragen, Konsolentests aus DEPLOYMENT.md.
+1. 2.1.0 im GitLab-Repo committen und als `v2.1.0` taggen (API und Webkomponente).
+2. Dienst in der B-API mit `forwardApiKey` eintragen und auf Staging testen (DEPLOYMENT.md, „Nach dem Deployment prüfen“).
 
 **Offen**
-3. Technischer Owner und Ansprechperson T4 eintragen; Jira-Ticket eintragen.
+3. Technischer Owner, Ansprechperson T4 und Jira-Ticket eintragen.
 4. Festlegen, wer Updates anstößt (Abhängigkeiten, Patches, Modellwechsel).
 5. Repo-Zugriff für T6 bestätigen.
-6. Content-Types der Widget-Dateien (JS, CSS, `woff2`, HTML) mit Wolli abstimmen.
-7. Entscheiden, ob Async-Jobs nötig sind (nur falls der Proxy keine 120 s erlaubt).
-8. RAM und CPU unter Last messen (`docker stats` während `/generate` mit Screenshot).
-9. Abrechnungsweg der B-API klären (Aufschlag für Datenresidenz).
-10. Alarmregeln aus UEBERGABE §4 in den Helm-Chart übernehmen (in Arbeit).
+6. Content-Types der Widget-Dateien mit Wolli abstimmen.
+7. Entscheiden, ob Async-Jobs nötig sind.
+8. CPU und RAM unter Last messen.
+9. Abrechnungsweg der B-API klären (Datenresidenz-Aufschlag).
+10. Alarmregeln in den Helm-Chart übernehmen (in Arbeit).
 
-**Für T6 beim Deployment** (dokumentiert, keine offene Aufgabe von T4)
-- Ingress: `proxy-read-timeout` mindestens 120 s und `proxy-body-size` 20 MB (ingress-nginx-Default 1 MB); Beispiel-Annotationen in UEBERGABE §6.
-- `/debug/*` am Ingress sperren; den internen Port nicht freigeben.
-- Probes auf den internen Port (`/health`, `/ready`), Prometheus auf `/metrics`.
+**Bekannte Einschränkungen**
+- `/generate` braucht bis 90 s; Proxy und Ingress brauchen ≥ 120 s Timeout und 20 MB Body-Größe.
+- Das GWDG-Kontingent (AcademicCloud) reicht nicht für Produktivlast; Standard ist daher `gpt-6-luna`.
+- `/screenshot`, `/upload` und `/workflow` prüfen keine Rechte selbst; der Schutz liegt beim B-API-Proxy.
