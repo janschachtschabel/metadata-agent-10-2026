@@ -15,9 +15,10 @@ Anforderungen von Team 6 in [team6-anforderungen.md](team6-anforderungen.md).
 | **Jira** | **[Ticket eintragen, z.B. GEN-357 „Planung der Anpassungen für eine saubere Übergabe an die IT“]** |
 
 **Die zwei kritischen Punkte** (ohne sie kann T6 nicht übernehmen):
-1. **2.1.0 ist weder committet noch getaggt.** Alle Änderungen seit dem
-   15.09.2026 liegen nur lokal (API und Webkomponente). Ohne Commit und Git-Tag
-   `v2.1.0` baut die CI kein Versions-Image; die letzten Tags heißen `0.0.x`.
+1. **2.1.0 ist im GitLab-Repo weder committet noch getaggt.** Auf GitHub liegt
+   der Stand seit 16.10.2026 (private Repos, siehe Repository-Link); die
+   GitLab-CI, die das Image für die eigene Registry baut, braucht aber Commit und
+   Git-Tag `v2.1.0` im GitLab-Repo. Dort heißen die letzten Tags `0.0.x`.
 2. **Der Weg über den B-API-Proxy ist nicht getestet.** Dafür muss 2.1.0 auf
    Staging laufen und der Dienst in der B-API mit `forwardApiKey` eingetragen
    sein. Prüfablauf: DEPLOYMENT.md, „Nach dem Deployment prüfen“.
@@ -48,9 +49,9 @@ Beide auch interaktiv und als SVG unter [architektur/](architektur/README.md).
 | Punkt | Text oder Link | Status |
 |---|---|---|
 | Anzeigename und Beschreibung | `Metadata Agent API`; „Erschließt Bildungsinhalte mit KI: Aus einem Text, einer Webseite oder einem Repository-Eintrag erzeugt der Dienst passende Metadaten wie Titel, Beschreibung, Schlagworte, Bildungsstufe und Inhaltsart.“ (`info.summary` der Spec) | erfüllt |
-| Repository-Link | <https://scm.edu-sharing.com/edu-sharing/projects/wlo/metaservices/metadata-agent>, Webkomponente: <https://scm.edu-sharing.com/edu-sharing/projects/wlo/metaservices/metadata-agent-webcomponent>. Zugriff für T6 bestätigen | offen |
+| Repository-Link | GitLab: <https://scm.edu-sharing.com/edu-sharing/projects/wlo/metaservices/metadata-agent>, Webkomponente: <https://scm.edu-sharing.com/edu-sharing/projects/wlo/metaservices/metadata-agent-webcomponent>. GitHub (privat, aktueller Stand 2.1.0, MIT-Lizenz): <https://github.com/janschachtschabel/metadata-agent-10-2026>, <https://github.com/janschachtschabel/metadata-agent-webcomponent-10-2026>. Zugriff für T6 bestätigen | offen |
 | OpenAPI Spec | `/openapi.json`, aus dem Code erzeugt (FastAPI); alle 16 Operationen beschrieben; Swagger UI unter `/docs` ohne Dritt-Server | erfüllt |
-| Pipeline und Git-Tags | `.gitlab-ci.yml`: Branch-Images für `main`/`develop`, Versions-Image je Git-Tag. **Kritisch:** 2.1.0 noch nicht committet, Tag `v2.1.0` fehlt | offen |
+| Pipeline und Git-Tags | GitLab (`.gitlab-ci.yml`): Branch-Images für `main`/`develop`, Versions-Image je Git-Tag; benötigte CI/CD-Variablen in UEBERGABE §1. GitHub Actions: Tests (1.589 bestanden) und Image-Bau grün, Push nach DockerHub nur mit Secret. **Kritisch:** im GitLab-Repo 2.1.0 noch nicht committet, Tag `v2.1.0` fehlt | offen |
 | Endpunkte (öffentliche und Infrastruktur) | Port 8000: API, `/docs`, `/openapi.json`, `/widget/*`. Interner Port (`METADATA_AGENT_INTERNAL_PORT`, z.B. 9000): `/health`, `/ready`, `/metrics`. Nicht in der Spec: `/health`, `/ready`, `/debug/*`; `/debug/*` standardmäßig aus, am Ingress zusätzlich sperren | erfüllt |
 | Header | ein: `Authorization: Bearer` (B-API-Proxy, `forwardApiKey`), `x-client-trace-id`/`x-request-id`/`x-b3-*`/`b3`; aus: `X-Request-ID` (UEBERGABE §2) | erfüllt |
 | Content-Types | API nur `application/json` (Bilder base64 im JSON). Widget-Dateien: JS, CSS, `woff2`, HTML, JSON – mit Wolli abstimmen | offen |
@@ -115,7 +116,7 @@ Beide auch interaktiv und als SVG unter [architektur/](architektur/README.md).
 ## Offene Punkte (Kurzliste)
 
 **Kritisch**
-1. 2.1.0 committen und als `v2.1.0` taggen (API und Webkomponente), damit die CI das Versions-Image baut.
+1. 2.1.0 im GitLab-Repo committen und als `v2.1.0` taggen (API und Webkomponente), damit die GitLab-CI das Versions-Image baut.
 2. Staging-Test über den B-API-Proxy: Dienst mit `forwardApiKey` eintragen, Konsolentests aus DEPLOYMENT.md.
 
 **Offen**
