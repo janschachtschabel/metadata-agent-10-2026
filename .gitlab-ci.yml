@@ -107,6 +107,29 @@ run tests:
   after_script:
     - uv cache prune --ci
 
+# The Helm chart and its alert rules. tests/test_helm_chart.py (run tests)
+# checks them against the code; these check that helm and Prometheus accept
+# them, and promtool runs the alert unit tests (helm/metadata-agent/tests/).
+helm lint:
+  stage: test
+  interruptible: true
+  image:
+    name: alpine/helm:3.20.0
+    entrypoint: [""]
+  script:
+    - helm lint helm/metadata-agent --strict
+    - helm template ci helm/metadata-agent --set ingress.enabled=true > /dev/null
+
+alert rules:
+  stage: test
+  interruptible: true
+  image:
+    name: prom/prometheus:v3.5.0
+    entrypoint: [""]
+  script:
+    - promtool check rules helm/metadata-agent/files/alerts.yaml
+    - promtool test rules helm/metadata-agent/tests/alerts.test.yaml
+
 build and push docker image from main and develop branches:
   stage: deploy
   image: $DIND_IMAGE

@@ -1,6 +1,6 @@
 # Abdeckung der Dienstanforderungen von Team 6
 
-Stand: Metadata Agent 2.1.0, 15.10.2026. Abgeglichen mit der Seite
+Stand: Metadata Agent 2.1.0, 16.10.2026. Abgeglichen mit der Seite
 „Dienstanforderungen für den Betrieb durch Team 6“ (Abschnitte 1–7 und
 Checkliste Übergabepaket). Einzelheiten stehen in [UEBERGABE.md](../UEBERGABE.md).
 
@@ -27,8 +27,8 @@ Checkliste Übergabepaket). Einzelheiten stehen in [UEBERGABE.md](../UEBERGABE.m
 | Variante B: eigene Auth-Schicht für Aufrufer | ❌ | Der Agent prüft nicht, **wer ihn aufruft** (eingehend). Das ist unabhängig vom Env-Key oben, mit dem er selbst die LLMs aufruft (ausgehend). Ohne B-API muss ein anderer Proxy den Zugang absichern |
 | **3. Monitoring und Logging** | | |
 | Prometheus-Basis-Metriken, nur intern | ✅ | `prometheus-client`, auf dem internen Port |
-| Applikationsmetriken | ✅ | HTTP nach Route, LLM-Aufrufe nach Provider/Ergebnis und Dauer, Erschließungen nach `success`/`partial`/`failed` |
-| Alarmregeln im Helm-Chart | 🟡 | vier Regeln als Vorschlag in UEBERGABE §4; einen Helm-Chart gibt es im Repo nicht |
+| Applikationsmetriken | ✅ | HTTP nach Route, LLM-Aufrufe nach Provider/Ergebnis und Dauer, Erschließungen nach `success`/`partial`/`failed`, Aufrufe an abhängige Dienste (gesendet/beantwortet/Dauer), Tokens |
+| Alarmregeln im Helm-Chart | ✅ | acht Regeln als `PrometheusRule` in [helm/metadata-agent/](../helm/metadata-agent/README.md), mit promtool-Tests (UEBERGABE §4); Empfänger legt T6 im Alertmanager fest |
 | Tracing B3, `x-client-trace-id` durchreichen | ✅ | `x-client-trace-id`, `x-request-id`, `x-b3-*`, `b3` gehen unverändert an B-API, Textextraktion und Repository (eigene Spans erzeugt der Dienst nicht) |
 | Logs nach stdout, JSON/Text, Level per Env | ✅ | `METADATA_AGENT_LOG_FORMAT`, `METADATA_AGENT_LOG_LEVEL`; JSON mit `trace_id` |
 | **4. Repository, Build, Versionierung** | | |
@@ -42,7 +42,7 @@ Checkliste Übergabepaket). Einzelheiten stehen in [UEBERGABE.md](../UEBERGABE.m
 | Ressourcen-Baseline | 🟡 | Requests 500m / 512Mi, Limits 2 CPU / 2Gi – **geschätzt, nicht unter Last gemessen** |
 | Große Daten nicht im Image | ✅ | nur Schemata (8 MB), Widget (2,5 MB), Swagger UI (1,8 MB); keine Modelle oder Korpora |
 | Jede Einstellung als Env mit Default | ✅ | [ENV-PARAMETER.md](../ENV-PARAMETER.md); ein Test gleicht die Liste mit dem Code ab |
-| Beispiel-Values-YAML, Secrets getrennt | ✅ | UEBERGABE §6; Secrets: `B_API_KEY`, `OPENAI_API_KEY` (nur Variante B), `WLO_GUEST_USERNAME`, `WLO_GUEST_PASSWORD` |
+| Beispiel-Values-YAML, Secrets getrennt | ✅ | Helm-Chart `helm/metadata-agent/values.yaml` (per Test mit dem Code abgeglichen); Secrets: `B_API_KEY`, `OPENAI_API_KEY` (nur Variante B), `WLO_GUEST_USERNAME`, `WLO_GUEST_PASSWORD` |
 | Dockerfile und docker-compose als Referenz | ✅ | beide im Repo |
 | Abschaltbare Komponenten im Helm-Chart | — | keine DB, kein Redis, keine Worker; nur der interne Port ist optional |
 | **6./7. Übergabe und Wartung** | | |
@@ -50,7 +50,7 @@ Checkliste Übergabepaket). Einzelheiten stehen in [UEBERGABE.md](../UEBERGABE.m
 | Ansprechperson T4 | ❌ | in UEBERGABE §8 offen |
 | Wer Updates anstößt | ❌ | in UEBERGABE §8 offen; Modellwechsel gehen ohne Code-Änderung über Env oder Route |
 
-**Zusammen:** 24 erfüllt, 5 teilweise, 4 offen, 2 entfallen (35 Punkte).
+**Zusammen:** 25 erfüllt, 4 teilweise, 4 offen, 2 entfallen (35 Punkte).
 
 **Offen vor der Übergabe:**
 - **Ausfüllen:** Ansprechperson und Zuständigkeit für Updates; Repo-Zugriff für T6 bestätigen.

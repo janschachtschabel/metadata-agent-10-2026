@@ -15,7 +15,8 @@ Anforderungen erfüllt sind, steht in
 | Repo | API: <https://scm.edu-sharing.com/edu-sharing/projects/wlo/metaservices/metadata-agent>; Webkomponente: <https://scm.edu-sharing.com/edu-sharing/projects/wlo/metaservices/metadata-agent-webcomponent> (das gebaute Widget liegt im API-Repo unter `src/static/widget/`). Ob T6 Zugriff hat, ist noch zu bestätigen. |
 | CI | `.gitlab-ci.yml` baut bei jedem Push auf `main`/`develop` ein Image mit dem Branch als Tag und bei jedem Git-Tag ein Image mit der Version (z.B. `v2.1.0`). Produktion nur mit Versions-Tags. |
 | GitLab-CI/CD-Variablen | Die Docker-Jobs in `.gitlab-ci.yml` brauchen: `DIND_IMAGE`, `DIND_HOST`, `DIND_DRIVER`, `DIND_TLS_CERTDIR` (Docker-in-Docker), `DOCKER_REGISTRY`, `DOCKER_USERNAME`, `DOCKER_PASSWORD` (maskiert). Test- und Ruff-Jobs brauchen keine. Die Webkomponente braucht keine eigenen Variablen. |
-| GitHub-Spiegel | `.github/workflows/docker-publish.yml`: Tests und Image-Bau bei jedem Push; nach DockerHub nur mit Secret `DOCKERHUB_PASSWORD` |
+| GitHub-Spiegel | `.github/workflows/docker-publish.yml`: Tests, Chart-Prüfung und Image-Bau bei jedem Push; nach DockerHub nur mit Secret `DOCKERHUB_PASSWORD` |
+| Helm-Chart | [`helm/metadata-agent/`](helm/metadata-agent/README.md); die CI prüft ihn mit `helm lint` und die Alarmregeln mit `promtool` (Jobs `helm lint`, `alert rules`) |
 | Image | Multi-Stage auf `python:3.13-slim`, läuft als Nutzer `appuser` (UID 1000), `.dockerignore` vorhanden, HEALTHCHECK auf `/health`. Enthält Chromium für Screenshots (~400 MB), daher größer als ein reiner API-Dienst. |
 | Daten im Image | nur die Schemata (wenige MB); keine Modelle oder Korpora |
 
@@ -167,35 +168,35 @@ Sonst laufen Anfragen ohne Header im Modus `auto` auf den eigenen `B_API_KEY`.
     Methode, Routen-Vorlage, Status);
   - `metadata_agent_llm_requests_total` und `…_duration_seconds` (nach
     Provider und Ergebnis: `ok` oder Fehlercode);
-  - `metadata_agent_generations_total` (nach `success`, `partial`, `failed`).
+  - `metadata_agent_generations_total` (nach `success`, `partial`, `failed`);
+  - `metadata_agent_upstream_requests_total` (gesendet),
+    `…_responses_total` (beantwortet, nach HTTP-Status) und
+    `…_response_duration_seconds` je abhängigem Dienst (`llm`,
+    `text-extraction`, `repository`, `geocoder`); gesendet minus beantwortet
+    sind Aufrufe ohne Antwort;
+  - `metadata_agent_llm_tokens_total` (nach Provider und `prompt`, `cached`,
+    `completion`), auch für den Cache-Vorlauf.
 - **Logs** gehen nach stdout. `METADATA_AGENT_LOG_FORMAT=json` schreibt ein
   Objekt je Zeile mit `time`, `level`, `logger`, `message` und `trace_id`.
   `METADATA_AGENT_LOG_LEVEL` steuert die Schwelle.
-- **Alarmregeln** als Vorschlag für den Helm-Chart:
+- **Alarmregeln:** acht Regeln in
+  [`helm/metadata-agent/files/alerts.yaml`](helm/metadata-agent/files/alerts.yaml),
+  vom Chart als `PrometheusRule` installiert und je Namespace ausgewertet:
+  | Regel | Schwere | Löst aus bei |
+  |---|---|---|
+  | `MetadataAgentLlmKeyRefused` | critical | einem `LLM_AUTH_*` in 10 min |
+  | `MetadataAgentLlmRouteMisconfigured` | critical | einem `LLM_ROUTE_*` in 10 min |
+  | `MetadataAgentLlmThrottled` | warning | mehr als 5 × `LLM_RATE_LIMITED` in 15 min |
+  | `MetadataAgentLlmUnreachable` | warning | mehr als 3 × `LLM_UNREACHABLE` in 10 min |
+  | `MetadataAgentGenerationsFailing` | warning | über 50 % `failed` in 30 min (ab 3 Läufen) |
+  | `MetadataAgentUpstreamUnanswered` | warning | mehr als 3 Aufrufen ohne Antwort in 10 min (je Dienst, ohne `llm`) |
+  | `MetadataAgentUpstreamServerErrors` | warning | mehr als 5 Antworten mit 5xx in 10 min (je Dienst) |
+  | `MetadataAgentGenerateSlow` | warning | p95 von `/generate` über 100 s, 15 min lang |
 
-```yaml
-groups:
-  - name: metadata-agent
-    rules:
-      - alert: MetadataAgentLlmKeyRefused
-        expr: sum(increase(metadata_agent_llm_requests_total{result=~"LLM_AUTH_.*"}[10m])) > 0
-        labels: {severity: critical}
-        annotations: {summary: "B-API lehnt den Schlüssel ab (401/403) oder er fehlt"}
-      - alert: MetadataAgentLlmThrottled
-        expr: sum(increase(metadata_agent_llm_requests_total{result="LLM_RATE_LIMITED"}[15m])) > 5
-        labels: {severity: warning}
-        annotations: {summary: "KI-Aufrufe werden gedrosselt (Kontingent/GWDG)"}
-      - alert: MetadataAgentGenerationsFailing
-        expr: |
-          sum(increase(metadata_agent_generations_total{status="failed"}[30m]))
-            / clamp_min(sum(increase(metadata_agent_generations_total[30m])), 1) > 0.5
-        labels: {severity: warning}
-        annotations: {summary: "Mehr als die Hälfte der Erschließungen scheitert"}
-      - alert: MetadataAgentRouteMisconfigured
-        expr: sum(increase(metadata_agent_llm_requests_total{result=~"LLM_ROUTE_.*"}[10m])) > 0
-        labels: {severity: critical}
-        annotations: {summary: "B-API-Route unbekannt oder falsch eingerichtet"}
-```
+  `promtool test rules helm/metadata-agent/tests/alerts.test.yaml` prüft jede
+  Regel mit Testdaten (auslösend und nicht auslösend). Pod-Ausfälle melden die
+  Cluster-Regeln (`TargetDown`, `KubePodCrashLooping`). Wer den Alarm bekommt,
+  legt T6 im Alertmanager fest.
 
 ## 5. Zustand, Skalierung, Architektur
 
@@ -246,43 +247,15 @@ Browser ─ edu-sharing ─ B-API-Proxy ─┐
   KI-Aufruf) ist in Code, Compose und Template einheitlich 90 s, ein Puffer
   unter dem Ingress-Timeout von 120 s.
 
-Beispiel-Values (Abbildung auf die Env-Variablen):
-
-```yaml
-image:
-  repository: <registry>/metadata-agent-api
-  tag: v2.1.0
-replicaCount: 2
-service:
-  port: 8000
-  internalPort: 9000
-ingress:            # nur Port 8000; Beispiel für ingress-nginx
-  annotations:
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "120"   # /generate bis 90 s
-    nginx.ingress.kubernetes.io/proxy-send-timeout: "120"
-    nginx.ingress.kubernetes.io/proxy-body-size: "20m"      # Default 1m; /upload mit Vorschaubild ist größer
-  blockedPaths: [/debug]                                     # zusätzlich zu METADATA_AGENT_DEBUG_ENDPOINTS=false
-env:
-  METADATA_AGENT_LLM_PROVIDER: b-api-openai        # oder b-api-router
-  METADATA_AGENT_B_API_AUTH_MODE: auto
-  METADATA_AGENT_B_API_BASE_URL: https://b-api.prod.openeduhub.net
-  METADATA_AGENT_REPOSITORY_URL: https://redaktion.openeduhub.net/edu-sharing/rest
-  METADATA_AGENT_TEXT_EXTRACTION_API_URL: http://bildungs-api-services-full-text.b-api
-  METADATA_AGENT_INTERNAL_PORT: "9000"
-  METADATA_AGENT_LOG_FORMAT: json
-  METADATA_AGENT_LOG_LEVEL: INFO
-  METADATA_AGENT_MAX_REQUEST_BYTES: "20971520"     # 20 MB, passend zu proxy-body-size
-secrets:            # aus einem Secret, nicht im Values-File
-  - B_API_KEY
-  - WLO_GUEST_USERNAME
-  - WLO_GUEST_PASSWORD
-resources:
-  requests: {cpu: 500m, memory: 512Mi}
-  limits: {cpu: "2", memory: 2Gi}
-probes:
-  liveness: {path: /health, port: 9000}
-  readiness: {path: /ready, port: 9000}
-```
+Helm-Chart: [`helm/metadata-agent/`](helm/metadata-agent/README.md) mit
+Deployment (Probes auf dem internen Port, 120 s Grace-Period für laufende
+Erschließungen), Service, optionalem Ingress (Annotationen `proxy-read-timeout
+120`, `proxy-body-size 20m`), Secret, `ServiceMonitor` und `PrometheusRule`.
+Die Werte in `values.yaml` sind per Test mit dem Code abgeglichen. Geprüft mit
+`helm lint --strict` und kubeconform gegen Kubernetes 1.33 (16.10.2026), nicht
+in einem echten Cluster installiert. `/debug/*` ist per
+`METADATA_AGENT_DEBUG_ENDPOINTS=false` aus; der interne Port ist nicht im
+Ingress.
 
 ## 7. Kosten
 

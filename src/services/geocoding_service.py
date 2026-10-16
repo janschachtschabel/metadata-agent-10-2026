@@ -6,6 +6,8 @@ from typing import Any, Optional
 import httpx
 import logging
 
+from ..metrics import THIRD_PARTY_HOOKS
+
 logger = logging.getLogger(__name__)
 
 
@@ -51,7 +53,10 @@ class GeocodingService:
             params = {"q": address, "lang": language, "limit": 1}
 
             headers = {"User-Agent": "MetadataAgentAPI/1.0 (geocoding service)"}
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            # Counted, but no tracing headers: Photon is a third party.
+            async with httpx.AsyncClient(
+                timeout=10.0, event_hooks=THIRD_PARTY_HOOKS
+            ) as client:
                 response = await client.get(
                     self.PHOTON_API_URL, params=params, headers=headers
                 )

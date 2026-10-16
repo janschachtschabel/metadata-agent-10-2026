@@ -8,7 +8,7 @@ from urllib.parse import urlsplit
 
 from ..config import get_settings
 from ..utils.public_url import require_public_http_url
-from ..utils.request_id import TRACE_EVENT_HOOKS
+from ..metrics import OWN_SERVICE_HOOKS
 from .repository_service import build_auth_header
 
 logger = logging.getLogger(__name__)
@@ -52,7 +52,7 @@ class InputSourceService:
         self.settings = get_settings()
         self.timeout = httpx.Timeout(30.0, connect=10.0)
         self.http_client = httpx.AsyncClient(
-            timeout=self.timeout, event_hooks=TRACE_EVENT_HOOKS
+            timeout=self.timeout, event_hooks=OWN_SERVICE_HOOKS
         )
 
     async def close(self):

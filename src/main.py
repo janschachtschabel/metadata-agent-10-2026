@@ -57,7 +57,6 @@ from .utils.public_url import PublicUrlError
 from .utils.request_id import HEADER as REQUEST_ID_HEADER
 from .utils.request_id import RequestIdMiddleware, current_request_id
 from .utils.body_limit import BodySizeLimitMiddleware
-from .utils.request_id import TRACE_EVENT_HOOKS
 from .utils.logging_setup import configure_logging
 from .infra import (
     InternalPortUnavailable,
@@ -66,7 +65,7 @@ from .infra import (
     readiness_response,
     start_internal_server,
 )
-from .metrics import GENERATIONS, HttpMetricsMiddleware
+from .metrics import GENERATIONS, OWN_SERVICE_HOOKS, HttpMetricsMiddleware
 from .services.metadata_service import get_metadata_service
 from .services.repository_curation import (
     DEFAULT_WORKFLOW_STATUS,
@@ -2728,7 +2727,7 @@ async def upload_to_repository(request: Request):
                     f"?mimetype={screenshot_result.mimetype}&createVersion=true"
                 )
                 async with httpx.AsyncClient(
-                    timeout=45.0, event_hooks=TRACE_EVENT_HOOKS
+                    timeout=45.0, event_hooks=OWN_SERVICE_HOOKS
                 ) as client:
                     resp = await client.post(
                         upload_url,

@@ -191,6 +191,23 @@ weiterreichen.
     (`tests/conftest.py`). CI nutzt dieselben uv- und ruff-Versionen wie
     Dockerfile und Lock, installiert mit `--locked`; der GitHub-Workflow
     testet vor dem Bau und veröffentlicht nicht aus Pull-Requests.
+- **Helm-Chart und Alarmregeln** unter `helm/metadata-agent/` (16.10.2026):
+  Deployment mit Probes auf dem internen Port, Service, optionales Ingress mit
+  Timeout- und Body-Annotationen, Secret (vorhanden oder aus `--set`),
+  `ServiceMonitor` und `PrometheusRule` (Prometheus Operator). Acht Alarmregeln
+  in `files/alerts.yaml`: Key abgelehnt, Route falsch, Drosselung, KI nicht
+  erreichbar, Erschließungen scheitern, abhängiger Dienst antwortet nicht oder
+  mit 5xx, `/generate` nahe am Ingress-Timeout. `promtool test rules` prüft
+  jede Regel mit Testdaten; `tests/test_helm_chart.py` gleicht Metriken,
+  Label-Werte und Env-Variablen mit dem Code ab. Neue CI-Jobs `helm lint` und
+  `alert rules` (GitLab) bzw. `chart` (GitHub).
+- **Neue Metriken:** `metadata_agent_upstream_requests_total`,
+  `…_responses_total` (nach Status) und `…_response_duration_seconds` für jeden
+  Aufruf an KI-Dienst, Textextraktion, Repository und Geocoder. Gesendet minus
+  beantwortet sind die Aufrufe ohne Antwort. `metadata_agent_llm_tokens_total`
+  zählt `prompt`-, `cached`- und `completion`-Tokens aus jeder KI-Antwort,
+  auch die des Cache-Vorlaufs. Der Geocoder bekommt weiterhin keine
+  Tracing-Header.
 - **Architektur-Map** unter `docs/architektur/`: interaktiv als HTML, als Bild
   (PNG 3220×1276, SVG) für Dokumente; verlinkt aus README und `UEBERGABE.md`.
 - **Webkomponente 2.1.0:** Details im CHANGELOG der Webkomponente. Das

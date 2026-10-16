@@ -1,0 +1,12 @@
+Metadata Agent {{ .Values.image.tag }} ({{ .Values.replicaCount }} Replicas).
+
+API:      http://{{ include "metadata-agent.fullname" . }}:{{ .Values.service.port }}/docs
+Intern:   Port {{ .Values.service.internalPort }} - /health, /ready, /metrics (nicht ins Ingress)
+{{- if .Values.ingress.enabled }}
+Ingress:  https://{{ .Values.ingress.host }}
+{{- end }}
+Secret:   {{ include "metadata-agent.secretName" . }} (Schlüssel: {{ join ", " .Values.secret.keys }})
+{{- if not .Values.prometheusRule.enabled }}
+
+Hinweis: prometheusRule.enabled=false - die Alarmregeln sind nicht installiert.
+{{- end }}

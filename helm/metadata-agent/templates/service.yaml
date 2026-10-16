@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "metadata-agent.fullname" . }}
+  labels:
+    {{- include "metadata-agent.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "metadata-agent.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: http
+    # For the ServiceMonitor only; the ingress routes to "http".
+    - name: internal
+      port: {{ .Values.service.internalPort }}
+      targetPort: internal

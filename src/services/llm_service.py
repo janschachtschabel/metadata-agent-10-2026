@@ -12,8 +12,7 @@ from weakref import WeakKeyDictionary
 from ..config import get_settings
 from ..utils.text_utils import levenshtein_distance
 from .llm_auth import b_api_auth
-from ..utils.request_id import TRACE_EVENT_HOOKS
-from ..metrics import LLM_DURATION, LLM_REQUESTS
+from ..metrics import LLM_DURATION, LLM_REQUESTS, OWN_SERVICE_HOOKS, count_llm_tokens
 from .llm_errors import (
     AUTH_SOURCE_LABELS,
     LLMAuthForbidden,
@@ -264,7 +263,7 @@ class LLMService:
         # provider gate for the full request timeout.
         self.http_client = httpx.AsyncClient(
             timeout=httpx.Timeout(float(settings.request_timeout), connect=10.0),
-            event_hooks=TRACE_EVENT_HOOKS,
+            event_hooks=OWN_SERVICE_HOOKS,
         )
 
         logger.info(f"🤖 LLM Service initialized: {self.provider}")
@@ -388,7 +387,9 @@ class LLMService:
                     )
 
                 if response.status_code == 200:
-                    return self._answer_or_raise(response.json(), auth_source)
+                    answer = response.json()
+                    count_llm_tokens(self.provider, answer)
+                    return self._answer_or_raise(answer, auth_source)
 
                 last_status = response.status_code
                 last_detail = short_upstream_detail(response.text)
@@ -789,8 +790,8 @@ class LLMService:
 
         Only for the OpenAI providers: AcademicCloud shares a small per-minute
         quota that one more call per page would eat into. Bypasses the LLM
-        metrics on purpose — a primer answer is irrelevant, and an empty one
-        is no failure. Errors are only logged: a refused key or a dead gateway
+        request metrics on purpose — a primer answer is irrelevant, and an
+        empty one is no failure; its tokens and its HTTP call are counted. Errors are only logged: a refused key or a dead gateway
         shows up on the first field call right after.
         """
         if self.provider not in PROMPT_CACHE_PROVIDERS:

@@ -1,0 +1,92 @@
+# Alert rules of the Metadata Agent. Plain Prometheus rule file: the chart
+# wraps it into a PrometheusRule, promtool tests it (tests/alerts.test.yaml),
+# tests/test_helm_chart.py checks every metric and label value against the code.
+# Aggregated by namespace, so staging and production alert separately.
+# Pod down / restarting is left to the cluster's own rules (TargetDown,
+# KubePodCrashLooping in kube-prometheus-stack).
+groups:
+  - name: metadata-agent
+    rules:
+      - alert: MetadataAgentLlmKeyRefused
+        expr: sum by (namespace) (increase(metadata_agent_llm_requests_total{result=~"LLM_AUTH_.*"}[10m])) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: B-API lehnt den Schlüssel ab oder er fehlt
+          description: KI-Aufrufe enden mit LLM_AUTH_* (401/403 oder kein Key). Key im Secret bzw. die LLM-Berechtigung des weitergereichten Keys prüfen.
+
+      - alert: MetadataAgentLlmRouteMisconfigured
+        expr: sum by (namespace) (increase(metadata_agent_llm_requests_total{result=~"LLM_ROUTE_.*"}[10m])) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: B-API-Route unbekannt oder falsch eingerichtet
+          description: KI-Aufrufe enden mit LLM_ROUTE_*. Route in der B-API und METADATA_AGENT_LLM_MODEL prüfen.
+
+      - alert: MetadataAgentLlmThrottled
+        expr: sum by (namespace) (increase(metadata_agent_llm_requests_total{result="LLM_RATE_LIMITED"}[15m])) > 5
+        labels:
+          severity: warning
+        annotations:
+          summary: KI-Aufrufe werden gedrosselt
+          description: Mehr als 5 KI-Aufrufe in 15 Minuten scheiterten auch nach Wiederholung an 429 (Kontingent, GWDG-Limit).
+
+      - alert: MetadataAgentLlmUnreachable
+        expr: sum by (namespace) (increase(metadata_agent_llm_requests_total{result="LLM_UNREACHABLE"}[10m])) > 3
+        labels:
+          severity: warning
+        annotations:
+          summary: KI-Dienst nicht erreichbar
+          description: Mehr als 3 KI-Aufrufe in 10 Minuten bekamen auch nach Wiederholung keine Antwort (Timeout, Verbindung abgelehnt).
+
+      - alert: MetadataAgentGenerationsFailing
+        expr: |
+          (
+            sum by (namespace) (increase(metadata_agent_generations_total{status="failed"}[30m]))
+              / sum by (namespace) (increase(metadata_agent_generations_total[30m]))
+          ) > 0.5
+          and sum by (namespace) (increase(metadata_agent_generations_total[30m])) >= 3
+        labels:
+          severity: warning
+        annotations:
+          summary: Mehr als die Hälfte der Erschließungen scheitert
+          description: Über 50 % der /generate-Läufe der letzten 30 Minuten endeten mit failed (bei mindestens 3 Läufen). Logs nach error.code durchsuchen.
+
+      - alert: MetadataAgentUpstreamUnanswered
+        # Not for the LLM: during a generation many calls are in flight for up
+        # to 90 s and would count as unanswered (MetadataAgentLlmUnreachable).
+        # A service that never answered has no responses series yet; "or ... * 0"
+        # counts it as zero answers instead of dropping it.
+        expr: |
+          (
+            sum by (namespace, service) (increase(metadata_agent_upstream_requests_total{service!="llm"}[10m]))
+            - (
+              sum by (namespace, service) (increase(metadata_agent_upstream_responses_total{service!="llm"}[10m]))
+              or sum by (namespace, service) (increase(metadata_agent_upstream_requests_total{service!="llm"}[10m])) * 0
+            )
+          ) > 3
+        labels:
+          severity: warning
+        annotations:
+          summary: Ein abhängiger Dienst antwortet nicht
+          description: Mehr als 3 Aufrufe in 10 Minuten an den Dienst im Label service blieben ohne Antwort (Timeout, Verbindung abgelehnt).
+
+      - alert: MetadataAgentUpstreamServerErrors
+        expr: sum by (namespace, service) (increase(metadata_agent_upstream_responses_total{status=~"5.."}[10m])) > 5
+        labels:
+          severity: warning
+        annotations:
+          summary: Ein abhängiger Dienst antwortet mit Serverfehlern
+          description: Mehr als 5 Antworten mit Status 5xx in 10 Minuten vom Dienst im Label service.
+
+      - alert: MetadataAgentGenerateSlow
+        expr: |
+          histogram_quantile(0.95,
+            sum by (namespace, le) (rate(metadata_agent_http_request_duration_seconds_bucket{route="/generate"}[15m]))
+          ) > 100
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: /generate nähert sich dem Ingress-Timeout
+          description: 95 % der Erschließungen brauchen bis zu über 100 s; ab 120 s bricht das Ingress ab. Modell, Kontingent und METADATA_AGENT_REQUEST_TIMEOUT prüfen.

@@ -18,7 +18,7 @@ from weakref import WeakKeyDictionary
 import httpx
 
 from ..utils.public_url import PublicUrlError, require_public_http_url
-from ..utils.request_id import TRACE_EVENT_HOOKS
+from ..metrics import OWN_SERVICE_HOOKS
 
 logger = logging.getLogger(__name__)
 
@@ -353,7 +353,7 @@ class ScreenshotService:
             )
 
             async with httpx.AsyncClient(
-                timeout=45.0, event_hooks=TRACE_EVENT_HOOKS
+                timeout=45.0, event_hooks=OWN_SERVICE_HOOKS
             ) as client:
                 response = await client.post(
                     upload_url,

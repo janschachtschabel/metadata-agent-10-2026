@@ -11,7 +11,7 @@ from urllib.parse import quote, urljoin
 import httpx
 
 from ..utils.public_url import PublicUrlError, require_public_http_url
-from ..utils.request_id import TRACE_EVENT_HOOKS
+from ..metrics import OWN_SERVICE_HOOKS
 from ..utils.schema_loader import get_repo_fields, get_content_type_uri
 from .field_normalizer import find_object_shape_violations
 from .repository_curation import (
@@ -500,7 +500,7 @@ class RepositoryService:
         try:
             timeout = httpx.Timeout(45.0, connect=10.0)
             async with httpx.AsyncClient(
-                timeout=timeout, event_hooks=TRACE_EVENT_HOOKS
+                timeout=timeout, event_hooks=OWN_SERVICE_HOOKS
             ) as client:
                 duplicate_warning = None
                 if check_duplicates:
@@ -629,7 +629,7 @@ class RepositoryService:
             # Longer timeout for sequential edu-sharing calls on hosted runtimes
             timeout = httpx.Timeout(45.0, connect=10.0)
             async with httpx.AsyncClient(
-                timeout=timeout, event_hooks=TRACE_EVENT_HOOKS
+                timeout=timeout, event_hooks=OWN_SERVICE_HOOKS
             ) as client:
                 # 1. Check for duplicates. Skipped for a node that was handed
                 # over: the check searches by ccm:wwwurl, and the node being
@@ -1005,7 +1005,7 @@ class RepositoryService:
             # Longer timeout for the sequence of edu-sharing calls below
             timeout = httpx.Timeout(45.0, connect=10.0)
             async with httpx.AsyncClient(
-                timeout=timeout, event_hooks=TRACE_EVENT_HOOKS
+                timeout=timeout, event_hooks=OWN_SERVICE_HOOKS
             ) as client:
                 # 1. Create the node, or check that the given one may be edited
                 if node_id:
@@ -1216,7 +1216,7 @@ class RepositoryService:
         try:
             async with httpx.AsyncClient(
                 timeout=httpx.Timeout(DISCARD_TIMEOUT_SECONDS),
-                event_hooks=TRACE_EVENT_HOOKS,
+                event_hooks=OWN_SERVICE_HOOKS,
             ) as client:
                 response = await client.delete(
                     url,
@@ -1807,7 +1807,7 @@ class RepositoryService:
         try:
             timeout = httpx.Timeout(30.0, connect=10.0)
             async with httpx.AsyncClient(
-                timeout=timeout, event_hooks=TRACE_EVENT_HOOKS
+                timeout=timeout, event_hooks=OWN_SERVICE_HOOKS
             ) as client:
                 # Fetch node metadata
                 url = f"{base_url}/rest/node/v1/nodes/-home-/{node_id}/metadata?propertyFilter=-all-"
@@ -1883,7 +1883,7 @@ class RepositoryService:
         try:
             timeout = httpx.Timeout(45.0, connect=10.0)
             async with httpx.AsyncClient(
-                timeout=timeout, event_hooks=TRACE_EVENT_HOOKS
+                timeout=timeout, event_hooks=OWN_SERVICE_HOOKS
             ) as client:
                 run = await run_workflow_steps(
                     client,

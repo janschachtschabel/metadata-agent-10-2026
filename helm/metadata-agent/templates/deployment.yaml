@@ -1,0 +1,84 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "metadata-agent.fullname" . }}
+  labels:
+    {{- include "metadata-agent.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "metadata-agent.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "metadata-agent.labels" . | nindent 8 }}
+      annotations:
+        # Restart the pods when a chart-created Secret changes.
+        checksum/secret: {{ .Values.secret.values | toJson | sha256sum }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: metadata-agent
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8000
+            - name: internal
+              containerPort: {{ .Values.service.internalPort }}
+          env:
+            {{- range $name, $value := .Values.env }}
+            - name: {{ $name }}
+              value: {{ $value | quote }}
+            {{- end }}
+            {{- /* optional: a key the configured mode does not need may be
+                   missing; /ready reports a mode that cannot work. */}}
+            {{- range .Values.secret.keys }}
+            - name: {{ . }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "metadata-agent.secretName" $ }}
+                  key: {{ . }}
+                  optional: true
+            {{- end }}
+          startupProbe:  # schemas load at start
+            httpGet: {path: /health, port: internal}
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: {path: /health, port: internal}
+            periodSeconds: 15
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet: {path: /ready, port: internal}
+            periodSeconds: 10
+            timeoutSeconds: 5
+          lifecycle:
+            # Let the endpoint removal reach the ingress before uvicorn stops
+            # accepting connections.
+            preStop:
+              exec:
+                command: ["sleep", "5"]
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

@@ -1,0 +1,84 @@
+# Metadata Agent API. All settings: ENV-PARAMETER.md; every env key here is
+# checked against the code (tests/test_helm_chart.py).
+
+image:
+  repository: registry.example/projects/wlo/meta-services/metadata-agent-api
+  tag: v2.1.0
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# Stateless; one worker per container, so scale here. The GWDG limit of the
+# AcademicCloud models is shared by all replicas.
+replicaCount: 2
+
+service:
+  type: ClusterIP
+  port: 8000          # API, /docs, /widget/* - the only port behind the ingress
+  internalPort: 9000  # /health, /ready, /metrics - never behind the ingress
+
+ingress:
+  enabled: false
+  className: nginx
+  host: metadata-agent.example
+  tlsSecretName: ""
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "120"  # /generate takes up to 90 s
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "120"
+    nginx.ingress.kubernetes.io/proxy-body-size: "20m"     # = METADATA_AGENT_MAX_REQUEST_BYTES
+
+env:
+  METADATA_AGENT_LLM_PROVIDER: b-api-openai         # or b-api-router
+  METADATA_AGENT_B_API_AUTH_MODE: auto              # forwarded key, else B_API_KEY
+  METADATA_AGENT_B_API_BASE_URL: https://b-api.prod.openeduhub.net
+  METADATA_AGENT_REPOSITORY_URL: https://redaktion.openeduhub.net/edu-sharing/rest
+  METADATA_AGENT_TEXT_EXTRACTION_API_URL: http://bildungs-api-services-full-text.b-api
+  METADATA_AGENT_REQUEST_TIMEOUT: "90"              # per LLM call, below the ingress 120 s
+  METADATA_AGENT_MAX_REQUEST_BYTES: "20971520"      # 20 MB
+  METADATA_AGENT_INTERNAL_PORT: "9000"              # = service.internalPort
+  METADATA_AGENT_DEBUG_ENDPOINTS: "false"           # /debug/* answers 404
+  METADATA_AGENT_LOG_FORMAT: json
+  METADATA_AGENT_LOG_LEVEL: INFO
+
+# Secret values never go into this file.
+secret:
+  # Name of an existing Secret holding the keys below. Empty: the chart
+  # expects "<release>-metadata-agent", created with create: true.
+  existingSecret: ""
+  # Create the Secret from --set secret.values.<KEY>=... (e.g. in CI).
+  create: false
+  keys:
+    - B_API_KEY            # not needed with METADATA_AGENT_B_API_AUTH_MODE=forward
+    - WLO_GUEST_USERNAME
+    - WLO_GUEST_PASSWORD
+  values: {}
+
+# Estimated, not measured under load; peaks come from Chromium (screenshots).
+resources:
+  requests: {cpu: 500m, memory: 512Mi}
+  limits: {cpu: "2", memory: 2Gi}
+
+# A running /generate takes up to 90 s; uvicorn finishes it after SIGTERM.
+terminationGracePeriodSeconds: 120
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000       # appuser in the image
+  runAsGroup: 1000
+  seccompProfile: {type: RuntimeDefault}
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities: {drop: [ALL]}
+
+# Needs the Prometheus Operator CRDs (e.g. kube-prometheus-stack). Labels:
+# whatever the Prometheus' serviceMonitorSelector / ruleSelector expects.
+serviceMonitor:
+  enabled: true
+  interval: 30s
+  labels: {}
+prometheusRule:
+  enabled: true
+  labels: {}
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

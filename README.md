@@ -35,7 +35,8 @@ Generiert strukturierte Metadaten nach dem [WLO/OEH-Schema](https://wirlernenonl
 |---|---|
 | [ENV-PARAMETER.md](ENV-PARAMETER.md) | **Alle** Umgebungsvariablen mit Defaults und Betriebsbeispielen |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | Docker / Kubernetes, **[Update von 2.0.x auf 2.1.0](DEPLOYMENT.md#update-von-20x-auf-210)** |
-| [UEBERGABE.md](UEBERGABE.md) | Übergabe an den Betrieb: Ports, Header, Metriken, Skalierung, Beispiel-Values, Kosten |
+| [UEBERGABE.md](UEBERGABE.md) | Übergabe an den Betrieb: Ports, Header, Metriken, Alarmregeln, Skalierung, Kosten |
+| [helm/metadata-agent/](helm/metadata-agent/README.md) | Helm-Chart mit ServiceMonitor und Alarmregeln (`PrometheusRule`) |
 | [docs/steckbrief.md](docs/steckbrief.md) | Steckbrief für die IT-Übergabe: Status je Punkt, offene und kritische Punkte |
 | [docs/team6-anforderungen.md](docs/team6-anforderungen.md) | Tabelle: welche Dienstanforderungen von Team 6 erfüllt, teilweise erfüllt oder offen sind |
 | [docs/architektur/](docs/architektur/README.md) | Architektur-Map: interaktiv (HTML), als Bild (PNG, SVG) für Dokumente |
@@ -2024,63 +2025,14 @@ railway up
 
 ### Kubernetes
 
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: metadata-agent-api
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: metadata-agent-api
-  template:
-    metadata:
-      labels:
-        app: metadata-agent-api
-    spec:
-      containers:
-      - name: api
-        image: $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:main
-        ports:
-        - containerPort: 8000
-        env:
-        - name: METADATA_AGENT_B_API_BASE_URL
-          value: "https://b-api.prod.openeduhub.net"
-        - name: METADATA_AGENT_TEXT_EXTRACTION_API_URL
-          value: "https://text-extraction.prod.openeduhub.net"
-        - name: METADATA_AGENT_REPOSITORY_URL
-          value: "https://redaktion.openeduhub.net/edu-sharing/rest"
-        - name: B_API_KEY
-          valueFrom:
-            secretKeyRef:
-              name: api-secrets
-              key: b-api-key
-        - name: WLO_GUEST_USERNAME
-          valueFrom:
-            secretKeyRef:
-              name: api-secrets
-              key: wlo-guest-username
-        - name: WLO_GUEST_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: api-secrets
-              key: wlo-guest-password
-        livenessProbe:
-          httpGet:
-            path: /health
-            port: 8000
-          initialDelaySeconds: 5
-          periodSeconds: 30
-        readinessProbe:
-          httpGet:
-            path: /ready
-            port: 8000
-          periodSeconds: 10
-```
+Für Kubernetes gibt es einen Helm-Chart unter
+[`helm/metadata-agent/`](helm/metadata-agent/README.md) (Deployment, Service,
+Ingress, Secret, ServiceMonitor, Alarmregeln). Kurzform:
 
-Mit `METADATA_AGENT_INTERNAL_PORT` laufen die Probes und `/metrics` über einen
-eigenen Port, siehe [UEBERGABE.md](UEBERGABE.md).
+```bash
+kubectl create secret generic metadata-agent   --from-literal=B_API_KEY='<B_API_KEY>'   --from-literal=WLO_GUEST_USERNAME='<WLO_GUEST_USERNAME>'   --from-literal=WLO_GUEST_PASSWORD='<WLO_GUEST_PASSWORD>'
+helm install metadata-agent helm/metadata-agent   --set image.repository=$DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api   --set secret.existingSecret=metadata-agent
+```
 
 ---
 

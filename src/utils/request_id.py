@@ -9,8 +9,9 @@ bodies repeat it as `error.request_id` (main.py).
 
 Tracing is B3 as Envoy/Istio expect it: the B3 headers, `x-request-id` and
 `x-client-trace-id` of a request are passed on unchanged to the agent's own
-services (B-API, text extraction, repository) through TRACE_EVENT_HOOKS -
-never to third parties such as the geocoder or pages being screenshotted.
+services (B-API, text extraction, repository) through TRACE_EVENT_HOOKS, or
+OWN_SERVICE_HOOKS (metrics.py), which also counts the calls - never to third
+parties such as the geocoder or pages being screenshotted.
 """
 
 import re

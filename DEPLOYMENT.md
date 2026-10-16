@@ -1,7 +1,7 @@
 # Metadata Agent API — Deployment (Kubernetes / Docker)
 
 > Für die Übergabe an den Betrieb (Ports, Header, Metriken, Skalierung,
-> Beispiel-Values, Kosten) siehe [UEBERGABE.md](UEBERGABE.md).
+> Alarmregeln, Kosten) siehe [UEBERGABE.md](UEBERGABE.md).
 > Bestehendes Deployment aktualisieren: [Update von 2.0.x auf 2.1.0](#update-von-20x-auf-210).
 
 ## Update von 2.0.x auf 2.1.0
@@ -387,99 +387,15 @@ abgelehnt — auch wenn er von außen öffentlich erreichbar ist.
 
 ---
 
-## Kubernetes Deployment (Beispiel)
+## Kubernetes
 
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: metadata-agent-api
-  labels:
-    app: metadata-agent-api
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: metadata-agent-api
-  template:
-    metadata:
-      labels:
-        app: metadata-agent-api
-    spec:
-      containers:
-        - name: metadata-agent-api
-          # Produktion: ein Versions-Tag (z.B. :v2.1.0), nie :main (siehe UEBERGABE.md)
-          image: $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v2.1.0
-          ports:
-            - name: http
-              containerPort: 8000
-            - name: internal
-              containerPort: 9000
-          env:
-            - name: B_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: metadata-agent-secrets
-                  key: b-api-key
-            - name: WLO_GUEST_USERNAME
-              valueFrom:
-                secretKeyRef:
-                  name: metadata-agent-secrets
-                  key: wlo-username
-            - name: WLO_GUEST_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: metadata-agent-secrets
-                  key: wlo-password
-            - name: METADATA_AGENT_LLM_PROVIDER
-              value: "b-api-openai"
-            - name: METADATA_AGENT_DEFAULT_MAX_WORKERS
-              value: "20"
-            - name: METADATA_AGENT_SCREENSHOT_METHOD
-              value: "playwright"
-            # /health, /ready, /metrics auf einem Port, den der Ingress nicht freigibt
-            - name: METADATA_AGENT_INTERNAL_PORT
-              value: "9000"
-          resources:
-            requests:
-              cpu: 500m
-              memory: 512Mi
-            limits:
-              cpu: 2000m
-              memory: 2Gi
-          livenessProbe:
-            httpGet:
-              path: /health
-              port: internal
-            initialDelaySeconds: 10
-            periodSeconds: 30
-          readinessProbe:
-            httpGet:
-              path: /ready
-              port: internal
-            initialDelaySeconds: 5
-            periodSeconds: 10
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: metadata-agent-api
-spec:
-  selector:
-    app: metadata-agent-api
-  ports:
-    - port: 80
-      targetPort: 8000
-  type: ClusterIP
-```
-
-### Secrets anlegen:
+Für Kubernetes gibt es einen Helm-Chart unter
+[`helm/metadata-agent/`](helm/metadata-agent/README.md) (Deployment, Service,
+Ingress, Secret, ServiceMonitor, Alarmregeln). Kurzform:
 
 ```bash
-kubectl create secret generic metadata-agent-secrets \
-  --from-literal=b-api-key='<B_API_KEY>' \
-  --from-literal=wlo-username='<WLO_GUEST_USERNAME>' \
-  --from-literal=wlo-password='<WLO_GUEST_PASSWORD>'
+kubectl create secret generic metadata-agent   --from-literal=B_API_KEY='<B_API_KEY>'   --from-literal=WLO_GUEST_USERNAME='<WLO_GUEST_USERNAME>'   --from-literal=WLO_GUEST_PASSWORD='<WLO_GUEST_PASSWORD>'
+helm install metadata-agent helm/metadata-agent   --set image.repository=$DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api   --set secret.existingSecret=metadata-agent
 ```
 
 ---

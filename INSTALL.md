@@ -729,96 +729,13 @@ Vorteile: Playwright/Chromium vorinstalliert, Health Check, einfaches Update, re
 
 ### 6.2 Kubernetes
 
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: metadata-agent-api
-  labels:
-    app: metadata-agent-api
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: metadata-agent-api
-  template:
-    metadata:
-      labels:
-        app: metadata-agent-api
-    spec:
-      containers:
-        - name: metadata-agent-api
-          image: $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:main
-          ports:
-            - containerPort: 8000
-          env:
-            - name: B_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: metadata-agent-secrets
-                  key: b-api-key
-            - name: WLO_GUEST_USERNAME
-              valueFrom:
-                secretKeyRef:
-                  name: metadata-agent-secrets
-                  key: wlo-username
-            - name: WLO_GUEST_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: metadata-agent-secrets
-                  key: wlo-password
-            - name: METADATA_AGENT_B_API_BASE_URL
-              value: "https://b-api.prod.openeduhub.net"
-            - name: METADATA_AGENT_TEXT_EXTRACTION_API_URL
-              value: "https://text-extraction.prod.openeduhub.net"
-            - name: METADATA_AGENT_REPOSITORY_URL
-              value: "https://redaktion.openeduhub.net/edu-sharing/rest"
-            - name: METADATA_AGENT_LLM_PROVIDER
-              value: "b-api-openai"
-            - name: METADATA_AGENT_DEFAULT_MAX_WORKERS
-              value: "20"
-            - name: METADATA_AGENT_SCREENSHOT_METHOD
-              value: "playwright"
-          resources:
-            requests:
-              cpu: 500m
-              memory: 512Mi
-            limits:
-              cpu: 2000m
-              memory: 2Gi
-          livenessProbe:
-            httpGet:
-              path: /health
-              port: 8000
-            initialDelaySeconds: 10
-            periodSeconds: 30
-          readinessProbe:
-            httpGet:
-              path: /health
-              port: 8000
-            initialDelaySeconds: 5
-            periodSeconds: 10
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: metadata-agent-api
-spec:
-  selector:
-    app: metadata-agent-api
-  ports:
-    - port: 80
-      targetPort: 8000
-  type: ClusterIP
-```
-
-**Secrets anlegen:**
+Für Kubernetes gibt es einen Helm-Chart unter
+[`helm/metadata-agent/`](helm/metadata-agent/README.md) (Deployment, Service,
+Ingress, Secret, ServiceMonitor, Alarmregeln). Kurzform:
 
 ```bash
-kubectl create secret generic metadata-agent-secrets \
-  --from-literal=b-api-key='<B_API_KEY>' \
-  --from-literal=wlo-username='<WLO_GUEST_USERNAME>' \
-  --from-literal=wlo-password='<WLO_GUEST_PASSWORD>'
+kubectl create secret generic metadata-agent   --from-literal=B_API_KEY='<B_API_KEY>'   --from-literal=WLO_GUEST_USERNAME='<WLO_GUEST_USERNAME>'   --from-literal=WLO_GUEST_PASSWORD='<WLO_GUEST_PASSWORD>'
+helm install metadata-agent helm/metadata-agent   --set image.repository=$DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api   --set secret.existingSecret=metadata-agent
 ```
 
 **Ressourcen-Empfehlung:**
