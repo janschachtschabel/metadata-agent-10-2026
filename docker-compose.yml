@@ -1,0 +1,136 @@
+services:
+  # =========================================
+  # Default: B-API OpenAI (recommended)
+  # =========================================
+  # Docker image includes Playwright + Chromium for
+  # privacy-safe screenshots (screenshot_method=playwright).
+  # The legacy 'pageshot' method captures locally as well — no external service.
+  metadata-agent-api:
+    build: .
+    container_name: metadata-agent-api
+    ports:
+      - "8000:8000"
+    environment:
+      # LLM Provider: b-api-openai, b-api-academiccloud, b-api-router, or openai
+      - METADATA_AGENT_LLM_PROVIDER=${METADATA_AGENT_LLM_PROVIDER:-b-api-openai}
+      
+      # B-API Key (b-api-openai, b-api-academiccloud, b-api-router). Behind the
+      # B-API proxy with forwardApiKey the caller's key is used instead; then it is
+      # only the fallback (auto) or not needed at all (forward).
+      - B_API_KEY=${B_API_KEY:-}
+      # Which key carries the LLM calls: auto (forwarded key, else B_API_KEY),
+      # forward (forwarded key only), static (B_API_KEY only, as in 2.0.x)
+      - METADATA_AGENT_B_API_AUTH_MODE=${METADATA_AGENT_B_API_AUTH_MODE:-auto}
+      
+      # OpenAI Key (only needed if using provider=openai)
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+
+      # Repository Upload (optional, for /upload endpoint)
+      - WLO_GUEST_USERNAME=${WLO_GUEST_USERNAME:-}
+      - WLO_GUEST_PASSWORD=${WLO_GUEST_PASSWORD:-}
+
+      # External Service URLs (Default: Staging)
+      # For Prod, change to the respective prod URLs (see .env.template)
+      - METADATA_AGENT_B_API_BASE_URL=${METADATA_AGENT_B_API_BASE_URL:-https://b-api.staging.openeduhub.net}
+      - METADATA_AGENT_TEXT_EXTRACTION_API_URL=${METADATA_AGENT_TEXT_EXTRACTION_API_URL:-https://text-extraction.staging.openeduhub.net}
+      - METADATA_AGENT_REPOSITORY_URL=${METADATA_AGENT_REPOSITORY_URL:-https://repository.staging.openeduhub.net/edu-sharing/rest}
+
+      # Native OpenAI (only used when provider=openai)
+      # The base URL accepts any OpenAI-compatible endpoint, not just api.openai.com.
+      # An empty temperature means: follow METADATA_AGENT_LLM_TEMPERATURE.
+      - METADATA_AGENT_OPENAI_API_BASE=${METADATA_AGENT_OPENAI_API_BASE:-https://api.openai.com/v1}
+      - METADATA_AGENT_OPENAI_MODEL=${METADATA_AGENT_OPENAI_MODEL:-gpt-4o-mini}
+      - METADATA_AGENT_OPENAI_TEMPERATURE=${METADATA_AGENT_OPENAI_TEMPERATURE:-}
+
+      # B-API OpenAI (OpenAI-compatible endpoint via B-API)
+      # An empty base URL is derived from METADATA_AGENT_B_API_BASE_URL.
+      - METADATA_AGENT_B_API_OPENAI_BASE=${METADATA_AGENT_B_API_OPENAI_BASE:-}
+      - METADATA_AGENT_B_API_OPENAI_MODEL=${METADATA_AGENT_B_API_OPENAI_MODEL:-gpt-6-luna}
+
+      # B-API AcademicCloud (AcademicCloud endpoint via B-API)
+      # An empty base URL is derived from METADATA_AGENT_B_API_BASE_URL.
+      - METADATA_AGENT_B_API_ACADEMICCLOUD_BASE=${METADATA_AGENT_B_API_ACADEMICCLOUD_BASE:-}
+      - METADATA_AGENT_B_API_ACADEMICCLOUD_MODEL=${METADATA_AGENT_B_API_ACADEMICCLOUD_MODEL:-deepseek-v4-flash}
+
+      # B-API Router (provider b-api-router): a route name defined in the B-API, or
+      # provider/model, which needs no route. With a route name set the request
+      # style explicitly; thinking models in a route need reasoning effort "none".
+      - METADATA_AGENT_B_API_ROUTER_MODEL=${METADATA_AGENT_B_API_ROUTER_MODEL:-openai/gpt-6-luna}
+      - METADATA_AGENT_LLM_REQUEST_STYLE=${METADATA_AGENT_LLM_REQUEST_STYLE:-auto}
+      - METADATA_AGENT_B_API_ROUTER_REASONING_EFFORT=${METADATA_AGENT_B_API_ROUTER_REASONING_EFFORT:-}
+
+      # General LLM Settings
+      - METADATA_AGENT_LLM_TEMPERATURE=${METADATA_AGENT_LLM_TEMPERATURE:-0.3}
+      - METADATA_AGENT_LLM_MAX_TOKENS=${METADATA_AGENT_LLM_MAX_TOKENS:-2000}
+      - METADATA_AGENT_LLM_MAX_RETRIES=${METADATA_AGENT_LLM_MAX_RETRIES:-3}
+      - METADATA_AGENT_LLM_RETRY_DELAY=${METADATA_AGENT_LLM_RETRY_DELAY:-1.0}
+
+      # Only sent to reasoning models (GPT-5/GPT-6 families, o-series); older models
+      # reject both. Empty means the parameter is not sent at all.
+      - METADATA_AGENT_LLM_VERBOSITY=${METADATA_AGENT_LLM_VERBOSITY:-low}
+      - METADATA_AGENT_LLM_REASONING_EFFORT=${METADATA_AGENT_LLM_REASONING_EFFORT:-low}
+
+      # Throughput limits of the LLM gateway, enforced process-wide.
+      # Empty means the provider default: b-api-openai/openai 20 in flight, no rate cap;
+      # b-api-academiccloud 2 in flight, 2 per second.
+      - METADATA_AGENT_LLM_MAX_CONCURRENT_REQUESTS=${METADATA_AGENT_LLM_MAX_CONCURRENT_REQUESTS:-}
+      - METADATA_AGENT_LLM_MAX_REQUESTS_PER_SECOND=${METADATA_AGENT_LLM_MAX_REQUESTS_PER_SECOND:-}
+
+      # Worker Settings
+      # Fan-out width of the field extraction (also /generate without max_workers),
+      # capped by the concurrency limit above.
+      - METADATA_AGENT_DEFAULT_MAX_WORKERS=${METADATA_AGENT_DEFAULT_MAX_WORKERS:-20}
+      # Timeout per LLM call; a buffer below the 120 s ingress timeout
+      - METADATA_AGENT_REQUEST_TIMEOUT=${METADATA_AGENT_REQUEST_TIMEOUT:-90}
+
+      # Default Schema Settings
+      - METADATA_AGENT_DEFAULT_CONTEXT=${METADATA_AGENT_DEFAULT_CONTEXT:-default}
+
+      # WLO Repository Inbox ID (where new upload nodes are created)
+      - METADATA_AGENT_WLO_INBOX_ID=${METADATA_AGENT_WLO_INBOX_ID:-21144164-30c0-4c01-ae16-264452197063}
+
+      # Operations
+      - METADATA_AGENT_LOG_FORMAT=${METADATA_AGENT_LOG_FORMAT:-text}      # json for a log collector
+      - METADATA_AGENT_LOG_LEVEL=${METADATA_AGENT_LOG_LEVEL:-INFO}
+      - METADATA_AGENT_MAX_REQUEST_BYTES=${METADATA_AGENT_MAX_REQUEST_BYTES:-20971520}
+      - METADATA_AGENT_DEBUG_ENDPOINTS=${METADATA_AGENT_DEBUG_ENDPOINTS:-false}
+      - METADATA_AGENT_CORS_ORIGINS=${METADATA_AGENT_CORS_ORIGINS:-*}
+      # Second, internal port for /health, /ready and /metrics. Not set here: an
+      # empty value is no valid port. To use it, uncomment and add "9000:9000" to
+      # ports — or better, keep it unpublished and scrape it inside the network.
+      # - METADATA_AGENT_INTERNAL_PORT=9000
+
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # =========================================
+  # Alternative: B-API AcademicCloud
+  # =========================================
+  # metadata-agent-api-academiccloud:
+  #   build: .
+  #   container_name: metadata-agent-api-academiccloud
+  #   ports:
+  #     - "8001:8000"
+  #   environment:
+  #     - METADATA_AGENT_LLM_PROVIDER=b-api-academiccloud
+  #     - B_API_KEY=${B_API_KEY:-}
+  #     - METADATA_AGENT_DEFAULT_MAX_WORKERS=10
+
+  # =========================================
+  # Alternative: Native OpenAI
+  # =========================================
+  # metadata-agent-api-openai:
+  #   build: .
+  #   container_name: metadata-agent-api-openai
+  #   ports:
+  #     - "8002:8000"
+  #   environment:
+  #     - METADATA_AGENT_LLM_PROVIDER=openai
+  #     - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+  #     - METADATA_AGENT_OPENAI_MODEL=gpt-4o-mini
+  #     - METADATA_AGENT_DEFAULT_MAX_WORKERS=10

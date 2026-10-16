@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Metadata Agent – URI-basierter Inhaltstyp-Test</title>
+
+    <!-- Widget Styles -->
+    <link rel="stylesheet" href="../dist/styles.css">
+    <link rel="stylesheet" href="demo-icons.css">
+
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'Roboto', sans-serif;
+            background: #f5f5f5;
+            padding: 24px;
+        }
+
+        .page-header {
+            max-width: 1400px;
+            margin: 0 auto 16px;
+        }
+
+        .page-header h1 { font-size: 22px; font-weight: 500; color: #1d1b20; }
+        .page-header p { color: #666; margin-top: 4px; font-size: 14px; }
+
+        /* ===== Content-Type Switcher (extern) ===== */
+        .content-type-bar {
+            max-width: 1400px;
+            margin: 0 auto 16px;
+            padding: 14px 20px;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .content-type-bar .label {
+            font-size: 13px;
+            font-weight: 500;
+            color: #49454f;
+            margin-right: 4px;
+            white-space: nowrap;
+        }
+
+        .ct-select {
+            padding: 7px 12px;
+            border: 1px solid #c4c7c5;
+            border-radius: 8px;
+            background: white;
+            font-size: 13px;
+            font-family: 'Roboto', sans-serif;
+            color: #1d1b20;
+            cursor: pointer;
+            min-width: 320px;
+            transition: border-color 0.2s;
+        }
+
+        .ct-select:hover, .ct-select:focus {
+            border-color: #1976d2;
+            outline: none;
+        }
+
+        .toggle-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 14px;
+            border: 1px solid #c4c7c5;
+            border-radius: 8px;
+            background: white;
+            cursor: pointer;
+            font-size: 13px;
+            font-family: 'Roboto', sans-serif;
+            color: #1d1b20;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .toggle-btn:hover {
+            background: #e8f0fe;
+            border-color: #1976d2;
+        }
+
+        .toggle-btn.on {
+            background: #1976d2;
+            color: white;
+            border-color: #1976d2;
+        }
+
+        .uri-info {
+            max-width: 1400px;
+            margin: 0 auto 8px;
+            padding: 8px 16px;
+            background: #fff3e0;
+            border-radius: 8px;
+            font-size: 12px;
+            color: #e65100;
+            font-family: monospace;
+            word-break: break-all;
+        }
+
+        /* ===== Widget Container ===== */
+        .widget-container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: transparent;
+            min-height: 600px;
+        }
+
+        metadata-agent-canvas {
+            display: block;
+            width: 100%;
+            min-height: 600px;
+        }
+
+        .info-box {
+            max-width: 1400px;
+            margin: 16px auto 0;
+            padding: 12px 16px;
+            background: #e8f5e9;
+            border-radius: 8px;
+            font-size: 13px;
+            color: #2e7d32;
+            line-height: 1.5;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="page-header">
+        <h1>URI-basierter Inhaltstyp-Test</h1>
+        <p>Readonly Prüftisch-Ansicht. Inhaltstyp wird über Vocabulary-URI gesetzt (statt Dateiname). Lädt Beispiel-Metadaten aus JSON.</p>
+    </div>
+
+    <!-- Externer Content-Type Switcher mit URI -->
+    <div class="content-type-bar">
+        <span class="label">Inhaltstyp (URI):</span>
+        <select class="ct-select" id="ctSelect" disabled>
+            <option value="">Lade Inhaltstypen…</option>
+        </select>
+
+        <span class="label" style="margin-left: 16px;">Layout:</span>
+        <select class="ct-select" id="layoutSelect" style="min-width:140px" onchange="switchLayout(this.value)">
+            <option value="detail" selected>Detail</option>
+            <option value="default">Default</option>
+            <option value="plugin">Plugin</option>
+            <option value="dialog">Dialog</option>
+            <option value="clean">Clean</option>
+            <option value="prueftisch">Prueftisch</option>
+            <option value="prueftisch-org">Prueftisch Org</option>
+        </select>
+
+        <span class="label" style="margin-left: 16px;">Anzeige:</span>
+        <button class="toggle-btn on" id="toggleCore" onclick="toggleCoreFields(this)">
+            <span class="material-icons" style="font-size:16px">checklist</span> Kernfelder
+        </button>
+        <button class="toggle-btn" id="toggleFlat" onclick="toggleFlatGroups(this)">
+            <span class="material-icons" style="font-size:16px">view_stream</span> Flat Groups
+        </button>
+    </div>
+
+    <!-- Show currently selected URI -->
+    <div class="uri-info" id="uriInfo">Keine URI ausgewählt</div>
+
+    <div class="widget-container">
+        <metadata-agent-canvas
+            id="canvas"
+            api-url=""
+            layout="prueftisch"
+            context-name="default"
+            schema-version="latest"
+            input-mode="text"
+            show-input-area="false"
+            show-status-bar="false"
+            show-core-fields="true"
+            show-special-fields="true"
+            show-footer="false"
+            show-floating-controls="false"
+            show-field-actions="false"
+            show-upload-button="false"
+            show-page-mode="false"
+            show-content-type-only="false"
+            readonly="true"
+            borderless="true"
+            highlight-ai="false"
+            auto-extract="false"
+            flat-groups="false">
+        </metadata-agent-canvas>
+    </div>
+
+    <div class="info-box">
+        <strong>Test:</strong> Der Inhaltstyp wird über die <strong>Vocabulary-URI</strong> gesetzt
+        (z.B. <code>http://w3id.org/openeduhub/vocabs/contentTypes/event</code>)
+        statt über den Schema-Dateinamen (<code>event.json</code>).
+        Die Webkomponente muss die URI intern zum passenden Schema auflösen.
+        Die Metadaten stammen aus <code>metadata-2026-02-11.json</code>.
+    </div>
+
+    <!-- API-Basis relativ zur Beispielseite ableiten, damit Proxy-Prefixe erhalten bleiben -->
+    <script>window.__ENV = window.__ENV || { agentUrl: new URL('../../', window.location.href).pathname.replace(/\/$/, '') };</script>
+
+    <!-- Widget Scripts -->
+    <script src="../dist/runtime.js" defer></script>
+    <script src="../dist/polyfills.js" defer></script>
+    <script src="../dist/main.js" defer></script>
+
+    <script>
+        const API_URL = window.__ENV.agentUrl;
+        const canvas = document.getElementById('canvas');
+
+        // URI → Label mapping (from core.json vocabulary)
+        const URI_CONTENT_TYPES = [
+            { uri: 'http://w3id.org/openeduhub/vocabs/contentTypes/learning_material', label: 'Lernmaterial', icon: 'menu_book' },
+            { uri: 'http://w3id.org/openeduhub/vocabs/contentTypes/education_offer',   label: 'Bildungsangebot / Kurs', icon: 'school' },
+            { uri: 'http://w3id.org/openeduhub/vocabs/contentTypes/event',             label: 'Veranstaltung', icon: 'event' },
+            { uri: 'http://w3id.org/openeduhub/vocabs/contentTypes/person',            label: 'Person', icon: 'person' },
+            { uri: 'http://w3id.org/openeduhub/vocabs/contentTypes/organization',      label: 'Organisation', icon: 'business' },
+            { uri: 'http://w3id.org/openeduhub/vocabs/contentTypes/tool_service',      label: 'Tool / Dienst', icon: 'build' },
+            { uri: 'http://w3id.org/openeduhub/vocabs/contentTypes/profession',        label: 'Beruf', icon: 'work' },
+            { uri: 'http://w3id.org/openeduhub/vocabs/contentTypes/didactic_concepts', label: 'Didaktische Planung', icon: 'psychology' },
+            { uri: 'http://w3id.org/openeduhub/vocabs/contentTypes/source',            label: 'Quelle', icon: 'cloud_download' },
+            { uri: 'http://w3id.org/openeduhub/vocabs/contentTypes/ai_prompt',         label: 'KI-Prompt', icon: 'smart_toy' },
+        ];
+
+        function populateSelect() {
+            const select = document.getElementById('ctSelect');
+            select.innerHTML = '<option value="">— Inhaltstyp per URI wählen —</option>';
+
+            URI_CONTENT_TYPES.forEach(ct => {
+                const opt = document.createElement('option');
+                opt.value = ct.uri;
+                opt.textContent = ct.label;
+                select.appendChild(opt);
+            });
+            select.disabled = false;
+
+            select.addEventListener('change', () => {
+                const uri = select.value;
+                const infoEl = document.getElementById('uriInfo');
+                if (uri) {
+                    infoEl.textContent = 'Aktive URI: ' + uri;
+                    console.log('[URI-Test] Setting contentType via URI:', uri);
+                    canvas.contentType = uri;
+                } else {
+                    infoEl.textContent = 'Keine URI ausgewählt';
+                }
+            });
+        }
+
+        function toggleCoreFields(btn) {
+            const isOn = btn.classList.toggle('on');
+            canvas.setAttribute('show-core-fields', isOn ? 'true' : 'false');
+        }
+
+        function switchLayout(value) {
+            canvas.setAttribute('layout', value);
+        }
+
+        function toggleFlatGroups(btn) {
+            const isOn = btn.classList.toggle('on');
+            canvas.setAttribute('flat-groups', isOn ? 'true' : 'false');
+        }
+
+        /**
+         * Load example JSON metadata into the component.
+         */
+        async function loadExampleData() {
+            try {
+                const resp = await fetch('metadata-2026-02-11.json');
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                const data = await resp.json();
+                console.log('[URI-Test] Loading example metadata:', Object.keys(data).length, 'keys');
+                canvas.metadataInput = data;
+            } catch (err) {
+                console.error('[URI-Test] Failed to load example JSON:', err);
+            }
+        }
+
+        /**
+         * Initialize after web component is ready.
+         */
+        customElements.whenDefined('metadata-agent-canvas').then(() => {
+            setTimeout(async () => {
+                populateSelect();
+                await loadExampleData();
+            }, 800);
+        });
+    </script>
+
+</body>
+</html>

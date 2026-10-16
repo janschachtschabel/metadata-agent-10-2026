@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# uv-Cache. .gitlab-ci.yml setzt UV_CACHE_DIR auf .uv-cache, das Verzeichnis
+# entsteht also bei jedem lokalen Lauf der CI-Befehle.
+.uv-cache/
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# NOTE: dist/ is NOT excluded — src/static/widget/dist/, src/schemata/,
+# and src/static/widget/assets/i18n/ are part of the deployed application.
+#
+# Widget neu bauen und hierher legen — es gibt zwei Wege:
+#   npm run build:elements   im Widget-Repo, plattformunabhängig, auch in der CI
+#   scripts/deploy-widget.ps1  von hier aus, nur Windows; erwartet das Widget
+#                              unter ../metadata-agent-webcomponent

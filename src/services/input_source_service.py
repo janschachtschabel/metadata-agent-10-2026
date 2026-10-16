@@ -1,0 +1,468 @@
+"""Service for fetching input data from various sources (URL, NodeID, etc.)."""
+
+import httpx
+import logging
+from typing import Any, Optional
+from dataclasses import dataclass, field
+from urllib.parse import urlsplit
+
+from ..config import get_settings
+from ..utils.public_url import require_public_http_url
+from ..utils.request_id import TRACE_EVENT_HOOKS
+from .repository_service import build_auth_header
+
+logger = logging.getLogger(__name__)
+
+
+class TextExtractionError(Exception):
+    """
+    The text extraction service delivered no text for a URL - with the cause.
+
+    httpx timeouts carry no message, so a bare str(e) used to end as
+    "Failed to fetch input: " with nothing after the colon.
+    """
+
+    def __init__(self, code: str, message: str, http_status: int):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.http_status = http_status
+
+    def to_dict(self) -> dict:
+        return {"code": self.code, "message": self.message}
+
+
+@dataclass
+class InputData:
+    """Result from input source fetch."""
+
+    text: str
+    existing_metadata: Optional[dict[str, Any]] = None
+    source_url: Optional[str] = None
+    node_id: Optional[str] = None
+    repository: Optional[str] = None
+    # What the caller must pass on about how the text was obtained.
+    warnings: list[str] = field(default_factory=list)
+
+
+class InputSourceService:
+    """Service for fetching input data from various sources."""
+
+    def __init__(self):
+        self.settings = get_settings()
+        self.timeout = httpx.Timeout(30.0, connect=10.0)
+        self.http_client = httpx.AsyncClient(
+            timeout=self.timeout, event_hooks=TRACE_EVENT_HOOKS
+        )
+
+    async def close(self):
+        """Close the shared HTTP client."""
+        if self.http_client:
+            await self.http_client.aclose()
+
+    def _get_repository_base_url(self, repository: str = "") -> str:
+        """Get the configured repository base URL (repository param is ignored)."""
+        return self.settings.repository_url
+
+    def _repository_headers(self) -> dict[str, str]:
+        """
+        Headers for repository reads, authenticated with the service account.
+
+        Anonymous reads return 403 for every node that is not publicly readable —
+        which includes freshly uploaded inbox nodes. Falls back to anonymous
+        access when no credentials are configured.
+        """
+        headers = {"accept": "application/json"}
+        auth_header = build_auth_header(
+            self.settings.wlo_guest_username, self.settings.wlo_guest_password
+        )
+        if auth_header:
+            headers["Authorization"] = auth_header
+        return headers
+
+    async def fetch_from_url(
+        self,
+        url: str,
+        method: str = "browser",
+        lang: str = "auto",
+        output_format: str = "markdown",
+    ) -> str:
+        """
+        Fetch text content from URL via text extraction API.
+
+        Args:
+            url: URL to fetch content from
+            method: Extraction method ('simple' or 'browser')
+            lang: Language hint ('auto', 'de', 'en')
+
+        Returns:
+            Extracted text content
+
+        Raises:
+            PublicUrlError: the URL does not point at a public http(s) target
+        """
+        # Refuse internal targets before they are handed to the crawler. Only
+        # this URL is checked: redirects and subresources the remote crawler
+        # follows itself need egress rules on the crawler's side.
+        url = await require_public_http_url(url)
+        api_url = f"{self.settings.text_extraction_api_url}/from-url"
+
+        payload = {
+            "url": url,
+            "method": method,
+            "browser_location": None,
+            "lang": lang,
+            "output_format": output_format,
+            "preference": "none",
+        }
+
+        logger.info(f"Fetching text from URL: {url} (method: {method})")
+
+        service = urlsplit(api_url).netloc or self.settings.text_extraction_api_url
+        try:
+            response = await self.http_client.post(
+                api_url,
+                json=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "accept": "application/json",
+                },
+            )
+            response.raise_for_status()
+        except httpx.ConnectTimeout as e:
+            raise TextExtractionError(
+                "TEXT_EXTRACTION_CONNECT_TIMEOUT",
+                f"Textextraktionsdienst {service} nicht erreichbar: kein Verbindungsaufbau "
+                f"innerhalb von {self.timeout.connect:g} s.",
+                504,
+            ) from e
+        except httpx.TimeoutException as e:
+            raise TextExtractionError(
+                "TEXT_EXTRACTION_TIMEOUT",
+                f"Textextraktionsdienst {service} hat nicht innerhalb von "
+                f"{self.timeout.read:g} s geantwortet ({type(e).__name__}).",
+                504,
+            ) from e
+        except httpx.ConnectError as e:
+            raise TextExtractionError(
+                "TEXT_EXTRACTION_UNREACHABLE",
+                f"Textextraktionsdienst {service} nicht erreichbar "
+                "(Verbindung abgelehnt oder Name nicht auflösbar).",
+                502,
+            ) from e
+        except httpx.HTTPStatusError as e:
+            raise TextExtractionError(
+                "TEXT_EXTRACTION_HTTP_ERROR",
+                f"Textextraktionsdienst {service} antwortete mit HTTP "
+                f"{e.response.status_code}.",
+                502,
+            ) from e
+        except httpx.HTTPError as e:
+            raise TextExtractionError(
+                "TEXT_EXTRACTION_FAILED",
+                f"Abruf über den Textextraktionsdienst {service} fehlgeschlagen "
+                f"({type(e).__name__}).",
+                502,
+            ) from e
+
+        data = response.json()
+        text = data.get("text", "")
+
+        if not text:
+            raise TextExtractionError(
+                "TEXT_EXTRACTION_EMPTY",
+                f"Für {url} hat der Textextraktionsdienst keinen Text geliefert.",
+                422,
+            )
+
+        logger.info(f"Extracted {len(text)} characters from URL")
+        return text
+
+    async def fetch_node_metadata(
+        self, node_id: str, repository: str = "staging"
+    ) -> dict[str, Any]:
+        """
+        Fetch metadata for a node from the repository.
+
+        Args:
+            node_id: The NodeID to fetch
+            repository: 'prod' or 'staging'
+
+        Returns:
+            Node metadata including properties
+        """
+        base_url = self._get_repository_base_url(repository)
+        api_url = (
+            f"{base_url}/node/v1/nodes/-home-/{node_id}/metadata?propertyFilter=-all-"
+        )
+
+        logger.info(f"Fetching node metadata: {node_id} from {repository}")
+
+        response = await self.http_client.get(
+            api_url, headers=self._repository_headers()
+        )
+        response.raise_for_status()
+
+        data = response.json()
+        return data.get("node", {})
+
+    async def fetch_node_text_content(
+        self, node_id: str, repository: str = "staging"
+    ) -> Optional[str]:
+        """
+        Fetch text content for a node from the repository.
+
+        Args:
+            node_id: The NodeID to fetch
+            repository: 'prod' or 'staging'
+
+        Returns:
+            Text content if available, None otherwise
+        """
+        base_url = self._get_repository_base_url(repository)
+        api_url = f"{base_url}/node/v1/nodes/-home-/{node_id}/textContent"
+
+        logger.info(f"Fetching node text content: {node_id} from {repository}")
+
+        response = await self.http_client.get(
+            api_url, headers=self._repository_headers()
+        )
+        response.raise_for_status()
+
+        data = response.json()
+
+        # Try text, then html, then raw
+        text = data.get("text") or data.get("html") or data.get("raw")
+
+        if text:
+            logger.info(f"Fetched {len(text)} characters of text content from node")
+        else:
+            logger.info("No text content available for node")
+
+        return text
+
+    def _convert_node_properties_to_metadata(
+        self, properties: dict[str, Any]
+    ) -> dict[str, Any]:
+        """
+        Convert repository node properties to flat metadata format.
+
+        The repository returns properties as arrays (e.g., {"cclom:title": ["My Title"]}).
+        We convert single-item arrays to scalar values.
+        """
+        metadata = {}
+
+        # cm: properties to keep (valid metadata fields)
+        CM_KEEP = {"cm:author"}
+
+        for key, value in properties.items():
+            # Skip internal/system properties
+            if key.startswith("sys:") or key.startswith("virtual:"):
+                continue
+            if key.startswith("cm:") and key not in CM_KEEP:
+                continue
+
+            # Skip DISPLAYNAME variants (we want the URI values)
+            if key.endswith("_DISPLAYNAME"):
+                continue
+
+            if isinstance(value, list):
+                if len(value) == 1:
+                    metadata[key] = value[0]
+                elif len(value) > 1:
+                    metadata[key] = value
+                # Skip empty lists
+            else:
+                metadata[key] = value
+
+        return metadata
+
+    async def fetch_from_node_id(
+        self, node_id: str, repository: str = "staging"
+    ) -> InputData:
+        """
+        Fetch input data from repository by NodeID.
+
+        Args:
+            node_id: The NodeID to fetch
+            repository: 'prod' or 'staging'
+
+        Returns:
+            InputData with text and existing metadata
+        """
+        # Fetch metadata
+        node_data = await self.fetch_node_metadata(node_id, repository)
+        properties = node_data.get("properties", {})
+
+        # Convert properties to flat metadata
+        existing_metadata = self._convert_node_properties_to_metadata(properties)
+
+        # Get the source URL from properties
+        source_url = None
+        wwwurl = properties.get("ccm:wwwurl", [])
+        if wwwurl:
+            source_url = wwwurl[0] if isinstance(wwwurl, list) else wwwurl
+
+        # Fetch text content
+        text = await self.fetch_node_text_content(node_id, repository)
+
+        if not text:
+            # Try to build text from title and description
+            title = existing_metadata.get("cclom:title", "")
+            description = existing_metadata.get("cclom:general_description", "")
+            keywords = existing_metadata.get("cclom:general_keyword", [])
+
+            if isinstance(keywords, list):
+                keywords_text = ", ".join(keywords)
+            else:
+                keywords_text = keywords or ""
+
+            text_parts = []
+            if title:
+                text_parts.append(title)
+            if description:
+                text_parts.append(description)
+            if keywords_text:
+                text_parts.append(f"Keywords: {keywords_text}")
+
+            text = "\n\n".join(text_parts)
+
+            if not text:
+                raise ValueError(f"No text content available for node {node_id}")
+
+            logger.info(f"Built text from metadata: {len(text)} characters")
+
+        return InputData(
+            text=text,
+            existing_metadata=existing_metadata,
+            source_url=source_url,
+            node_id=node_id,
+            repository=repository,
+        )
+
+    async def fetch_from_node_url(
+        self,
+        node_id: str,
+        repository: str = "staging",
+        source_url: Optional[str] = None,
+        extraction_method: str = "browser",
+        lang: str = "auto",
+        output_format: str = "markdown",
+    ) -> InputData:
+        """
+        Fetch input data using NodeID for metadata and URL for text (fallback only).
+
+        Logic:
+        1. Fetch metadata from repository
+        2. Get URL from ccm:wwwurl if not provided
+        3. Check if stored fulltext exists in repository
+        4. If fulltext exists: use metadata + fulltext (no crawler)
+        5. If no fulltext: use crawler to fetch text from URL
+
+        Args:
+            node_id: The NodeID to fetch metadata from
+            repository: 'prod' or 'staging'
+            source_url: Optional URL - if not provided, uses ccm:wwwurl from metadata
+            extraction_method: 'simple' or 'browser' for URL extraction
+
+        Returns:
+            InputData with text and existing metadata
+        """
+        # Step 1: Fetch metadata
+        node_data = await self.fetch_node_metadata(node_id, repository)
+        properties = node_data.get("properties", {})
+        existing_metadata = self._convert_node_properties_to_metadata(properties)
+
+        # Step 2: Get URL from metadata if not provided
+        if not source_url:
+            wwwurl = properties.get("ccm:wwwurl", [])
+            if wwwurl:
+                source_url = wwwurl[0] if isinstance(wwwurl, list) else wwwurl
+                logger.info(f"Using ccm:wwwurl from metadata: {source_url}")
+
+        # Step 3: Check for stored fulltext in repository
+        stored_text = await self.fetch_node_text_content(node_id, repository)
+        warnings: list[str] = []
+
+        if stored_text and stored_text.strip():
+            # Step 4: Fulltext exists - use it (no crawler needed)
+            logger.info(
+                f"Using stored fulltext from repository ({len(stored_text)} chars)"
+            )
+            text = stored_text
+        else:
+            # Step 5: No fulltext - use crawler as fallback
+            if not source_url:
+                raise ValueError(
+                    f"No stored fulltext and no URL available for node {node_id}"
+                )
+            logger.info(f"No stored fulltext, fetching from URL: {source_url}")
+            try:
+                text = await self.fetch_from_url(
+                    source_url,
+                    extraction_method,
+                    lang=lang,
+                    output_format=output_format,
+                )
+            except Exception as e:
+                # Final fallback: build text from metadata - and say so. A result
+                # from title and description alone must not pass for one from
+                # the page.
+                cause = (
+                    e.message
+                    if isinstance(e, TextExtractionError)
+                    else (str(e) or type(e).__name__)
+                )
+                logger.warning(f"URL extraction failed: {cause}")
+                # Callers see the code; the message names internal hosts and
+                # stays in the log.
+                reported = e.code if isinstance(e, TextExtractionError) else cause
+                title = existing_metadata.get("cclom:title", "")
+                description = existing_metadata.get("cclom:general_description", "")
+                keywords = existing_metadata.get("cclom:general_keyword", [])
+
+                if isinstance(keywords, list):
+                    keywords_text = ", ".join(keywords)
+                else:
+                    keywords_text = keywords or ""
+
+                text_parts = []
+                if title:
+                    text_parts.append(title)
+                if description:
+                    text_parts.append(description)
+                if keywords_text:
+                    text_parts.append(f"Keywords: {keywords_text}")
+
+                text = "\n\n".join(text_parts)
+
+                if not text:
+                    raise ValueError(
+                        f"No text content available for node {node_id} and URL extraction failed: {reported}"
+                    )
+
+                logger.info(f"Using fallback text from metadata: {len(text)} chars")
+                warnings.append(
+                    f"Webseitentext nicht abrufbar ({reported}) – generiert wurde nur aus "
+                    "Titel, Beschreibung und Schlagworten des Repository-Eintrags."
+                )
+
+        return InputData(
+            text=text,
+            existing_metadata=existing_metadata,
+            source_url=source_url,
+            node_id=node_id,
+            repository=repository,
+            warnings=warnings,
+        )
+
+
+_input_source_service: Optional[InputSourceService] = None
+
+
+def get_input_source_service() -> InputSourceService:
+    """Get singleton instance of input source service."""
+    global _input_source_service
+    if _input_source_service is None:
+        _input_source_service = InputSourceService()
+    return _input_source_service

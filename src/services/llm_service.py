@@ -1,0 +1,2081 @@
+"""LLM service for parallel metadata extraction."""
+
+import asyncio
+import time
+import json
+import re
+import httpx
+from dataclasses import dataclass
+from typing import Any, Optional
+from weakref import WeakKeyDictionary
+
+from ..config import get_settings
+from ..utils.text_utils import levenshtein_distance
+from .llm_auth import b_api_auth
+from ..utils.request_id import TRACE_EVENT_HOOKS
+from ..metrics import LLM_DURATION, LLM_REQUESTS
+from .llm_errors import (
+    AUTH_SOURCE_LABELS,
+    LLMAuthForbidden,
+    LLMAuthRejected,
+    LLMEmptyAnswer,
+    LLMError,
+    LLMModelNotFound,
+    LLMRateLimited,
+    LLMRequestRejected,
+    LLMRouteMisconfigured,
+    LLMRouteNotFound,
+    LLMUnreachable,
+    LLMUpstreamError,
+    short_upstream_detail,
+)
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ContentTypeDetection:
+    """
+    What the LLM said about the content type.
+
+    schema_file is None when the answer was unusable (no JSON, or a value
+    outside the offered content types); `problem` then says why. The caller
+    decides about a fallback - and has to label it as one.
+    """
+
+    schema_file: Optional[str]
+    problem: Optional[str] = None
+
+
+# Reasoning models take a different request body: 'max_completion_tokens'
+# instead of 'max_tokens', no temperature other than the default, and they are
+# the only ones that accept 'verbosity' and 'reasoning_effort' — gpt-4.1-mini
+# answers 400 for those. Matched by prefix so a new model in the same family
+# does not need a code change; anything unknown keeps the classic body.
+_REASONING_MODEL_PREFIXES = ("gpt-5", "gpt-6", "o1", "o3", "o4")
+
+
+def uses_reasoning_parameters(model: str) -> bool:
+    """
+    Whether this model expects the reasoning-style request body.
+
+    Also behind the router's provider prefix: "openai/gpt-6-luna" is gpt-6-luna.
+    A bare route name matches nothing and keeps the classic body.
+    """
+    name = str(model).lower()
+    return name.startswith(_REASONING_MODEL_PREFIXES) or name.partition("/")[
+        2
+    ].startswith(_REASONING_MODEL_PREFIXES)
+
+
+# Upper bound for one wait the gateway asks for. A per-minute quota answers
+# Retry-After: 60 and more; waiting that long per retry would hold the whole
+# request, and the editor in front of it, for minutes.
+_MAX_RETRY_AFTER_SECONDS = 30.0
+
+
+def retry_after_seconds(response: httpx.Response) -> float:
+    """
+    Seconds a 429 asks to wait (Retry-After in seconds), capped; 0 when absent.
+
+    The fixed 1 s / 2 s backoff ignored it, so against a gateway that refills
+    per minute every retry landed in the same closed window.
+    """
+    try:
+        seconds = float(response.headers.get("retry-after", ""))
+    except ValueError:
+        return 0.0
+    return min(max(seconds, 0.0), _MAX_RETRY_AFTER_SECONDS)
+
+
+def router_failure(status: int, body: str) -> Optional[str]:
+    """
+    What a B-API router error means, read from its message.
+
+    The router answers configuration errors that never heal themselves partly
+    with 503 (documented on the B-API routing page, findings B6/B7/B12), so the
+    status alone cannot tell them from a short outage.
+
+    Returns "route_not_found", "parameters", "misconfigured" (lasting - never
+    retried), "rate_limited", "no_deployment" (may pass - retried), or None.
+    """
+    text = (body or "").lower()
+    if status == 400 and "no route configured" in text:
+        return "route_not_found"
+    if status == 400 and "unsupported parameter" in text:
+        return "parameters"
+    if status == 503:
+        # Throttling first: one throttled model in the attempts list is reason
+        # enough to try again.
+        if "rate_limited" in text:
+            return "rate_limited"
+        if "model pricing unavailable" in text or "not_eligible" in text:
+            return "misconfigured"
+        if "no deployment left" in text:
+            return "no_deployment"
+    return None
+
+
+_LASTING_ROUTER_FAILURES = ("route_not_found", "parameters", "misconfigured")
+
+# Providers whose prompt cache the primer feeds (see LLMService._prime_text_cache).
+PROMPT_CACHE_PROVIDERS = ("b-api-openai", "openai")
+# The primer's answer is thrown away; keep it as short as the API allows.
+_PRIMER_MAX_TOKENS = 16
+
+# How many concepts of a vocabulary the extraction prompt lists. It was 20:
+# subjects have 69 (Physik is the 46th), learning resource types 220, so a model
+# that keeps to the list could not pick the right one. 300 covers every
+# vocabulary except the two occupation lists (894), which stay truncated.
+_VOCABULARY_PROMPT_LIMIT = 300
+
+
+class RateLimiter:
+    """
+    Hands out evenly spaced send slots.
+
+    AcademicCloud answers 429 without a `retry-after`, so there is nothing to read a
+    wait off — a client has to stay under the limit rather than react to it. Its
+    bucket is roughly four deep and refills at the allowed rate, so a burst is
+    what empties it; spacing the starts is what keeps it full.
+
+    A slot that already passed is not a debt: a client idle for a minute starts
+    immediately instead of earning credit for the pause.
+    """
+
+    def __init__(self, requests_per_second: float):
+        self.requests_per_second = float(requests_per_second or 0.0)
+        self._interval = (
+            1.0 / self.requests_per_second if self.requests_per_second > 0 else 0.0
+        )
+        self._lock = asyncio.Lock()
+        self._next_slot: Optional[float] = None
+
+    async def acquire(self) -> float:
+        """Wait for this caller's slot. Returns how long it waited, in seconds."""
+        if not self._interval:
+            return 0.0
+
+        loop = asyncio.get_running_loop()
+        # The slot is claimed under the lock but waited for outside it, so the
+        # queue is handed out at once instead of each caller blocking the next.
+        async with self._lock:
+            now = loop.time()
+            slot = now if self._next_slot is None else max(now, self._next_slot)
+            self._next_slot = slot + self._interval
+
+        delay = slot - loop.time()
+        if delay > 0:
+            await asyncio.sleep(delay)
+        return max(delay, 0.0)
+
+
+class ProviderGate:
+    """The concurrency and rate budget of one gateway, shared by everything using it."""
+
+    def __init__(self, max_concurrent_requests: int, requests_per_second: float):
+        self.max_concurrent_requests = max_concurrent_requests
+        self.semaphore = asyncio.Semaphore(max_concurrent_requests)
+        self.rate_limiter = RateLimiter(requests_per_second)
+
+    @property
+    def requests_per_second(self) -> float:
+        return self.rate_limiter.requests_per_second
+
+
+# The budget belongs to the provider's limit group, not to a service object:
+# get_llm_service() builds a fresh LLMService whenever a request overrides the
+# provider or model, so a per-instance semaphore would let two concurrent API
+# requests send twice the allowed number. Keyed by event loop as well because a
+# semaphore binds to the loop it is first awaited in — one loop in production,
+# one per test.
+_gates: "WeakKeyDictionary[Any, dict[str, ProviderGate]]" = WeakKeyDictionary()
+
+
+def get_provider_gate(
+    limit_group: str, max_concurrent_requests: int, requests_per_second: float
+) -> ProviderGate:
+    """Get (or build) the shared gate for a limit group."""
+    per_loop = _gates.setdefault(asyncio.get_running_loop(), {})
+    gate = per_loop.get(limit_group)
+
+    if (
+        gate is None
+        or gate.max_concurrent_requests != max_concurrent_requests
+        or gate.requests_per_second != float(requests_per_second or 0.0)
+    ):
+        gate = ProviderGate(max_concurrent_requests, requests_per_second)
+        per_loop[limit_group] = gate
+
+    return gate
+
+
+def reset_provider_gates() -> None:
+    """Drop all gates. For tests — production configures them once at startup."""
+    _gates.clear()
+
+
+class LLMService:
+    """Service for LLM-based metadata extraction with parallel processing."""
+
+    def __init__(
+        self, llm_provider: Optional[str] = None, llm_model: Optional[str] = None
+    ):
+        """
+        Initialize LLM service.
+
+        Args:
+            llm_provider: Override default provider ('openai', 'b-api-openai', 'b-api-academiccloud')
+            llm_model: Override default model for the provider
+        """
+        settings = get_settings()
+        self.settings = settings
+
+        # Get config with optional overrides
+        self.llm_config = settings.get_llm_config(
+            provider_override=llm_provider, model_override=llm_model
+        )
+
+        # Provider info
+        self.provider = self.llm_config["provider"]
+        self.api_key = self.llm_config["api_key"]
+        self.api_base = self.llm_config["api_base"]
+        self.model = self.llm_config["model"]
+        self.temperature = self.llm_config["temperature"]
+        self.requires_custom_header = self.llm_config["requires_custom_header"]
+        self.max_tokens = settings.llm_max_tokens
+        self.max_retries = settings.llm_max_retries
+        self.verbosity = settings.llm_verbosity
+        self.reasoning_effort = settings.llm_reasoning_effort
+
+        # What this provider's gateway tolerates — enforced process-wide, see
+        # get_provider_gate().
+        self.limit_group = self.llm_config["limit_group"]
+        self.max_concurrent_requests = self.llm_config["max_concurrent_requests"]
+        self.requests_per_second = self.llm_config["requests_per_second"]
+
+        # HTTP client for B-API (requires custom headers).
+        #
+        # The read timeout is what bounds a single LLM call, so it comes from
+        # request_timeout: a reasoning model on a long text needs more than the
+        # library default. Connecting is a separate, much shorter budget — an
+        # unreachable gateway must fail fast instead of occupying a slot at the
+        # provider gate for the full request timeout.
+        self.http_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(float(settings.request_timeout), connect=10.0),
+            event_hooks=TRACE_EVENT_HOOKS,
+        )
+
+        logger.info(f"🤖 LLM Service initialized: {self.provider}")
+        logger.info(f"   Model: {self.model}")
+        logger.info(f"   API Base: {self.api_base}")
+
+    async def close(self):
+        """Close the HTTP client."""
+        if self.http_client:
+            await self.http_client.aclose()
+
+    async def _call_llm(
+        self,
+        messages: list[dict[str, str]],
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+    ) -> dict[str, Any]:
+        """One LLM answer, counted and timed for /metrics (src/metrics.py)."""
+        start = time.monotonic()
+        result = "ok"
+        try:
+            return await self._send_llm_request(messages, temperature, max_tokens)
+        except LLMError as e:
+            result = e.code
+            raise
+        except Exception:
+            result = "error"
+            raise
+        finally:
+            LLM_REQUESTS.labels(self.provider, result).inc()
+            LLM_DURATION.labels(self.provider).observe(time.monotonic() - start)
+
+    async def _send_llm_request(
+        self,
+        messages: list[dict[str, str]],
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        attempts: Optional[int] = None,
+    ) -> dict[str, Any]:
+        """
+        Call LLM API with proper provider configuration.
+        Supports OpenAI and B-API (with X-API-KEY header).
+
+        `attempts` overrides llm_max_retries, e.g. 1 for a call not worth waiting for.
+        """
+        attempts = attempts or self.max_retries
+        temp = temperature if temperature is not None else self.temperature
+        tokens = max_tokens if max_tokens is not None else self.max_tokens
+
+        request_body: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+        }
+
+        # The explicit style describes the agent's route. Other providers -
+        # also when a request picks one - are told apart by model name.
+        style = (
+            self.settings.llm_request_style
+            if self.provider == "b-api-router"
+            else "auto"
+        )
+        reasoning_body = (
+            uses_reasoning_parameters(self.model)
+            if style == "auto"
+            else style == "reasoning"
+        )
+        if reasoning_body:
+            # Measured against the B-API: these models answer 400 for
+            # 'max_tokens' ("use max_completion_tokens instead") and for any
+            # temperature other than the default, so it is left out entirely.
+            request_body["max_completion_tokens"] = tokens
+            if self.verbosity:
+                request_body["verbosity"] = self.verbosity
+            if self.reasoning_effort:
+                request_body["reasoning_effort"] = self.reasoning_effort
+        else:
+            request_body["temperature"] = temp
+            request_body["max_tokens"] = tokens
+            # Thinking models in a classic route (qwen3.6) need "none", or they
+            # spend the token budget on reasoning and return no text.
+            router_effort = self.settings.b_api_router_reasoning_effort
+            if self.provider == "b-api-router" and router_effort:
+                request_body["reasoning_effort"] = router_effort
+
+        # Build headers based on provider. For the B-API the key is chosen per
+        # request (forwarded caller key or own key, see llm_auth) - never kept
+        # on this shared instance.
+        headers = {"Content-Type": "application/json"}
+        if self.requires_custom_header:
+            auth_headers, auth_source = b_api_auth(self.settings)
+            headers.update(auth_headers)
+        else:
+            auth_source = "openai"
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        # Make request
+        api_url = f"{self.api_base}/chat/completions"
+        # The B-API caches word-identical requests, unmarked (b_api_ignore_cache).
+        if self.requires_custom_header and self.settings.b_api_ignore_cache:
+            api_url += "?ignore-caching=true"
+
+        # Every LLM request in the process passes here — including content-type
+        # detection and normalization, which do not go through the parallel
+        # field extraction — so this is the one place where the gateway's budget
+        # can actually be held. A retry is a request of its own and takes a slot.
+        gate = get_provider_gate(
+            self.limit_group, self.max_concurrent_requests, self.requests_per_second
+        )
+
+        last_status: Optional[int] = None
+        last_detail = ""
+        last_kind: Optional[str] = None
+        for attempt in range(attempts):
+            try:
+                async with gate.semaphore:
+                    await gate.rate_limiter.acquire()
+                    response = await self.http_client.post(
+                        api_url,
+                        headers=headers,
+                        json=request_body,
+                    )
+
+                if response.status_code == 200:
+                    return self._answer_or_raise(response.json(), auth_source)
+
+                last_status = response.status_code
+                last_detail = short_upstream_detail(response.text)
+                last_kind = router_failure(last_status, response.text)
+
+                # A configuration error answers the same way on every try.
+                if last_kind in _LASTING_ROUTER_FAILURES:
+                    raise self._http_error(
+                        last_status, last_detail, auth_source, last_kind
+                    )
+
+                # Retry on transient errors
+                if response.status_code in [429, 500, 502, 503, 504]:
+                    if attempt < attempts - 1:
+                        wait_time = (attempt + 1) * self.settings.llm_retry_delay
+                        if response.status_code == 429:
+                            wait_time = max(wait_time, retry_after_seconds(response))
+                        logger.warning(
+                            f"⚠️ LLM API returned {response.status_code}, retrying in {wait_time}s..."
+                        )
+                        await asyncio.sleep(wait_time)
+                    continue
+
+                # Not retryable: the same request would be refused again
+                raise self._http_error(last_status, last_detail, auth_source)
+
+            except (
+                httpx.TimeoutException,
+                httpx.ConnectError,
+                httpx.ReadError,
+                httpx.RemoteProtocolError,
+            ) as e:
+                if attempt < attempts - 1:
+                    await asyncio.sleep((attempt + 1) * self.settings.llm_retry_delay)
+                    continue
+                raise LLMUnreachable(
+                    f"Keine Verbindung zum KI-Dienst ({self.api_base}) nach "
+                    f"{attempts} Versuchen: {type(e).__name__}",
+                    auth_source=auth_source,
+                ) from e
+
+        raise self._http_error(last_status, last_detail, auth_source, last_kind)
+
+    def _answer_or_raise(
+        self, data: dict[str, Any], auth_source: str
+    ) -> dict[str, Any]:
+        """
+        A 200 without text is a failure, not "no value in the text".
+
+        Thinking models return content null when the token budget went into
+        reasoning (finish_reason "length"); counted as an empty field, that hid
+        the failure entirely.
+        """
+        choice = (data.get("choices") or [{}])[0]
+        content = (choice.get("message") or {}).get("content")
+        if content is None or (isinstance(content, str) and not content.strip()):
+            raise LLMEmptyAnswer(
+                f"Der KI-Dienst ({self.model}) lieferte keinen Text "
+                f"(finish_reason={choice.get('finish_reason')}). Bei denkenden "
+                "Modellen METADATA_AGENT_B_API_ROUTER_REASONING_EFFORT=none setzen "
+                "oder METADATA_AGENT_LLM_MAX_TOKENS erhöhen.",
+                auth_source=auth_source,
+            )
+        return data
+
+    def _http_error(
+        self,
+        status: Optional[int],
+        detail: str,
+        auth_source: str,
+        kind: Optional[str] = None,
+    ) -> LLMError:
+        """Typed error for a non-200 answer, worded for the person who has to act."""
+        key = AUTH_SOURCE_LABELS.get(auth_source, auth_source)
+        suffix = f": {detail}" if detail else ""
+        context = {"upstream_status": status, "auth_source": auth_source}
+        if kind == "route_not_found":
+            return LLMRouteNotFound(
+                f"Der B-API-Router kennt keine aktive Route '{self.model}' (HTTP 400). "
+                f"Route anlegen bzw. aktivieren oder den Namen prüfen{suffix}",
+                **context,
+            )
+        if kind == "parameters":
+            return LLMRouteMisconfigured(
+                f"Modell bzw. Route '{self.model}' lehnt die Anfrage-Parameter ab "
+                f"(HTTP 400). METADATA_AGENT_LLM_REQUEST_STYLE passend zur "
+                f"Modellfamilie setzen: reasoning für GPT-5/6, sonst classic{suffix}",
+                **context,
+            )
+        if kind == "misconfigured":
+            return LLMRouteMisconfigured(
+                f"Der B-API-Router kann '{self.model}' so nicht bedienen (HTTP {status}): "
+                f"Modell ohne Preis oder für diesen Endpunkt ungeeignet. Route bzw. "
+                f"Modellnamen prüfen{suffix}",
+                **context,
+            )
+        if kind == "rate_limited":
+            return LLMRateLimited(
+                f"Die Modelle hinter '{self.model}' werden weiterhin gedrosselt "
+                f"(HTTP {status}, {key}){suffix}",
+                **context,
+            )
+        if kind == "no_deployment":
+            return LLMUnreachable(
+                f"Kein Modell der Route '{self.model}' ist erreichbar (HTTP {status}, "
+                f"nach {self.max_retries} Versuchen){suffix}",
+                **context,
+            )
+        if status == 401:
+            return LLMAuthRejected(
+                f"Der KI-Dienst hat den Schlüssel abgelehnt (HTTP 401; {key}){suffix}",
+                upstream_status=status,
+                auth_source=auth_source,
+            )
+        if status == 403:
+            return LLMAuthForbidden(
+                f"Der KI-Dienst hat den Zugriff verweigert (HTTP 403; {key}). Dem Schlüssel "
+                f"fehlt eine Berechtigung – für den LLM-Endpunkt oder für Modell "
+                f"{self.model}{suffix}",
+                upstream_status=status,
+                auth_source=auth_source,
+            )
+        if status == 404:
+            return LLMModelNotFound(
+                f"Modell {self.model} oder Adresse {self.api_base} beim KI-Dienst "
+                f"nicht gefunden (HTTP 404){suffix}",
+                upstream_status=status,
+                auth_source=auth_source,
+            )
+        if status == 429:
+            return LLMRateLimited(
+                f"Der KI-Dienst drosselt die Anfragen weiterhin (HTTP 429, {key}){suffix}",
+                upstream_status=status,
+                auth_source=auth_source,
+            )
+        if status is not None and status >= 500:
+            return LLMUpstreamError(
+                f"Der KI-Dienst antwortete nach {self.max_retries} Versuchen mit "
+                f"HTTP {status}{suffix}",
+                upstream_status=status,
+                auth_source=auth_source,
+            )
+        return LLMRequestRejected(
+            f"Der KI-Dienst hat die Anfrage abgelehnt (HTTP {status}){suffix}",
+            upstream_status=status,
+            auth_source=auth_source,
+        )
+
+    async def extract_field(
+        self,
+        field: dict[str, Any],
+        text: str,
+        existing_value: Any = None,
+        language: str = "de",
+        retry_count: int = 0,
+    ) -> tuple[str, Any, "Optional[str | LLMError]"]:
+        """
+        Extract a single field value from text with retry logic.
+
+        Returns: (field_id, extracted_value, error) - error is None, a message,
+        or the LLMError of a failed call (str() gives its message).
+
+        Raises:
+            LLMError: a fatal one (refused key, exhausted quota, no gateway) -
+                every further field would fail the same way.
+        """
+        field_id = field.get("id", "unknown")
+        max_retries = self.settings.llm_max_retries
+
+        try:
+            # Build prompt with retry hints if this is a retry
+            prompt = self._build_extraction_prompt(
+                field, text, existing_value, language, retry_count
+            )
+
+            response = await self._call_llm(
+                messages=[
+                    *self._text_messages(text, language),
+                    {"role": "user", "content": prompt},
+                ],
+            )
+
+            content = (
+                response.get("choices", [{}])[0].get("message", {}).get("content", "")
+            )
+
+            # Parse JSON response
+            result = self._parse_json_response(content)
+            extracted_value = result.get("value") if result else None
+
+            # Normalize the extracted value
+            if extracted_value is not None:
+                normalized = self._normalize_value(extracted_value, field)
+
+                # Check if normalization failed for vocabulary fields
+                system = field.get("system", {})
+                vocabulary = system.get("vocabulary", {})
+                if vocabulary and vocabulary.get("type") == "closed":
+                    # Validate vocabulary result
+                    valid = self._is_valid_vocabulary_value(normalized, vocabulary)
+                    if not valid and retry_count < max_retries:
+                        # Retry with hint about invalid value
+                        return await self.extract_field(
+                            field, text, existing_value, language, retry_count + 1
+                        )
+
+                extracted_value = normalized
+
+            # If no value extracted and field seems important, try LLM normalization
+            if extracted_value is None and retry_count < max_retries:
+                system = field.get("system", {})
+                if system.get("required", False):
+                    # Retry for required fields
+                    return await self.extract_field(
+                        field, text, existing_value, language, retry_count + 1
+                    )
+
+            return (field_id, extracted_value, None)
+
+        except LLMError as e:
+            # _call_llm already retried what can be retried; another round here
+            # would only repeat the same refusal or outage (formerly 4x per field).
+            # A fatal one (refused key, quota, no gateway) ends the extraction.
+            if e.fatal:
+                raise
+            return (field_id, None, e)
+
+        except Exception as e:
+            if retry_count < max_retries:
+                # Retry on error
+                await asyncio.sleep(self.settings.llm_retry_delay)
+                return await self.extract_field(
+                    field, text, existing_value, language, retry_count + 1
+                )
+            return (field_id, None, str(e))
+
+    def _is_valid_vocabulary_value(self, value: Any, vocabulary: dict) -> bool:
+        """Check if value is valid for closed vocabulary."""
+        if value is None:
+            return False
+
+        concepts = vocabulary.get("concepts", [])
+        # Accept both 'uri' and 'value' keys (e.g. language vocab uses 'value': 'de')
+        valid_entries = {c.get("uri") for c in concepts if c.get("uri")}
+        valid_entries.update(c.get("value") for c in concepts if c.get("value"))
+
+        if isinstance(value, list):
+            return all(v in valid_entries for v in value if v is not None)
+        return value in valid_entries
+
+    async def normalize_with_llm(
+        self,
+        value: Any,
+        field: dict[str, Any],
+        language: str = "de",
+    ) -> Any:
+        """Use LLM to normalize a value when local normalization fails."""
+        system = field.get("system", {})
+        datatype = system.get("datatype", "string")
+
+        prompt = self._build_normalization_prompt(value, field, language)
+
+        try:
+            response = await self._call_llm(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": self._get_normalization_system_prompt(language),
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.1,
+                max_tokens=200,
+            )
+
+            content = (
+                response.get("choices", [{}])[0].get("message", {}).get("content", "")
+            )
+            result = self._parse_normalization_response(content, datatype)
+
+            return result if result is not None else value
+
+        except Exception:
+            return value
+
+    def _get_normalization_system_prompt(self, language: str) -> str:
+        """Get system prompt for normalization."""
+        if language == "de":
+            return "Du bist ein Daten-Normalisierungs-Assistent. Gib NUR den normalisierten Wert zurück, ohne Erklärung."
+        return "You are a data normalization assistant. Return ONLY the normalized value without any explanation."
+
+    def _build_normalization_prompt(
+        self,
+        value: Any,
+        field: dict[str, Any],
+        language: str,
+    ) -> str:
+        """Build prompt for LLM-based normalization."""
+        system = field.get("system", {})
+        datatype = system.get("datatype", "string")
+        label = self._get_localized(field.get("label", {}), language)
+
+        parts = []
+
+        if language == "de":
+            parts.append(f"Normalisiere folgenden Wert für das Feld '{label}':")
+            parts.append(f"Eingabe: {value}")
+            parts.append(f"Datentyp: {datatype}")
+
+            if datatype == "date":
+                parts.append("\nGib das Datum im Format YYYY-MM-DD zurück.")
+                parts.append("Beispiele: '15. September 2026' → 2026-09-15")
+            elif datatype == "datetime":
+                parts.append(
+                    "\nGib Datum und Zeit im Format YYYY-MM-DDTHH:MM:SS zurück."
+                )
+            elif datatype in ("number", "integer"):
+                parts.append("\nGib nur die Zahl zurück (keine Einheiten).")
+                parts.append("Wandle Zahlwörter um: 'dreihundertfünfzig' → 350")
+            elif datatype == "boolean":
+                parts.append("\nGib nur true oder false zurück.")
+
+            vocabulary = system.get("vocabulary", {})
+            if vocabulary and vocabulary.get("concepts"):
+                parts.append("\nVerfügbare Werte (verwende exakt diese):")
+                for c in vocabulary.get("concepts", [])[:15]:
+                    label_text = self._get_localized(c.get("label", {}), language)
+                    parts.append(
+                        f"  - {label_text}: {c.get('uri', c.get('value', ''))}"
+                    )
+        else:
+            parts.append(f"Normalize the following value for field '{label}':")
+            parts.append(f"Input: {value}")
+            parts.append(f"Datatype: {datatype}")
+
+            if datatype == "date":
+                parts.append("\nReturn the date in YYYY-MM-DD format.")
+            elif datatype in ("number", "integer"):
+                parts.append("\nReturn only the number (no units).")
+            elif datatype == "boolean":
+                parts.append("\nReturn only true or false.")
+
+        return "\n".join(parts)
+
+    def _parse_normalization_response(self, content: str, datatype: str) -> Any:
+        """Parse LLM normalization response."""
+        content = content.strip()
+
+        # Remove quotes if present
+        if content.startswith('"') and content.endswith('"'):
+            content = content[1:-1]
+        if content.startswith("'") and content.endswith("'"):
+            content = content[1:-1]
+
+        # Handle null
+        if content.lower() in ("null", "none", "n/a", ""):
+            return None
+
+        # Parse based on datatype
+        if datatype == "boolean":
+            if content.lower() in ("true", "ja", "yes", "1"):
+                return True
+            if content.lower() in ("false", "nein", "no", "0"):
+                return False
+            return None
+
+        if datatype in ("number", "integer"):
+            try:
+                num = float(content.replace(",", "."))
+                return int(num) if datatype == "integer" else num
+            except ValueError:
+                return None
+
+        # For strings, dates, etc. - return cleaned content
+        return content
+
+    def _text_messages(self, text: str, language: str) -> list[dict[str, str]]:
+        """
+        System prompt and page text: the prefix every field call shares.
+
+        Field calls and the cache primer build it here, so it is byte-identical
+        in all of them — the cache only hits on an exact match.
+        """
+        return [
+            {"role": "system", "content": self._get_system_prompt(language)},
+            {"role": "user", "content": f"--- TEXT ---\n{text}\n--- ENDE ---"},
+        ]
+
+    async def _prime_text_cache(self, text: str, language: str) -> None:
+        """
+        Send the shared prefix once before the field calls fan out.
+
+        Measured through the B-API (2026-10-16): the prompt cache only hits
+        where an earlier prompt ended. Without a call that ends exactly after
+        the text, the ~50 field calls of one extraction wrote the text to the
+        cache 50 times and read it back never. After this call they read it at
+        a tenth of the input price.
+
+        Only for the OpenAI providers: AcademicCloud shares a small per-minute
+        quota that one more call per page would eat into. Bypasses the LLM
+        metrics on purpose — a primer answer is irrelevant, and an empty one
+        is no failure. Errors are only logged: a refused key or a dead gateway
+        shows up on the first field call right after.
+        """
+        if self.provider not in PROMPT_CACHE_PROVIDERS:
+            return
+        try:
+            # One attempt: waiting out retries would only delay the field calls.
+            await self._send_llm_request(
+                self._text_messages(text, language), None, _PRIMER_MAX_TOKENS, 1
+            )
+        except LLMEmptyAnswer:
+            # The usual outcome: 16 tokens go into reasoning and no text comes
+            # back (finish_reason "length"). The prompt was read, so it is cached.
+            pass
+        except LLMError as e:
+            logger.info(f"Prompt cache primer skipped: {e.code}")
+        except ValueError as e:  # a 200 without a JSON body
+            logger.info(f"Prompt cache primer skipped: {type(e).__name__}")
+
+    async def extract_fields_parallel(
+        self,
+        fields: list[dict[str, Any]],
+        text: str,
+        existing_metadata: Optional[dict[str, Any]] = None,
+        language: str = "de",
+        max_workers: int = 20,
+    ) -> dict[str, Any]:
+        """
+        Extract multiple fields in parallel with worker limit.
+
+        Returns: dict with field_id -> value mappings
+        """
+        # More workers than the gateway lets through at once buys nothing — the
+        # gate in _call_llm would queue them anyway. Capping here keeps the
+        # reported worker count honest instead of promising a parallelism that
+        # cannot happen.
+        workers = min(max_workers, self.max_concurrent_requests)
+        if workers < max_workers:
+            logger.info(
+                f"⚙️ Workers: {max_workers} requested → {workers} "
+                f"({self.limit_group} allows {self.max_concurrent_requests} in flight)"
+            )
+        semaphore = asyncio.Semaphore(workers)
+        results = {}
+        errors = []
+        first_error: list[LLMError] = []
+        fatal: list[LLMError] = []
+        skipped = 0
+
+        async def extract_with_semaphore(field: dict[str, Any]) -> None:
+            nonlocal skipped
+            async with semaphore:
+                # After a fatal error (refused key, exhausted quota, no gateway)
+                # every further call would fail the same way: do not send it.
+                if fatal:
+                    skipped += 1
+                    return
+                field_id = field.get("id", "unknown")
+                existing_value = (
+                    existing_metadata.get(field_id) if existing_metadata else None
+                )
+
+                try:
+                    field_id, value, error = await self.extract_field(
+                        field, text, existing_value, language
+                    )
+                except LLMError as e:
+                    if not fatal:
+                        fatal.append(e)
+                        logger.error(
+                            f"⛔ Extraction stopped: {e.code} ({e.upstream_status})"
+                        )
+                    else:
+                        skipped += 1
+                    return
+
+                if error:
+                    errors.append(f"{field_id}: {error}")
+                    if isinstance(error, LLMError) and not first_error:
+                        first_error.append(error)
+                elif value is not None:
+                    results[field_id] = value
+
+        if fields:
+            await self._prime_text_cache(text, language)
+
+        # Create tasks for all fields
+        tasks = [extract_with_semaphore(field) for field in fields]
+
+        # Run all tasks concurrently
+        await asyncio.gather(*tasks)
+
+        return {
+            "values": results,
+            "errors": errors,
+            "first_error": first_error[0] if first_error else None,
+            "fatal_error": fatal[0] if fatal else None,
+            "skipped": skipped,
+        }
+
+    def _get_system_prompt(self, language: str) -> str:
+        """Get the system prompt for extraction."""
+        if language == "de":
+            return """Du bist ein Experte für Metadaten-Extraktion im Bildungsbereich.
+Deine Aufgabe ist es, strukturierte Metadaten aus Texten zu extrahieren und zu generieren.
+
+WICHTIGE REGELN:
+1. Für TITEL und BESCHREIBUNG: Generiere passende Texte basierend auf dem Inhalt, auch wenn kein expliziter Titel vorhanden ist
+2. Für andere Felder: Extrahiere nur Informationen, die im Text enthalten sind
+3. Erfinde KEINE faktischen Informationen (Daten, Orte, Namen) - aber generiere passende Titel/Beschreibungen
+4. Bei Unsicherheit für nicht-generierbare Felder: Wert auf null setzen
+5. Antworte IMMER im JSON-Format mit dem Schlüssel "value"
+6. Bei Vokabular-Feldern: Verwende EXAKT die vorgegebenen URIs
+7. Bei Mehrfachwerten: Gib ein Array zurück
+8. Bei Datumsangaben: ISO 8601 Format (YYYY-MM-DD)"""
+        else:
+            return """You are an expert in metadata extraction for educational content.
+Your task is to extract and generate structured metadata from texts.
+
+IMPORTANT RULES:
+1. For TITLE and DESCRIPTION: Generate suitable texts based on the content, even if no explicit title is present
+2. For other fields: Extract only information present in the text
+3. Do NOT invent factual information (dates, places, names) - but generate suitable titles/descriptions
+4. If uncertain for non-generatable fields: set value to null
+5. ALWAYS respond in JSON format with the key "value"
+6. For vocabulary fields: Use EXACTLY the provided URIs
+7. For multiple values: Return an array
+8. For dates: Use ISO 8601 format (YYYY-MM-DD)"""
+
+    def _build_extraction_prompt(
+        self,
+        field: dict[str, Any],
+        text: str,
+        existing_value: Any = None,
+        language: str = "de",
+        retry_count: int = 0,
+    ) -> str:
+        """Build the extraction prompt for a field with retry hints."""
+        field_id = field.get("id", "")
+        label = self._get_localized(field.get("label", {}), language)
+        description = self._get_localized(field.get("description", {}), language)
+        prompt_hint = self._get_localized(field.get("prompt", {}), language)
+
+        system = field.get("system", {})
+        datatype = system.get("datatype", "string")
+        multiple = system.get("multiple", False)
+        required = system.get("required", False)
+
+        # The page text is not part of this prompt: it travels as a message of
+        # its own in front of it (_text_message), so it can be cached.
+        parts = []
+
+        # Add retry hints if this is a retry attempt
+        if retry_count > 0:
+            if language == "de":
+                parts.append(f"⚠️ VERSUCH {retry_count + 1} - Bitte genauer prüfen!")
+                if retry_count == 1:
+                    parts.append(
+                        "Der vorherige Versuch lieferte kein gültiges Ergebnis."
+                    )
+                    parts.append(
+                        "Analysiere den Text genauer und suche nach impliziten Informationen."
+                    )
+                elif retry_count >= 2:
+                    parts.append(
+                        "LETZTER VERSUCH - Suche auch nach indirekten Hinweisen."
+                    )
+                    parts.append("Falls keine Information findbar: null zurückgeben.")
+                parts.append("")
+            else:
+                parts.append(
+                    f"⚠️ ATTEMPT {retry_count + 1} - Please check more carefully!"
+                )
+                if retry_count == 1:
+                    parts.append("The previous attempt did not yield a valid result.")
+                    parts.append(
+                        "Analyze the text more carefully and look for implicit information."
+                    )
+                elif retry_count >= 2:
+                    parts.append("LAST ATTEMPT - Also look for indirect hints.")
+                    parts.append("If no information can be found: return null.")
+                parts.append("")
+
+        # Check if this is a generative field (title/description)
+        is_generative_field = field_id in ["cclom:title", "cclom:general_description"]
+
+        if is_generative_field:
+            if language == "de":
+                parts.append(
+                    f"🎯 GENERIERE das Feld '{label}' (ID: {field_id}) basierend auf dem Text oben:"
+                )
+                parts.append(
+                    "HINWEIS: Erstelle einen passenden, aussagekräftigen Wert basierend auf dem Textinhalt!"
+                )
+            else:
+                parts.append(
+                    f"🎯 GENERATE the field '{label}' (ID: {field_id}) based on the text above:"
+                )
+                parts.append(
+                    "NOTE: Create a suitable, meaningful value based on the text content!"
+                )
+        else:
+            if language == "de":
+                parts.append(
+                    f"Extrahiere das Feld '{label}' (ID: {field_id}) aus dem Text oben:"
+                )
+            else:
+                parts.append(
+                    f"Extract the field '{label}' (ID: {field_id}) from the text above:"
+                )
+
+        if description:
+            parts.append(
+                f"Beschreibung: {description}"
+                if language == "de"
+                else f"Description: {description}"
+            )
+
+        if prompt_hint:
+            parts.append(
+                f"Hinweis: {prompt_hint}"
+                if language == "de"
+                else f"Hint: {prompt_hint}"
+            )
+
+        parts.append(
+            f"Datentyp: {datatype}" if language == "de" else f"Datatype: {datatype}"
+        )
+
+        if multiple:
+            parts.append(
+                "Mehrfachwerte erlaubt (Array)"
+                if language == "de"
+                else "Multiple values allowed (Array)"
+            )
+
+        # Add object structure info if present (items, variants, fields)
+        items = system.get("items", {})
+        if items and items.get("datatype") == "object":
+            structure_info = self._build_structure_info(items, language)
+            if structure_info:
+                parts.append(structure_info)
+
+        # Add vocabulary info if present
+        vocabulary = system.get("vocabulary", {})
+        if vocabulary:
+            concepts = vocabulary.get("concepts", [])
+            if concepts:
+                vocab_type = vocabulary.get("type", "open")
+                if language == "de":
+                    parts.append(f"\nVokabular ({vocab_type}):")
+                    parts.append(
+                        "⚠️ WICHTIG: Verwende NUR die exakten URIs aus dieser Liste!"
+                    )
+                    if retry_count > 0:
+                        parts.append("❌ Erfinde KEINE eigenen URIs oder Labels!")
+                else:
+                    parts.append(f"\nVocabulary ({vocab_type}):")
+                    parts.append("⚠️ IMPORTANT: Use ONLY the exact URIs from this list!")
+                    if retry_count > 0:
+                        parts.append("❌ Do NOT invent your own URIs or labels!")
+
+                for concept in concepts[:_VOCABULARY_PROMPT_LIMIT]:
+                    uri = concept.get("uri", concept.get("value", ""))
+                    concept_label = self._get_localized(
+                        concept.get("label", {}), language
+                    )
+                    parts.append(f"  - {concept_label}: {uri}")
+
+                if len(concepts) > _VOCABULARY_PROMPT_LIMIT:
+                    hidden = len(concepts) - _VOCABULARY_PROMPT_LIMIT
+                    parts.append(
+                        f"  ... und {hidden} weitere"
+                        if language == "de"
+                        else f"  ... and {hidden} more"
+                    )
+
+        # Add examples if present
+        examples = field.get("examples", {})
+        example_list = examples.get(language, examples.get("de", []))
+        if example_list:
+            parts.append("\nBeispiele:" if language == "de" else "\nExamples:")
+            for ex in example_list[:3]:
+                parts.append(f"  - {ex}")
+
+        # Add existing value context
+        if existing_value is not None:
+            # Detect if this is a correction/update re-extraction
+            is_correction = "--- KORREKTUR" in text or "--- UPDATE" in text
+
+            if is_correction:
+                # Strong preservation rules for correction mode
+                if language == "de":
+                    parts.append(
+                        f"\n🔒 AKTUELLER WERT: {json.dumps(existing_value, ensure_ascii=False)}"
+                    )
+                    parts.append("⚠️ KORREKTUR-MODUS — WICHTIGE REGELN:")
+                    parts.append(
+                        "1. Der Text enthält einen KORREKTUR-Abschnitt mit einer gezielten Änderungsanweisung."
+                    )
+                    parts.append(
+                        f"2. Prüfe: Bezieht sich die Korrekturanweisung EXPLIZIT auf das Feld '{label}'?"
+                    )
+                    parts.append(
+                        "3. WENN JA → Führe NUR die angeforderte Änderung durch (z.B. kürzen, ergänzen, korrigieren)"
+                    )
+                    parts.append(
+                        "4. WENN NEIN → Gib den AKTUELLEN WERT EXAKT und UNVERÄNDERT zurück!"
+                    )
+                    parts.append(
+                        "5. Ändere NIEMALS Felder, die nicht in der Korrekturanweisung genannt werden."
+                    )
+                else:
+                    parts.append(
+                        f"\n🔒 CURRENT VALUE: {json.dumps(existing_value, ensure_ascii=False)}"
+                    )
+                    parts.append("⚠️ CORRECTION MODE — IMPORTANT RULES:")
+                    parts.append(
+                        "1. The text contains a CORRECTION section with a targeted change instruction."
+                    )
+                    parts.append(
+                        f"2. Check: Does the correction instruction EXPLICITLY refer to the field '{label}'?"
+                    )
+                    parts.append(
+                        "3. IF YES → Apply ONLY the requested change (e.g. shorten, add, correct)"
+                    )
+                    parts.append(
+                        "4. IF NO → Return the CURRENT VALUE EXACTLY and UNCHANGED!"
+                    )
+                    parts.append(
+                        "5. NEVER modify fields that are not mentioned in the correction instruction."
+                    )
+            else:
+                if language == "de":
+                    parts.append(
+                        f"\n📋 AKTUELLER WERT: {json.dumps(existing_value, ensure_ascii=False)}"
+                    )
+                    parts.append("AKTUALISIERUNGS-REGELN:")
+                    parts.append(
+                        "1. Wenn der Text NEUE oder GEÄNDERTE Informationen für dieses Feld enthält → Aktualisiere den Wert"
+                    )
+                    parts.append(
+                        "2. Wenn der Text KEINE Informationen zu diesem Feld enthält → Behalte den aktuellen Wert"
+                    )
+                    parts.append(
+                        "3. Prüfe genau auf: Datumsänderungen, Ortsänderungen, Namensänderungen etc."
+                    )
+                else:
+                    parts.append(
+                        f"\n📋 CURRENT VALUE: {json.dumps(existing_value, ensure_ascii=False)}"
+                    )
+                    parts.append("UPDATE RULES:")
+                    parts.append(
+                        "1. If the text contains NEW or CHANGED information for this field → Update the value"
+                    )
+                    parts.append(
+                        "2. If the text contains NO information about this field → Keep the current value"
+                    )
+                    parts.append(
+                        "3. Check carefully for: date changes, location changes, name changes etc."
+                    )
+
+        # Final instruction
+        if language == "de":
+            parts.append('\nAntworte mit JSON: {"value": <extrahierter_wert>}')
+            if not required:
+                parts.append('Wenn keine Information gefunden: {"value": null}')
+        else:
+            parts.append('\nRespond with JSON: {"value": <extracted_value>}')
+            if not required:
+                parts.append('If no information found: {"value": null}')
+
+        return "\n".join(parts)
+
+    def _get_localized(self, obj: dict[str, str], language: str) -> str:
+        """Get localized string with fallback."""
+        if isinstance(obj, str):
+            return obj
+        return obj.get(language, obj.get("de", obj.get("en", "")))
+
+    def _build_structure_info(self, items: dict[str, Any], language: str) -> str:
+        """
+        Build structure information for complex object fields.
+
+        Generates prompt text describing the expected object structure
+        including nested fields from ALL variants with their descriptions and prompts.
+        """
+        parts = []
+
+        if language == "de":
+            parts.append(
+                "\n📋 OBJEKTSTRUKTUR - Gib ein Array von Objekten mit folgender Struktur zurück:"
+            )
+        else:
+            parts.append(
+                "\n📋 OBJECT STRUCTURE - Return an array of objects with the following structure:"
+            )
+
+        # Get discriminator field name (e.g., "@type")
+        discriminator = items.get("discriminator", "")
+
+        # Get variants (different object types)
+        variants = items.get("variants", [])
+
+        for vi, variant in enumerate(variants):
+            variant_type = variant.get("@type", "Object")
+            variant_label = self._get_localized(variant.get("label", {}), language)
+            variant_desc = self._get_localized(variant.get("description", {}), language)
+
+            # Skip empty variants (like PostalAddress with no fields)
+            variant_fields = variant.get("fields", [])
+            if not variant_fields and variant_type != "Default":
+                continue
+
+            if len(variants) > 1 and variant_type != "Default":
+                if language == "de":
+                    parts.append(
+                        f"\n--- Variante {vi + 1}: {variant_label} ({discriminator}: {variant_type}) ---"
+                    )
+                else:
+                    parts.append(
+                        f"\n--- Variant {vi + 1}: {variant_label} ({discriminator}: {variant_type}) ---"
+                    )
+                if variant_desc:
+                    parts.append(f"  {variant_desc}")
+            elif variant_type != "Default":
+                if language == "de":
+                    parts.append(
+                        f"\nTyp: {variant_label} ({discriminator}: {variant_type})"
+                    )
+                else:
+                    parts.append(
+                        f"\nType: {variant_label} ({discriminator}: {variant_type})"
+                    )
+
+            if language == "de":
+                parts.append("Felder:")
+            else:
+                parts.append("Fields:")
+
+            # Add fields from variant with descriptions and prompts
+            for field in variant_fields:
+                self._append_field_info(parts, field, language, indent=1)
+
+        # Build a dynamic example from first variant
+        if variants:
+            example = self._build_dynamic_example(variants, discriminator)
+            if example:
+                if language == "de":
+                    parts.append("\nBeispiel-Ausgabe:")
+                else:
+                    parts.append("\nExample output:")
+                parts.append(
+                    f"```json\n{json.dumps({'value': [example]}, indent=2, ensure_ascii=False)}\n```"
+                )
+
+        return "\n".join(parts)
+
+    def _append_field_info(
+        self,
+        parts: list[str],
+        field: dict[str, Any],
+        language: str,
+        indent: int = 1,
+    ) -> None:
+        """Append field info including description and prompt to parts list."""
+        prefix = "  " * indent
+        field_id = field.get("id", "")
+        field_label = self._get_localized(field.get("label", {}), language)
+        field_desc = self._get_localized(field.get("description", {}), language)
+        field_prompt = self._get_localized(field.get("prompt", {}), language)
+        field_system = field.get("system", {})
+        field_datatype = field_system.get("datatype", "string")
+
+        # Check for nested fields (e.g., address with streetAddress, postalCode)
+        nested_fields = field.get("fields", [])
+        if nested_fields:
+            desc_suffix = f" — {field_desc}" if field_desc else ""
+            parts.append(f"{prefix}- {field_id}: ({field_label}, Objekt){desc_suffix}")
+            if field_prompt:
+                parts.append(f"{prefix}  💡 {field_prompt}")
+            for nested in nested_fields:
+                self._append_field_info(parts, nested, language, indent=indent + 1)
+        else:
+            desc_suffix = f" — {field_desc}" if field_desc else ""
+            parts.append(
+                f"{prefix}- {field_id}: {field_label} ({field_datatype}){desc_suffix}"
+            )
+            if field_prompt:
+                parts.append(f"{prefix}  💡 {field_prompt}")
+
+    def _build_dynamic_example(
+        self,
+        variants: list[dict[str, Any]],
+        discriminator: str,
+    ) -> Optional[dict[str, Any]]:
+        """Build a dynamic example object from the first non-empty variant."""
+        for variant in variants:
+            variant_type = variant.get("@type", "")
+            variant_fields = variant.get("fields", [])
+            if not variant_fields:
+                continue
+
+            example = {}
+            if variant_type and variant_type != "Default" and discriminator:
+                example[discriminator] = variant_type
+
+            for field in variant_fields:
+                field_id = field.get("id", "")
+                nested = field.get("fields", [])
+                if nested:
+                    sub_example = {}
+                    for nf in nested:
+                        sub_example[nf.get("id", "")] = "..."
+                    example[field_id] = sub_example
+                else:
+                    example[field_id] = "..."
+
+            return example
+
+        return None
+
+    def _parse_json_response(self, content: str) -> Optional[dict[str, Any]]:
+        """Parse JSON from LLM response, handling various formats."""
+        try:
+            json_str = content.strip()
+
+            # Remove markdown code blocks if present
+            code_block_match = re.search(r"```json\s*([\s\S]*?)\s*```", json_str)
+            if code_block_match:
+                json_str = code_block_match.group(1).strip()
+
+            # Try to parse directly. A bare value ("Titel", ["a", "b"]) is the
+            # answer itself — callers read result["value"], so wrap it.
+            try:
+                parsed = json.loads(json_str)
+                return parsed if isinstance(parsed, dict) else {"value": parsed}
+            except json.JSONDecodeError:
+                pass
+
+            # Try to extract JSON patterns
+            array_match = re.search(r"\[[\s\S]*\]", json_str)
+            object_match = re.search(r"\{[\s\S]*\}", json_str)
+
+            if object_match:
+                return json.loads(object_match.group(0))
+            if array_match:
+                return {"value": json.loads(array_match.group(0))}
+
+            # Try to extract string value
+            string_match = re.search(r'"([^"]+)"', json_str)
+            if string_match:
+                return {"value": string_match.group(1)}
+
+            # Check for null
+            if json_str.lower() == "null":
+                return {"value": None}
+
+            # Check for number
+            try:
+                return {"value": float(json_str) if "." in json_str else int(json_str)}
+            except ValueError:
+                pass
+
+            return None
+
+        except Exception as e:
+            logger.error(f"❌ JSON parse error: {e}")
+            return None
+
+    def _normalize_value(self, value: Any, field: dict[str, Any]) -> Any:
+        """
+        Normalize extracted value based on field schema.
+        Handles: booleans, numbers, dates, datetimes, times, URLs,
+        geo coordinates, vocabulary matching.
+        """
+        if value is None:
+            return None
+
+        system = field.get("system", {})
+        datatype = system.get("datatype", "string")
+        vocabulary = system.get("vocabulary", {})
+        field_id = field.get("id", "")
+
+        # Handle arrays
+        if isinstance(value, list):
+            return [
+                self._normalize_single_value(v, datatype, vocabulary, field_id)
+                for v in value
+            ]
+
+        return self._normalize_single_value(value, datatype, vocabulary, field_id)
+
+    def _normalize_single_value(
+        self, value: Any, datatype: str, vocabulary: dict, field_id: str = ""
+    ) -> Any:
+        """Normalize a single value."""
+        if value is None:
+            return None
+
+        # Boolean normalization
+        if datatype == "boolean":
+            return self._normalize_boolean(value)
+
+        # Number normalization
+        if datatype in ("number", "integer"):
+            return self._normalize_number(value, datatype)
+
+        # Date normalization
+        if datatype == "date":
+            return self._normalize_date(value)
+
+        # Datetime normalization
+        if datatype == "datetime":
+            return self._normalize_datetime(value)
+
+        # Time normalization
+        if datatype == "time":
+            return self._normalize_time(value)
+
+        # URL normalization
+        if datatype in ("uri", "url"):
+            return self._normalize_url(value)
+
+        # Geo coordinate validation
+        if "latitude" in field_id.lower() or "longitude" in field_id.lower():
+            return self._normalize_geo_coordinate(value, field_id)
+
+        # Vocabulary validation
+        if vocabulary and vocabulary.get("concepts"):
+            return self._validate_vocabulary(value, vocabulary)
+
+        return value
+
+    def _normalize_boolean(self, value: Any) -> Optional[bool]:
+        """Normalize boolean values."""
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            val = value.lower().strip()
+            if val in ("ja", "yes", "wahr", "true", "1"):
+                return True
+            if val in ("nein", "no", "falsch", "false", "0"):
+                return False
+        if isinstance(value, (int, float)):
+            return value != 0
+        return None
+
+    def _normalize_number(self, value: Any, datatype: str) -> Optional[float]:
+        """Normalize number values including complex German number words."""
+        if isinstance(value, (int, float)):
+            return int(value) if datatype == "integer" else value
+
+        if isinstance(value, str):
+            val = value.lower().strip()
+
+            # Try to parse complex German number words
+            parsed = self._parse_german_number(val)
+            if parsed is not None:
+                return int(parsed) if datatype == "integer" else parsed
+
+            # Try direct numeric parsing
+            try:
+                num = float(val.replace(",", ".").replace(" ", ""))
+                return int(num) if datatype == "integer" else num
+            except ValueError:
+                pass
+
+        return None
+
+    def _parse_german_number(self, text: str) -> Optional[int]:
+        """Parse complex German number words like 'dreihundertvierundsiebzig'."""
+        # Basic number words
+        ones = {
+            "null": 0,
+            "eins": 1,
+            "ein": 1,
+            "zwei": 2,
+            "drei": 3,
+            "vier": 4,
+            "fünf": 5,
+            "sechs": 6,
+            "sieben": 7,
+            "acht": 8,
+            "neun": 9,
+        }
+        teens = {
+            "zehn": 10,
+            "elf": 11,
+            "zwölf": 12,
+            "dreizehn": 13,
+            "vierzehn": 14,
+            "fünfzehn": 15,
+            "sechzehn": 16,
+            "siebzehn": 17,
+            "achtzehn": 18,
+            "neunzehn": 19,
+        }
+        tens = {
+            "zwanzig": 20,
+            "dreißig": 30,
+            "dreissig": 30,
+            "vierzig": 40,
+            "fünfzig": 50,
+            "sechzig": 60,
+            "siebzig": 70,
+            "achtzig": 80,
+            "neunzig": 90,
+        }
+
+        text = text.strip().lower()
+
+        # Direct match for simple numbers
+        if text in ones:
+            return ones[text]
+        if text in teens:
+            return teens[text]
+        if text in tens:
+            return tens[text]
+        if text == "hundert":
+            return 100
+        if text == "tausend":
+            return 1000
+
+        result = 0
+        remaining = text
+
+        # Handle thousands (e.g., "zweitausend", "eintausend")
+        if "tausend" in remaining:
+            parts = remaining.split("tausend", 1)
+            prefix = parts[0].strip()
+            if prefix == "" or prefix == "ein":
+                result += 1000
+            elif prefix in ones:
+                result += ones[prefix] * 1000
+            elif prefix in teens:
+                result += teens[prefix] * 1000
+            elif prefix in tens:
+                result += tens[prefix] * 1000
+            else:
+                # Try compound (e.g., "einundzwanzigtausend")
+                compound = self._parse_compound_under_100(prefix)
+                if compound is not None:
+                    result += compound * 1000
+            remaining = parts[1].strip() if len(parts) > 1 else ""
+
+        # Handle hundreds (e.g., "dreihundert")
+        if "hundert" in remaining:
+            parts = remaining.split("hundert", 1)
+            prefix = parts[0].strip()
+            if prefix == "" or prefix == "ein":
+                result += 100
+            elif prefix in ones:
+                result += ones[prefix] * 100
+            remaining = parts[1].strip() if len(parts) > 1 else ""
+
+        # Handle remaining (under 100)
+        if remaining:
+            under_100 = self._parse_compound_under_100(remaining)
+            if under_100 is not None:
+                result += under_100
+
+        return result if result > 0 or text == "null" else None
+
+    def _parse_compound_under_100(self, text: str) -> Optional[int]:
+        """Parse compound numbers under 100 like 'vierundsiebzig'."""
+        ones = {
+            "ein": 1,
+            "eins": 1,
+            "zwei": 2,
+            "drei": 3,
+            "vier": 4,
+            "fünf": 5,
+            "sechs": 6,
+            "sieben": 7,
+            "acht": 8,
+            "neun": 9,
+        }
+        teens = {
+            "zehn": 10,
+            "elf": 11,
+            "zwölf": 12,
+            "dreizehn": 13,
+            "vierzehn": 14,
+            "fünfzehn": 15,
+            "sechzehn": 16,
+            "siebzehn": 17,
+            "achtzehn": 18,
+            "neunzehn": 19,
+        }
+        tens = {
+            "zwanzig": 20,
+            "dreißig": 30,
+            "dreissig": 30,
+            "vierzig": 40,
+            "fünfzig": 50,
+            "sechzig": 60,
+            "siebzig": 70,
+            "achtzig": 80,
+            "neunzig": 90,
+        }
+
+        text = text.strip()
+
+        # Direct matches
+        if text in ones:
+            return ones[text]
+        if text in teens:
+            return teens[text]
+        if text in tens:
+            return tens[text]
+
+        # Compound format: "einundXX" or "XundXX"
+        if "und" in text:
+            parts = text.split("und", 1)
+            ones_part = parts[0].strip()
+            tens_part = parts[1].strip()
+
+            if ones_part in ones and tens_part in tens:
+                return ones[ones_part] + tens[tens_part]
+
+        return None
+
+    def _normalize_date(self, value: Any) -> Optional[str]:
+        """Normalize date to ISO format (YYYY-MM-DD) with extended German support."""
+        if not isinstance(value, str):
+            return None
+
+        val = value.strip()
+
+        # Already ISO format (date only)
+        if re.match(r"^\d{4}-\d{2}-\d{2}$", val):
+            return val
+
+        # ISO datetime - extract date part
+        match = re.match(r"^(\d{4}-\d{2}-\d{2})T", val)
+        if match:
+            return match.group(1)
+
+        # DD.MM.YYYY or D.M.YYYY (German)
+        match = re.match(r"^(\d{1,2})\.(\d{1,2})\.(\d{4})$", val)
+        if match:
+            return self._validate_and_format_date(
+                int(match.group(1)), int(match.group(2)), int(match.group(3))
+            )
+
+        # DD.MM.YY (2-digit year)
+        match = re.match(r"^(\d{1,2})\.(\d{1,2})\.(\d{2})$", val)
+        if match:
+            year = int(match.group(3))
+            year = 2000 + year if year < 50 else 1900 + year
+            return self._validate_and_format_date(
+                int(match.group(1)), int(match.group(2)), year
+            )
+
+        # DD/MM/YYYY
+        match = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", val)
+        if match:
+            return self._validate_and_format_date(
+                int(match.group(1)), int(match.group(2)), int(match.group(3))
+            )
+
+        # DD-MM-YYYY
+        match = re.match(r"^(\d{1,2})-(\d{1,2})-(\d{4})$", val)
+        if match:
+            return self._validate_and_format_date(
+                int(match.group(1)), int(match.group(2)), int(match.group(3))
+            )
+
+        # German month names: "15. September 2026" or "15 September 2026"
+        german_months = {
+            "januar": 1,
+            "jan": 1,
+            "februar": 2,
+            "feb": 2,
+            "märz": 3,
+            "mär": 3,
+            "mar": 3,
+            "april": 4,
+            "apr": 4,
+            "mai": 5,
+            "juni": 6,
+            "jun": 6,
+            "juli": 7,
+            "jul": 7,
+            "august": 8,
+            "aug": 8,
+            "september": 9,
+            "sep": 9,
+            "sept": 9,
+            "oktober": 10,
+            "okt": 10,
+            "november": 11,
+            "nov": 11,
+            "dezember": 12,
+            "dez": 12,
+        }
+
+        # Pattern: "15. September 2026" or "15 Sep 2026"
+        match = re.match(r"^(\d{1,2})\.?\s*([a-zäöü]+)\s+(\d{4})$", val, re.IGNORECASE)
+        if match:
+            day = int(match.group(1))
+            month_name = match.group(2).lower()
+            year = int(match.group(3))
+            if month_name in german_months:
+                return self._validate_and_format_date(
+                    day, german_months[month_name], year
+                )
+
+        # English pattern: "September 15, 2026"
+        match = re.match(r"^([a-z]+)\s+(\d{1,2}),?\s*(\d{4})$", val, re.IGNORECASE)
+        if match:
+            month_name = match.group(1).lower()
+            day = int(match.group(2))
+            year = int(match.group(3))
+            if month_name in german_months:
+                return self._validate_and_format_date(
+                    day, german_months[month_name], year
+                )
+
+        return val  # Return as-is if parsing fails
+
+    def _validate_and_format_date(
+        self, day: int, month: int, year: int
+    ) -> Optional[str]:
+        """Validate date components and format as ISO."""
+        if not (1 <= month <= 12 and 1 <= day <= 31 and 1900 <= year <= 2100):
+            return None
+
+        # Additional validation - check actual day count for month
+        days_in_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+        # Leap year
+        if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0):
+            days_in_month[1] = 29
+
+        if day > days_in_month[month - 1]:
+            return None
+
+        return f"{year}-{month:02d}-{day:02d}"
+
+    def _normalize_datetime(self, value: Any) -> Optional[str]:
+        """Normalize datetime to ISO 8601 format (YYYY-MM-DDTHH:MM:SS)."""
+        if not isinstance(value, str):
+            return None
+
+        val = value.strip()
+
+        # Already ISO datetime format
+        if re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?", val):
+            # Ensure seconds are present
+            if re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$", val):
+                return val + ":00"
+            return val
+
+        # Date only - add midnight
+        if re.match(r"^\d{4}-\d{2}-\d{2}$", val):
+            return val + "T00:00:00"
+
+        # German format: "15.03.2025 14:30" or "15.03.2025 14:30:00"
+        match = re.match(
+            r"^(\d{1,2})\.(\d{1,2})\.(\d{4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?$", val
+        )
+        if match:
+            day, month, year = (
+                int(match.group(1)),
+                int(match.group(2)),
+                int(match.group(3)),
+            )
+            hour, minute = int(match.group(4)), int(match.group(5))
+            second = int(match.group(6)) if match.group(6) else 0
+
+            if (
+                1 <= month <= 12
+                and 1 <= day <= 31
+                and 0 <= hour <= 23
+                and 0 <= minute <= 59
+            ):
+                return (
+                    f"{year}-{month:02d}-{day:02d}T{hour:02d}:{minute:02d}:{second:02d}"
+                )
+
+        return val
+
+    def _normalize_time(self, value: Any) -> Optional[str]:
+        """Normalize time to HH:MM:SS format."""
+        if not isinstance(value, str):
+            return None
+
+        val = value.strip()
+
+        # Already correct format HH:MM:SS
+        if re.match(r"^\d{2}:\d{2}:\d{2}$", val):
+            return val
+
+        # HH:MM format - add seconds
+        match = re.match(r"^(\d{1,2}):(\d{2})$", val)
+        if match:
+            hour, minute = int(match.group(1)), int(match.group(2))
+            if 0 <= hour <= 23 and 0 <= minute <= 59:
+                return f"{hour:02d}:{minute:02d}:00"
+
+        # H:MM format
+        match = re.match(r"^(\d{1}):(\d{2})$", val)
+        if match:
+            hour, minute = int(match.group(1)), int(match.group(2))
+            if 0 <= hour <= 9 and 0 <= minute <= 59:
+                return f"0{hour}:{minute:02d}:00"
+
+        # German: "14 Uhr 30" or "14:30 Uhr"
+        match = re.match(r"^(\d{1,2})\s*[Uu]hr\s*(\d{2})?$", val)
+        if match:
+            hour = int(match.group(1))
+            minute = int(match.group(2)) if match.group(2) else 0
+            if 0 <= hour <= 23 and 0 <= minute <= 59:
+                return f"{hour:02d}:{minute:02d}:00"
+
+        return val
+
+    def _normalize_geo_coordinate(self, value: Any, field_id: str) -> Optional[float]:
+        """Normalize and validate geo coordinates (latitude/longitude)."""
+        # Already a number
+        if isinstance(value, (int, float)):
+            return self._validate_geo_range(float(value), field_id)
+
+        if isinstance(value, str):
+            val = value.strip()
+
+            # Handle German decimal separator
+            val = val.replace(",", ".")
+
+            # Remove degree symbols
+            val = re.sub(r"[°º]", "", val)
+
+            try:
+                num = float(val)
+                return self._validate_geo_range(num, field_id)
+            except ValueError:
+                pass
+
+        return None
+
+    def _validate_geo_range(self, value: float, field_id: str) -> Optional[float]:
+        """Validate geo coordinate range and round to 7 decimal places."""
+        is_latitude = "latitude" in field_id.lower() or "lat" in field_id.lower()
+        is_longitude = (
+            "longitude" in field_id.lower()
+            or "lon" in field_id.lower()
+            or "lng" in field_id.lower()
+        )
+
+        if is_latitude:
+            if value < -90 or value > 90:
+                return None
+        elif is_longitude:
+            if value < -180 or value > 180:
+                return None
+
+        # Round to 7 decimal places (~1cm precision)
+        return round(value, 7)
+
+    def _normalize_url(self, value: Any) -> Optional[str]:
+        """Normalize URL, adding protocol if missing."""
+        if not isinstance(value, str):
+            return None
+
+        val = value.strip()
+
+        # Already has protocol
+        if re.match(r"^https?://", val, re.IGNORECASE):
+            return val
+
+        # Add https:// if looks like URL
+        if re.match(r"^[a-zA-Z0-9][a-zA-Z0-9-]*\.[a-zA-Z]{2,}", val):
+            return f"https://{val}"
+
+        return val
+
+    def _validate_vocabulary(self, value: Any, vocabulary: dict) -> Any:
+        """Validate value against vocabulary, return URI or original value."""
+        concepts = vocabulary.get("concepts", [])
+        vocab_type = vocabulary.get("type", "open")
+        is_closed = vocab_type in ("closed", "skos")
+
+        if not concepts:
+            return value
+
+        value_lower = str(value).lower().strip()
+
+        # Check if already a valid URI or value.
+        # Numeric scales ('0'…'5') and the 'true'/'false' flags come back from the
+        # LLM as JSON numbers and booleans just as often as strings, so compare on
+        # the lowercased string form — str(True) is 'True', not 'true' — and
+        # return the value as the vocabulary spells it.
+        uri_match = next((c for c in concepts if c.get("uri") == value), None)
+        if uri_match:
+            return value
+        value_match = next(
+            (
+                c
+                for c in concepts
+                if c.get("value") is not None and str(c["value"]).lower() == value_lower
+            ),
+            None,
+        )
+        if value_match:
+            return value_match["value"]
+
+        # Find by label (exact match)
+        for concept in concepts:
+            label = self._get_localized(concept.get("label", {}), "de")
+            if label.lower() == value_lower:
+                return concept.get("uri", concept.get("value", label))
+
+            # Check alt labels
+            alt_labels = concept.get("altLabels", [])
+            for alt in alt_labels:
+                if alt.lower() == value_lower:
+                    return concept.get("uri", concept.get("value", label))
+
+        # For closed vocabulary, try fuzzy matching
+        if is_closed:
+            best_match = self._fuzzy_match_vocabulary(value_lower, concepts)
+            if best_match:
+                return best_match
+            return None  # Invalid value for closed vocabulary
+
+        return value  # Open vocabulary: keep original
+
+    def _fuzzy_match_vocabulary(self, value: str, concepts: list) -> Optional[str]:
+        """Fuzzy match value against vocabulary concepts."""
+        best_match = None
+        best_distance = float("inf")
+
+        for concept in concepts:
+            label = self._get_localized(concept.get("label", {}), "de").lower()
+            distance = self._levenshtein_distance(value, label)
+
+            if distance < best_distance:
+                best_distance = distance
+                best_match = concept
+
+        # Accept if distance is small (max 30% of string length)
+        max_distance = min(3, max(1, int(len(value) * 0.3)))
+        if best_match and best_distance <= max_distance:
+            return best_match.get(
+                "uri", self._get_localized(best_match.get("label", {}), "de")
+            )
+
+        return None
+
+    def _levenshtein_distance(self, a: str, b: str) -> int:
+        """Calculate Levenshtein distance between two strings."""
+        return levenshtein_distance(a, b)
+
+    async def detect_content_type(
+        self,
+        text: str,
+        content_types: list[dict[str, Any]],
+        language: str = "de",
+        prompt_hint: str = None,
+    ) -> ContentTypeDetection:
+        """
+        Ask the LLM which of the offered content types the text is.
+
+        Never invents a result: an unusable answer comes back with schema_file
+        None and the reason, so the caller can fall back openly.
+
+        Raises:
+            LLMError: a fatal call failure (refused key, quota, no gateway).
+        """
+        if not content_types:
+            return ContentTypeDetection(None, "keine Inhaltsarten zur Auswahl")
+        allowed = {
+            ct.get("schema_file") for ct in content_types if ct.get("schema_file")
+        }
+
+        # Truncate text for content type detection — only first ~5000 chars needed
+        detection_text = text[:5000] if len(text) > 5000 else text
+
+        # Build options list (Label → schema_file)
+        options = []
+        for ct in content_types:
+            label = self._get_localized(ct.get("label", {}), language)
+            schema_file = ct.get("schema_file", "")
+            options.append(f"- {label} → {schema_file}")
+
+        options_block = chr(10).join(options)
+
+        # Include classification hints from schema prompt if available
+        hint_block = ""
+        if prompt_hint:
+            hint_block = f"\n{prompt_hint}\n"
+
+        if language == "de":
+            prompt = f"""Analysiere folgenden Text und bestimme den passenden Inhaltstyp.
+
+WICHTIG: Bewerte die DARGESTELLTE RESSOURCE auf der Seite, NICHT den Betreiber der Website.
+Beispiel: Eine Veranstaltungsseite auf weimar.de ist eine Veranstaltung, NICHT eine Organisation.
+Frage dich: Was wird dem Besucher auf dieser konkreten Seite präsentiert?
+{hint_block}
+Erlaubte Werte (wähle GENAU EINEN der folgenden schema_file-Werte):
+{options_block}
+
+--- TEXT ---
+{detection_text}
+--- ENDE ---
+
+Antworte mit JSON: {{"content_type": "<schema_file>"}}"""
+        else:
+            prompt = f"""Analyze the following text and determine the appropriate content type.
+
+IMPORTANT: Evaluate the RESOURCE PRESENTED on the page, NOT the website operator.
+Example: An event page on a city website is an Event, NOT an Organization.
+Ask yourself: What is being presented to the visitor on this specific page?
+{hint_block}
+Allowed values (choose EXACTLY ONE of the following schema_file values):
+{options_block}
+
+--- TEXT ---
+{detection_text}
+--- END ---
+
+Respond with JSON: {{"content_type": "<schema_file>"}}"""
+
+        try:
+            response = await self._call_llm(
+                messages=[
+                    {"role": "system", "content": self._get_system_prompt(language)},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.1,
+                max_tokens=100,
+            )
+            content = (
+                response.get("choices", [{}])[0].get("message", {}).get("content", "")
+            )
+            result = self._parse_json_response(content)
+        except LLMError as e:
+            if e.fatal:
+                raise
+            return ContentTypeDetection(None, f"KI-Dienst nicht nutzbar: {e.message}")
+        except Exception as e:
+            return ContentTypeDetection(
+                None, f"Antwort nicht lesbar ({type(e).__name__})"
+            )
+
+        # The system prompt (shared with field extraction) asks for "value";
+        # some models follow it instead of the "content_type" asked for here.
+        answer = (
+            (result.get("content_type") or result.get("value"))
+            if isinstance(result, dict)
+            else None
+        )
+        # One type wrapped in a list still names one type; anything else that
+        # is not a plain string is no answer (and must not raise).
+        if isinstance(answer, list) and len(answer) == 1:
+            answer = answer[0]
+        if not isinstance(answer, str):
+            answer = None
+        if answer in allowed:
+            return ContentTypeDetection(answer)
+        if answer:
+            return ContentTypeDetection(None, f"unbekannte Inhaltsart '{answer}'")
+        return ContentTypeDetection(None, "keine auswertbare Antwort")
+
+
+# Singleton instance (default config)
+_llm_service: Optional[LLMService] = None
+
+
+def get_llm_service(
+    llm_provider: Optional[str] = None, llm_model: Optional[str] = None
+) -> LLMService:
+    """
+    Get LLM service instance.
+
+    If provider or model overrides are specified, creates a new instance.
+    Otherwise returns the cached default instance.
+    """
+    global _llm_service
+
+    # If overrides specified, create new instance with those settings
+    if llm_provider is not None or llm_model is not None:
+        return LLMService(llm_provider=llm_provider, llm_model=llm_model)
+
+    # Return cached default instance
+    if _llm_service is None:
+        _llm_service = LLMService()
+    return _llm_service

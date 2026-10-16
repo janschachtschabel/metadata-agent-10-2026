@@ -1,0 +1,11 @@
+# Built artifacts must reach the browser byte for byte.
+#
+# With core.autocrlf=true and no rule here, git rewrote the line endings of the
+# bundles on every checkout while leaving their .gz twins untouched — the two
+# drifted apart (measured 2026-08-18: main.js 1.452.484 bytes against a .gz that
+# unpacks to 1.452.517). FastAPI serves either one, so the delivered widget
+# depended on which file the client happened to get.
+src/static/widget/dist/** -text
+# Vendored Swagger UI: byte-identical to the npm package (checksum in its README).
+src/static/docs/*.js -text
+src/static/docs/*.css -text

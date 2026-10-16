@@ -1,0 +1,157 @@
+stages:
+  - .pre
+  - build
+  - test
+  - deploy
+
+default:
+  image: python:3.13-slim
+  #  see: https://hub.docker.com/_/python
+
+variables:
+  # Same uv as the Dockerfile, so CI and image resolve alike.
+  UV_VERSION: 0.7.13
+  PYTHON_VERSION: 3.13
+  BASE_LAYER: bookworm-slim
+  # GitLab CI creates a separate mountpoint for the build directory,
+  # so we need to copy instead of using hard links.
+  UV_LINK_MODE: copy
+
+# see: https://docs.astral.sh/uv/guides/integration/gitlab/#using-uv-in-gitlab-cicd
+
+uv-install:
+  image: ghcr.io/astral-sh/uv:$UV_VERSION-python$PYTHON_VERSION-$BASE_LAYER
+  stage: .pre
+  variables:
+    UV_CACHE_DIR: .uv-cache
+  cache:
+    - key:
+        files:
+          - uv.lock
+      paths:
+        - $UV_CACHE_DIR
+  script:
+    - uv venv  # create .venv
+    - uv sync --locked  # install exactly uv.lock; fail if it is out of date
+    - uv cache prune --ci
+
+.base_ruff:
+  stage: build
+  interruptible: true
+  image:
+    # Same ruff as uv.lock, so `ruff format --diff` agrees with local runs.
+    name: ghcr.io/astral-sh/ruff:0.15.5-alpine
+  before_script:
+    - cd $CI_PROJECT_DIR
+    - ruff --version
+
+Ruff Check:
+  extends: .base_ruff
+  script:
+    - ruff check --output-format=gitlab > code-quality-report.json
+  artifacts:
+    reports:
+      codequality: $CI_PROJECT_DIR/code-quality-report.json
+
+Ruff Format:
+  extends: .base_ruff
+  script:
+    - ruff format --diff
+
+# Runs the whole pytest suite. Until 2026-08-18 this job printed a reminder to
+# implement tests and went green — 1176 tests existed and none of them ran.
+#
+# Two of them are the reason this job has to stay honest:
+#   tests/test_schema_declarations.py  — every list in every schema must say
+#     what it holds, and no field path may be an object in one schema and a
+#     string in another. Elasticsearch maps ccm:oeh_extendedData dynamically, so
+#     a single contradiction there locks correct records out of the index and
+#     stalls the collection sync, which is what happened in August 2026.
+#   tests/test_object_shape_is_enforced.py — /validate and the repository write
+#     path must both refuse a bare string in an object-typed field.
+#
+# Tests that reach an external service carry the `slow` marker and skip
+# themselves when it is unreachable, so this stays runnable on a sealed runner.
+run tests:
+  stage: test
+  interruptible: true
+  image: ghcr.io/astral-sh/uv:$UV_VERSION-python$PYTHON_VERSION-$BASE_LAYER
+  variables:
+    UV_CACHE_DIR: .uv-cache
+    PLAYWRIGHT_BROWSERS_PATH: $CI_PROJECT_DIR/.playwright-browsers
+  cache:
+    - key:
+        files:
+          - uv.lock
+      paths:
+        - $UV_CACHE_DIR
+    # Own key: uv-install uploads the cache above without this path, which
+    # would drop the browsers again. uv.lock pins the Playwright version.
+    - key:
+        files:
+          - uv.lock
+        prefix: playwright
+      paths:
+        - .playwright-browsers
+  script:
+    - uv sync --locked
+    # The browser tests (shipped widget bundle, screenshot URL policy) skip
+    # themselves without Chromium — install it so they actually run here.
+    # Chromium comes from the cache after the first run; --with-deps still
+    # installs the system libraries each time.
+    - uv run playwright install --with-deps chromium
+    # -rs lists every skipped test with its reason in the job log.
+    - uv run pytest -q -rs
+  after_script:
+    - uv cache prune --ci
+
+build and push docker image from main and develop branches:
+  stage: deploy
+  image: $DIND_IMAGE
+  #  see: https://hub.docker.com/_/docker
+  variables:
+    DOCKER_HOST: "$DIND_HOST"
+    DOCKER_DRIVER: "$DIND_DRIVER"
+    DOCKER_TLS_CERTDIR: "$DIND_TLS_CERTDIR"
+  services:
+    - name: "$DIND_IMAGE"
+      alias: docker
+      entrypoint: [ "env", "-u", "DOCKER_HOST" ]
+      command: [ "dockerd-entrypoint.sh" ]
+  before_script:
+    - docker --version
+  script:
+    # login to (self-hosted) docker registry
+    - echo "$DOCKER_PASSWORD" | docker login $DOCKER_REGISTRY -u $DOCKER_USERNAME --password-stdin
+    # build docker image
+    - docker buildx build --tag $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:$CI_COMMIT_REF_SLUG .
+    # push docker image to (self-hosted) docker registry
+    - docker image push $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:$CI_COMMIT_REF_SLUG
+  rules:
+    - if: "$CI_COMMIT_BRANCH == 'main'"
+    - if: "$CI_COMMIT_BRANCH == 'develop'"
+
+build and push docker image on tag creation:
+  stage: deploy
+  image: $DIND_IMAGE
+  #  see: https://hub.docker.com/_/docker
+  variables:
+    DOCKER_HOST: "$DIND_HOST"
+    DOCKER_DRIVER: "$DIND_DRIVER"
+    DOCKER_TLS_CERTDIR: "$DIND_TLS_CERTDIR"
+  services:
+    - name: "$DIND_IMAGE"
+      alias: docker
+      entrypoint: [ "env", "-u", "DOCKER_HOST" ]
+      command: [ "dockerd-entrypoint.sh" ]
+  before_script:
+    - docker --version
+  script:
+    # login to (self-hosted) docker registry
+    - echo "$DOCKER_PASSWORD" | docker login $DOCKER_REGISTRY -u $DOCKER_USERNAME --password-stdin
+    # build docker image
+    - docker buildx build --tag $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:$CI_COMMIT_REF_NAME .
+    # push docker image to (self-hosted) docker registry
+    - docker image push $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:$CI_COMMIT_REF_NAME
+  rules:
+    - if: "$CI_COMMIT_TAG"

@@ -1,0 +1,62 @@
+{
+  "contextName": "mds_oeh",
+  "name": "MDS OEH",
+  "basedOn": "default@2.0.0",
+  "versions": {
+    "1.8.1": {
+      "releaseDate": "2026-03-05",
+      "isDefault": false,
+      "schemas": [
+        "core.json",
+        "event.json",
+        "education_offer.json",
+        "learning_material.json",
+        "person.json",
+        "organization.json",
+        "tool_service.json",
+        "occupation.json",
+        "didactic_planning_tools.json",
+        "source.json",
+        "prompt.json"
+      ],
+      "deactivated": [
+        "education_program.json",
+        "course.json",
+        "curriculum.json"
+      ]
+    },
+    "1.8.0": {
+      "releaseDate": "2025-11-28",
+      "isDefault": false,
+      "schemas": [
+        "core.json",
+        "event.json",
+        "education_offer.json",
+        "person.json",
+        "organization.json"
+      ]
+    },
+    "2.0.0": {
+      "releaseDate": "2026-03-20",
+      "isDefault": true,
+      "schemas": [
+        "core.json",
+        "event.json",
+        "education_offer.json",
+        "learning_material.json",
+        "person.json",
+        "organization.json",
+        "tool_service.json",
+        "occupation.json",
+        "didactic_planning_tools.json"
+      ],
+      "deactivated": [
+        "source.json",
+        "prompt.json",
+        "education_program.json",
+        "course.json",
+        "curriculum.json"
+      ]
+    }
+  }
+}

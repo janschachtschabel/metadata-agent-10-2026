@@ -1,0 +1,874 @@
+# Metadata Agent API — Installationsanleitung
+
+Vollständige Anleitung zur Installation, Konfiguration und zum Betrieb der Metadata Agent API — lokal, im Docker-Container und mit automatisiertem CI/CD über GitLab CI.
+
+---
+
+## Inhaltsverzeichnis
+
+- [1. Voraussetzungen](#1-voraussetzungen)
+- [2. Lokale Installation (ohne Docker)](#2-lokale-installation-ohne-docker)
+- [3. Docker-Container](#3-docker-container)
+- [4. GitLab CI — Automatischer Docker-Build](#4-gitlab-ci--automatischer-docker-build)
+- [5. Umgebungsvariablen — Vollständige Referenz](#5-umgebungsvariablen--vollständige-referenz)
+- [6. Deployment-Varianten](#6-deployment-varianten)
+- [7. Troubleshooting](#7-troubleshooting)
+
+---
+
+## 1. Voraussetzungen
+
+### Minimale Systemanforderungen
+
+| Komponente | Minimum | Empfohlen |
+|---|---|---|
+| CPU | 1 Core | 2+ Cores |
+| RAM | 512 MB | 1 GB+ (Playwright/Chromium benötigt ~300 MB) |
+| Disk | 500 MB | 1 GB (inkl. Chromium-Browser) |
+| OS | Linux (x64/ARM64), Windows 10+, macOS 12+ | Linux (Docker) |
+
+### Software-Voraussetzungen
+
+| Software | Version | Zweck |
+|---|---|---|
+| Python | 3.13+ | Runtime |
+| uv | 0.5+ | Paketmanager |
+| Docker | 24+ | Container-Betrieb (optional) |
+| Docker Compose | v2+ | Multi-Container (optional) |
+| Git | 2.x | Quellcode |
+
+### API-Keys (mindestens einer erforderlich)
+
+| Key | Quelle | Beschreibung |
+|---|---|---|
+| B-API Key | OpenEduHub / WLO-Team | Standard-Provider für LLM-Zugriff (OpenAI via B-API oder AcademicCloud) |
+| OpenAI API Key | https://platform.openai.com | Alternativer direkter OpenAI-Zugriff |
+
+---
+
+## 2. Lokale Installation (ohne Docker)
+
+### 2.1 Python-Umgebung einrichten
+
+```bash
+# Repository klonen
+git clone <repo-url>
+cd metadata-agent-api
+
+# Virtual Environment erstellen und Dependencies installieren
+uv sync
+```
+
+### 2.2 Dependencies installieren
+
+```bash
+uv sync
+```
+
+Enthaltene Pakete (pyproject.toml):
+
+| Paket | Version | Zweck |
+|---|---|---|
+| fastapi | ≥0.142.4 | Web-Framework |
+| uvicorn[standard] | ≥0.32.0 | ASGI-Server |
+| pydantic | ≥2.10.0 | Datenvalidierung |
+| pydantic-settings | ≥2.14.2 | Umgebungsvariablen |
+| httpx | ≥0.28.0 | HTTP-Client (async) |
+| python-multipart | ≥0.0.31 | File-Uploads |
+| aiofiles | ≥24.1.0 | Async File-I/O |
+| openai | ≥1.57.0 | OpenAI API Client |
+| tenacity | ≥9.0.0 | Retry-Logik |
+| python-dotenv | ≥1.2.2 | .env-Dateien |
+| playwright | ≥1.49.0 | Browser-Automatisierung für Screenshots |
+
+Dazu kommen Mindestversionen für Pakete, die nur indirekt installiert werden,
+wegen bekannter Sicherheitslücken in älteren Versionen: starlette ≥1.3.1,
+anyio ≥4.14.2, idna ≥3.15. uv liest sie aus `[tool.uv] constraint-dependencies`
+in `pyproject.toml`, pip aus `requirements.txt`. Installiert wird, was `uv.lock`
+festlegt — `uv sync --locked` prüft, dass Lock und `pyproject.toml` zusammenpassen.
+
+### 2.3 Playwright installieren
+
+Playwright wird für die datenschutzfreundliche Screenshot-Funktion (`screenshot_method=playwright`, ebenso der Legacy-Alias `pageshot`) benötigt. Die Screenshots werden lokal mit einem headless Chromium-Browser erstellt — keine Daten werden an externe Services gesendet.
+
+> **Hinweis:** Playwright ist nur für Screenshots nötig. Ohne Chromium gibt es keine Screenshots — einen externen Screenshot-Service nutzt der Agent nicht mehr; `pageshot` nimmt ebenfalls lokal auf.
+
+**Schritt 1: Python-Paket installieren** (bereits in pyproject.toml — wird via `uv sync` installiert)
+
+**Schritt 2: Chromium-Browser herunterladen**
+
+```bash
+# Nur Chromium installieren (empfohlen — spart ~500 MB gegenüber allen Browsern)
+playwright install chromium
+
+# Alternativ: Alle Browser (Chromium, Firefox, WebKit) — nicht nötig
+# playwright install
+```
+
+**Schritt 3: System-Dependencies installieren (Linux)**
+
+Auf Linux-Systemen benötigt Chromium zusätzliche Systembibliotheken:
+
+```bash
+# Automatisch alle benötigten Systembibliotheken installieren (Ubuntu/Debian)
+playwright install-deps chromium
+
+# Oder manuell (minimale Liste):
+sudo apt-get update && sudo apt-get install -y --no-install-recommends \
+    libnss3 libnspr4 libdbus-1-3 libatk1.0-0 libatk-bridge2.0-0 \
+    libcups2 libdrm2 libxkbcommon0 libatspi2.0-0 libxcomposite1 \
+    libxdamage1 libxfixes3 libxrandr2 libgbm1 libpango-1.0-0 \
+    libcairo2 libasound2 libx11-xcb1 fonts-liberation fonts-noto-color-emoji
+```
+
+> **Windows & macOS:** Keine zusätzlichen System-Dependencies nötig — `playwright install chromium` reicht.
+
+**Schritt 4: Installation prüfen**
+
+```bash
+# Prüfen ob Playwright korrekt installiert ist
+python -c "from playwright.async_api import async_playwright; print('Playwright OK')"
+
+# Chromium-Pfad anzeigen
+python -c "from playwright._impl._driver import compute_driver_executable; print(compute_driver_executable())"
+```
+
+**Playwright-Probleme beheben:**
+
+| Problem | Lösung |
+|---|---|
+| `playwright._impl._errors.Error: Executable doesn't exist` | `playwright install chromium` ausführen |
+| `Host system is missing dependencies to run browsers` | `playwright install-deps chromium` (Linux) |
+| Screenshot-Timeout | `METADATA_AGENT_SCREENSHOT_DELAY=5000` erhöhen |
+| Chromium startet nicht im Container | System-Dependencies prüfen (siehe Dockerfile) |
+
+### 2.4 Konfiguration (.env)
+
+```bash
+# Template kopieren
+cp .env.template .env
+```
+
+Minimale Konfiguration — nur B-API Key eintragen:
+
+```env
+# Pflicht: LLM-Zugriff
+B_API_KEY=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+METADATA_AGENT_LLM_PROVIDER=b-api-openai
+
+# Externe Dienste (Default: Staging — für Prod URLs anpassen)
+# METADATA_AGENT_B_API_BASE_URL=https://b-api.staging.openeduhub.net
+# METADATA_AGENT_TEXT_EXTRACTION_API_URL=https://text-extraction.staging.openeduhub.net
+
+# Optional: Repository-Upload
+# WLO_GUEST_USERNAME=upload-user
+# WLO_GUEST_PASSWORD=upload-password
+```
+
+Alle verfügbaren Variablen sind in [Abschnitt 5](#5-umgebungsvariablen--vollständige-referenz) dokumentiert.
+
+### 2.5 API starten
+
+```bash
+# Entwicklungsmodus (mit Auto-Reload)
+uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
+
+# Produktionsmodus (ein Worker je Container; skaliert wird über Replicas.
+# Mit METADATA_AGENT_INTERNAL_PORT ist nur ein Worker möglich, weil jeder
+# Worker den internen Port belegen würde; Metriken zählen je Prozess.)
+uvicorn src.main:app --host 0.0.0.0 --port 8000
+```
+
+### 2.6 Installation testen
+
+```bash
+# Health Check
+curl http://localhost:8000/health
+# → {"status": "healthy", "version": "2.1.0", "llm_provider": "b-api-openai", "b_api_auth_mode": "auto"}
+
+# Einfacher Test
+curl -X POST http://localhost:8000/generate \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Workshop KI in der Bildung am 15. März 2026 in Berlin"}'
+
+# Screenshot-Test (Playwright)
+curl -X POST http://localhost:8000/screenshot \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com", "method": "playwright"}'
+
+# API-Dokumentation
+# → http://localhost:8000/docs (Swagger UI, vom Agenten selbst ausgeliefert)
+```
+
+---
+
+## 3. Docker-Container
+
+### 3.1 Übersicht
+
+Das Docker-Image ist ein Multi-Stage Build auf Basis von `python:3.13-slim` und enthält:
+
+- Python 3.13 Runtime
+- Alle Python-Dependencies (FastAPI, OpenAI, Playwright, etc.)
+- Playwright + Chromium für datenschutzfreundliche Screenshots
+- System-Bibliotheken für headless Chromium
+- Non-Root User (`appuser`, UID 1000) für Sicherheit
+- Health Check über `/health`-Endpoint
+
+**Image-Größe:** ~800 MB (davon ~400 MB Chromium + System-Libs)
+
+### 3.2 Docker-Image bauen
+
+```bash
+cd metadata-agent-api
+
+# Standard-Build
+docker build -t metadata-agent-api .
+
+# Mit Build-Argumenten
+docker build -t metadata-agent-api:v2.0.0 .
+
+# Build-Cache nutzen (schneller bei Rebuilds)
+docker build --cache-from metadata-agent-api:latest -t metadata-agent-api .
+
+# Ohne Cache (sauberer Build)
+docker build --no-cache -t metadata-agent-api .
+
+# Build-Fortschritt anzeigen
+docker build --progress=plain -t metadata-agent-api .
+```
+
+### 3.3 Container starten
+
+```bash
+# Minimal (mit einzelnen Env-Vars)
+docker run -d \
+  --name metadata-agent-api \
+  -p 8000:8000 \
+  -e B_API_KEY=your-api-key \
+  metadata-agent-api
+
+# Mit .env-Datei (empfohlen)
+docker run -d \
+  --name metadata-agent-api \
+  -p 8000:8000 \
+  --env-file .env \
+  --restart unless-stopped \
+  metadata-agent-api
+
+# Mit allen Optionen
+docker run -d \
+  --name metadata-agent-api \
+  -p 8000:8000 \
+  --env-file .env \
+  --restart unless-stopped \
+  --memory 1g \
+  --cpus 2 \
+  --health-cmd "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\"" \
+  --health-interval 30s \
+  --health-timeout 10s \
+  --health-retries 3 \
+  metadata-agent-api
+```
+
+### 3.4 Docker Compose (empfohlen)
+
+Die mitgelieferte `docker-compose.yml` enthält die empfohlene Konfiguration:
+
+```bash
+# .env-Datei vorbereiten
+cp .env.template .env
+# B_API_KEY eintragen
+
+# Starten
+docker compose up -d
+
+# Logs anzeigen
+docker compose logs -f
+
+# Stoppen
+docker compose down
+
+# Neubauen und starten (nach Code-Änderungen)
+docker compose up -d --build
+
+# Nur neubauen ohne zu starten
+docker compose build
+```
+
+`docker-compose.yml`:
+
+```yaml
+services:
+  metadata-agent-api:
+    build: .
+    container_name: metadata-agent-api
+    ports:
+      - "8000:8000"
+    environment:
+      # LLM Provider
+      - METADATA_AGENT_LLM_PROVIDER=b-api-openai
+      - B_API_KEY=${B_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+
+      # Externe Dienste (Default: Staging — für Prod URLs anpassen)
+      - METADATA_AGENT_B_API_BASE_URL=${METADATA_AGENT_B_API_BASE_URL:-https://b-api.staging.openeduhub.net}
+      - METADATA_AGENT_TEXT_EXTRACTION_API_URL=${METADATA_AGENT_TEXT_EXTRACTION_API_URL:-https://text-extraction.staging.openeduhub.net}
+
+      # Repository Upload (optional)
+      - WLO_GUEST_USERNAME=${WLO_GUEST_USERNAME:-}
+      - WLO_GUEST_PASSWORD=${WLO_GUEST_PASSWORD:-}
+
+      # Worker Settings
+      - METADATA_AGENT_DEFAULT_MAX_WORKERS=20
+      - METADATA_AGENT_REQUEST_TIMEOUT=90
+
+      # App Settings
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+```
+
+### 3.5 Dockerfile-Aufbau im Detail
+
+Das Dockerfile nutzt einen Multi-Stage Build für optimale Image-Größe:
+
+```
+┌─────────────────────────────────────────────┐
+│ Stage 1: builder (python:3.13-slim)         │
+│                                             │
+│  uv sync --locked --no-install-project      │
+│    --no-dev                                 │
+│  → Installiert alle Python-Pakete in .venv  │
+│  → Wird am Ende verworfen (nur .venv        │
+│    wird kopiert)                            │
+└─────────────────────────────────────────────┘
+                    │
+                    ▼
+┌─────────────────────────────────────────────┐
+│ Stage 2: production (python:3.13-slim)      │
+│                                             │
+│  1. System-Dependencies (apt-get)           │
+│     → libnss3, libgbm1, fonts, etc.         │
+│     → Benötigt für headless Chromium        │
+│                                             │
+│  2. .venv (COPY --from=builder)             │
+│     → Fertige virtuelle Umgebung            │
+│                                             │
+│  3. Playwright Chromium (playwright install) │
+│     → Lädt Chromium-Browser herunter        │
+│                                             │
+│  4. App-Code (COPY src/ ./src/)             │
+│     → Inklusive static/widget/ falls        │
+│       vorhanden                             │
+│                                             │
+│  5. Non-Root User (appuser, UID 1000)       │
+│                                             │
+│  6. Healthcheck + CMD (uvicorn)             │
+└─────────────────────────────────────────────┘
+```
+
+**Warum Multi-Stage?**
+- Build-Tools (uv, gcc, etc.) landen nicht im finalen Image
+- Kleinere Angriffsfläche (kein Compiler im Produktionsimage)
+- Bessere Layer-Caching-Effizienz
+
+### 3.6 Playwright im Docker-Container
+
+Im Docker-Image wird Playwright vollständig vorinstalliert:
+
+- **Python-Paket** — via `pyproject.toml` / `uv sync` im Builder-Stage
+- **Chromium-Browser** — via `playwright install chromium` im Dockerfile
+- **System-Dependencies** — via `apt-get install` (17 Pakete)
+
+Wichtige System-Bibliotheken für Chromium:
+
+| Paket | Zweck |
+|---|---|
+| `libnss3`, `libnspr4` | Network Security Services |
+| `libdbus-1-3` | D-Bus Message Bus |
+| `libatk1.0-0`, `libatk-bridge2.0-0` | Accessibility Toolkit |
+| `libcups2` | CUPS Printing |
+| `libdrm2` | DRM Rendering |
+| `libxkbcommon0` | Keyboard |
+| `libatspi2.0-0` | Accessibility |
+| `libxcomposite1`, `libxdamage1`, `libxfixes3`, `libxrandr2` | X11 Extensions |
+| `libgbm1` | Generic Buffer Management |
+| `libpango-1.0-0`, `libcairo2` | Text/Grafik-Rendering |
+| `libasound2` | Audio (wird benötigt, aber nicht genutzt) |
+| `libx11-xcb1` | X11/XCB |
+| `fonts-liberation`, `fonts-noto-color-emoji` | Schriften |
+
+**Screenshot-Test im Container:**
+
+```bash
+# Testen ob Playwright im Container funktioniert
+docker exec metadata-agent-api python -c "
+from playwright.sync_api import sync_playwright
+with sync_playwright() as p:
+    browser = p.chromium.launch(headless=True)
+    page = browser.new_page()
+    page.goto('https://example.com')
+    print(f'Title: {page.title()}')
+    browser.close()
+    print('Playwright OK')
+"
+
+# Screenshot über API
+curl -X POST http://localhost:8000/screenshot \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com", "method": "playwright"}'
+```
+
+### 3.7 Container-Management
+
+```bash
+# Status prüfen
+docker ps
+docker inspect metadata-agent-api
+
+# Logs
+docker logs metadata-agent-api
+docker logs -f metadata-agent-api          # Live-Logs
+docker logs --tail 100 metadata-agent-api  # Letzte 100 Zeilen
+
+# Health Check manuell
+docker inspect --format='{{.State.Health.Status}}' metadata-agent-api
+
+# Container neustarten
+docker restart metadata-agent-api
+
+# Container stoppen und entfernen
+docker stop metadata-agent-api && docker rm metadata-agent-api
+
+# Shell im Container
+docker exec -it metadata-agent-api bash
+
+# Ressourcenverbrauch
+docker stats metadata-agent-api
+```
+
+### 3.8 Volumes und Persistenz
+
+Die API ist stateless — kein persistenter Speicher nötig. Optional können Konfigurationsdateien gemountet werden:
+
+```yaml
+# docker-compose.yml Ergänzung
+services:
+  metadata-agent-api:
+    # ...
+    volumes:
+      # Eigene .env-Datei (statt environment-Block)
+      - ./.env:/app/.env:ro
+
+      # Optional: Eigene Schemata einbinden
+      # - ./custom-schemata:/app/src/schemata/custom:ro
+```
+
+### 3.9 Multi-Container-Setup (mehrere LLM-Provider)
+
+Die `docker-compose.yml` enthält auskommentierte Beispiele für parallele Container mit unterschiedlichen LLM-Providern:
+
+```yaml
+services:
+  # Standard: B-API OpenAI (Port 8000)
+  metadata-agent-api:
+    build: .
+    ports: ["8000:8000"]
+    environment:
+      - METADATA_AGENT_LLM_PROVIDER=b-api-openai
+      - B_API_KEY=${B_API_KEY}
+
+  # Alternativ: B-API AcademicCloud / DeepSeek (Port 8001)
+  metadata-agent-api-academiccloud:
+    build: .
+    ports: ["8001:8000"]
+    environment:
+      - METADATA_AGENT_LLM_PROVIDER=b-api-academiccloud
+      - B_API_KEY=${B_API_KEY}
+
+  # Alternativ: Natives OpenAI (Port 8002)
+  metadata-agent-api-openai:
+    build: .
+    ports: ["8002:8000"]
+    environment:
+      - METADATA_AGENT_LLM_PROVIDER=openai
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - METADATA_AGENT_OPENAI_MODEL=gpt-4o-mini
+```
+
+### 3.10 Docker-Image optimieren
+
+`.dockerignore` erstellen:
+
+```
+.git
+.github
+.env
+.env.*
+*.md
+docs/
+tests/
+__pycache__
+*.pyc
+.pytest_cache
+venv/
+.venv/
+node_modules/
+```
+
+**Layer-Caching optimieren:**
+
+Die aktuelle Reihenfolge im Dockerfile ist bereits optimal:
+
+1. `pyproject.toml` + `uv.lock` → selten geändert → gecacht
+2. System-Dependencies → selten geändert → gecacht
+3. `playwright install chromium` → selten geändert → gecacht
+4. `COPY src/` → häufig geändert → schneller Rebuild
+
+### 3.11 Troubleshooting Docker
+
+| Problem | Ursache | Lösung |
+|---|---|---|
+| `playwright install chromium` schlägt fehl | Netzwerkproblem | `docker build --network host` |
+| Container startet, aber Health Check schlägt fehl | Port nicht exposed | `docker run -p 8000:8000` prüfen |
+| `permission denied` im Container | Root-User nötig | Im Dockerfile: Non-Root User prüfen |
+| Image zu groß (>2 GB) | Kein Multi-Stage Build | Dockerfile prüfen, `.dockerignore` anlegen |
+| Chromium-Crash im Container | Zu wenig Shared Memory | `docker run --shm-size=256m` |
+| `Error: Could not find expected browser` | Playwright nicht installiert | `playwright install chromium` im Dockerfile prüfen |
+| Container OOM (Out of Memory) | Chromium benötigt RAM | `--memory 1g` oder mehr |
+
+---
+
+## 4. GitLab CI — Automatischer Docker-Build
+
+### 4.1 Workflow-Übersicht
+
+Der Workflow `.gitlab-ci.yml` führt folgende Stages aus:
+
+| Stage | Jobs | Beschreibung |
+|---|---|---|
+| `.pre` | `uv-install` | Dependencies installieren, Cache befüllen |
+| `build` | `Ruff Check`, `Ruff Format` | Code-Qualitätsprüfung |
+| `test` | `run tests` | Tests ausführen |
+| `deploy` | Docker build & push | Image in interne Registry pushen |
+
+### 4.2 CI/CD-Variablen einrichten
+
+Navigiere zu **GitLab → Repository → Settings → CI/CD → Variables** und stelle sicher, dass folgende Variablen als Gruppen- oder Projekt-Variablen gesetzt sind:
+
+| Variable | Zweck |
+|---|---|
+| `DOCKER_REGISTRY` | URL der internen Docker-Registry |
+| `DOCKER_USERNAME` | Registry-Benutzername |
+| `DOCKER_PASSWORD` | Registry-Passwort |
+| `DIND_IMAGE` | Docker-in-Docker Image |
+| `DIND_HOST` | Docker-Host für DinD |
+| `DIND_DRIVER` | Docker Storage Driver |
+| `DIND_TLS_CERTDIR` | TLS-Zertifikat-Verzeichnis |
+
+### 4.3 Workflow-Trigger
+
+| Trigger | Tag | Beschreibung |
+|---|---|---|
+| Push auf `main` | Branch-Slug (`main`) | Automatisch bei jedem Merge/Push |
+| Push auf `develop` | Branch-Slug (`develop`) | Automatisch |
+| Git-Tag `v*` | Tag-Name (z.B. `v2.0.0`) | Für Releases |
+
+### 4.4 Release erstellen (neuen Tag pushen)
+
+```bash
+# Version taggen
+git tag v2.0.0
+git push origin v2.0.0
+
+# → GitLab CI baut und pusht:
+# $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v2.0.0
+```
+
+---
+
+## 5. Umgebungsvariablen — Vollständige Referenz
+
+Alle Variablen können in `.env`, als System-Umgebungsvariablen oder als Docker-Environment gesetzt werden. Prefix: `METADATA_AGENT_` (außer API-Keys).
+
+### API-Keys (ohne Prefix)
+
+| Variable | Erforderlich | Beschreibung |
+|---|---|---|
+| `B_API_KEY` | ✅¹ | B-API Key für OpenEduHub LLM-Zugriff |
+| `OPENAI_API_KEY` | ✅¹ | OpenAI API Key (nur für `provider=openai`) |
+| `WLO_GUEST_USERNAME` | für `/upload` | WLO Repository Upload-Benutzername |
+| `WLO_GUEST_PASSWORD` | für `/upload` | WLO Repository Upload-Passwort |
+
+> Das Ziel-Repository wird über `METADATA_AGENT_REPOSITORY_URL` gesetzt (unten
+> unter *Externe Dienste*) — es gibt keinen zweiten Schalter dafür.
+
+> ¹ Mindestens einer der LLM-Keys ist erforderlich.
+
+### LLM-Provider
+
+| Variable | Default | Beschreibung |
+|---|---|---|
+| `METADATA_AGENT_LLM_PROVIDER` | `b-api-openai` | `b-api-openai`, `b-api-academiccloud`, `openai` |
+| `METADATA_AGENT_LLM_TEMPERATURE` | `0.3` | Kreativität (0.0–1.0) |
+| `METADATA_AGENT_LLM_MAX_TOKENS` | `2000` | Max Tokens pro LLM-Aufruf |
+| `METADATA_AGENT_LLM_MAX_RETRIES` | `3` | Wiederholungsversuche bei Fehler |
+| `METADATA_AGENT_LLM_RETRY_DELAY` | `1.0` | Wartezeit zwischen Retries (Sek.) |
+
+### Externe Dienste (B-API, Text-Extraction, Repository)
+
+Die API nutzt mehrere externe Dienste, die je nach Umgebung (Staging / Prod) unterschiedliche URLs haben. Jede URL ist einzeln konfigurierbar. Defaults sind Staging-URLs.
+
+| Variable | Default (Staging) | Prod-Wert | Beschreibung |
+|---|---|---|---|
+| `METADATA_AGENT_B_API_BASE_URL` | `https://b-api.staging.openeduhub.net` | `https://b-api.prod.openeduhub.net` | B-API Basis-URL (LLM-Zugriff). Endpoint-Pfade (`/api/v1/llm/openai`, `/api/v1/llm/academiccloud`) werden automatisch abgeleitet. |
+| `METADATA_AGENT_TEXT_EXTRACTION_API_URL` | `https://text-extraction.staging.openeduhub.net` | `https://text-extraction.prod.openeduhub.net` | Text-Extraction API (Volltext aus URLs extrahieren). |
+| `METADATA_AGENT_REPOSITORY_URL` | `https://repository.staging.openeduhub.net/edu-sharing/rest` | `https://redaktion.openeduhub.net/edu-sharing/rest` | Repository-URL (Metadaten-Abruf & Upload). |
+| `METADATA_AGENT_WLO_INBOX_ID` | `21144164-30c0-4c01-ae16-264452197063` | — | Inbox-ID für Uploads. |
+
+**Beispiel — Umschalten auf Produktion:**
+
+```env
+METADATA_AGENT_B_API_BASE_URL=https://b-api.prod.openeduhub.net
+METADATA_AGENT_TEXT_EXTRACTION_API_URL=https://text-extraction.prod.openeduhub.net
+METADATA_AGENT_REPOSITORY_URL=https://redaktion.openeduhub.net/edu-sharing/rest
+```
+
+**Docker:**
+
+```bash
+docker run -d \
+  --name metadata-agent-api \
+  -p 8000:8000 \
+  -e B_API_KEY=your-api-key \
+  -e METADATA_AGENT_B_API_BASE_URL=https://b-api.prod.openeduhub.net \
+  -e METADATA_AGENT_TEXT_EXTRACTION_API_URL=https://text-extraction.prod.openeduhub.net \
+  -e METADATA_AGENT_REPOSITORY_URL=https://redaktion.openeduhub.net/edu-sharing/rest \
+  metadata-agent-api
+```
+
+> **Hinweis:** Werden diese Variablen nicht gesetzt, verwenden alle Dienste die **Staging-URLs** als Default.
+>
+> Der Request-Parameter `repository` in `/generate` und `/upload` ist **deprecated** und wird ignoriert. Die Repository-URL wird ausschließlich über die Umgebungsvariable gesetzt.
+
+### Provider-spezifische Einstellungen
+
+| Variable | Default | Beschreibung |
+|---|---|---|
+| `METADATA_AGENT_B_API_OPENAI_BASE` | *(abgeleitet aus `B_API_BASE_URL`)* | Überschreibt den abgeleiteten OpenAI-Endpoint |
+| `METADATA_AGENT_B_API_OPENAI_MODEL` | `gpt-6-luna` | Modell für B-API OpenAI |
+| `METADATA_AGENT_LLM_VERBOSITY` | `low` | Nur GPT-5/GPT-6 und o-Modelle |
+| `METADATA_AGENT_LLM_REASONING_EFFORT` | `low` | Nur GPT-5/GPT-6 und o-Modelle |
+| `METADATA_AGENT_B_API_ACADEMICCLOUD_BASE` | *(abgeleitet aus `B_API_BASE_URL`)* | Überschreibt den abgeleiteten AcademicCloud-Endpoint |
+| `METADATA_AGENT_B_API_ACADEMICCLOUD_MODEL` | `deepseek-v4-flash` | Modell für B-API AcademicCloud |
+| `METADATA_AGENT_OPENAI_API_BASE` | `https://api.openai.com/v1` | Beliebiger OpenAI-kompatibler Endpunkt (Azure, vLLM, Gateway) |
+| `METADATA_AGENT_OPENAI_MODEL` | `gpt-4o-mini` | Modell für natives OpenAI |
+| `METADATA_AGENT_OPENAI_TEMPERATURE` | folgt `LLM_TEMPERATURE` | Nur nötig, wenn nativ OpenAI abweichen soll |
+
+### Worker & Durchsatz
+
+| Variable | Default | Beschreibung |
+|---|---|---|
+| `METADATA_AGENT_DEFAULT_MAX_WORKERS` | `20` | Parallele LLM-Aufrufe, auch für `/generate` ohne `max_workers`; gedeckelt auf die Grenze des Providers |
+| `METADATA_AGENT_LLM_MAX_CONCURRENT_REQUESTS` | providerabhängig | Gleichzeitige Requests. Leer = Default des Providers (`b-api-openai`/`openai`: 20, `b-api-academiccloud`: 2) |
+| `METADATA_AGENT_LLM_MAX_REQUESTS_PER_SECOND` | providerabhängig | Requests pro Sekunde. Leer = Default des Providers (`b-api-academiccloud`: 2, sonst keine Grenze), `0` = aus |
+| `METADATA_AGENT_REQUEST_TIMEOUT` | `90` | Timeout je KI-Aufruf (Sekunden) |
+
+Vollständige Liste aller Umgebungsvariablen: [ENV-PARAMETER.md](ENV-PARAMETER.md).
+
+### Schema
+
+| Variable | Default | Beschreibung |
+|---|---|---|
+| `METADATA_AGENT_DEFAULT_CONTEXT` | `default` | Standard-Kontext (`default`, `mds_oeh`) |
+
+### Crawler & Text-Extraction
+
+| Variable | Default | Beschreibung |
+|---|---|---|
+
+### Screenshot
+
+| Variable | Default | Beschreibung |
+|---|---|---|
+| `METADATA_AGENT_SCREENSHOT_METHOD` | `playwright` | Immer lokal (Chromium); `pageshot` ist ein Legacy-Alias und nimmt ebenfalls lokal auf |
+| `METADATA_AGENT_SCREENSHOT_WIDTH` | `1920` | Viewport-Breite |
+| `METADATA_AGENT_SCREENSHOT_HEIGHT` | `1080` | Viewport-Höhe |
+| `METADATA_AGENT_SCREENSHOT_DELAY` | `2000` | Wartezeit vor Aufnahme (ms) |
+
+### Sonstiges
+
+| Variable | Default | Beschreibung |
+|---|---|---|
+| `METADATA_AGENT_CORS_ORIGINS` | `*` | CORS-Origins (kommasepariert oder `*`) |
+
+---
+
+## 6. Deployment-Varianten
+
+### 6.1 Docker Hub (empfohlen für Kubernetes)
+
+Das vorgefertigte Image aus der internen Registry verwenden:
+
+```bash
+docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:main
+
+docker run -d \
+  --name metadata-agent-api \
+  -p 8000:8000 \
+  -e B_API_KEY=<key> \
+  $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:main
+```
+
+Vorteile: Playwright/Chromium vorinstalliert, Health Check, einfaches Update, reproduzierbar.
+
+### 6.2 Kubernetes
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: metadata-agent-api
+  labels:
+    app: metadata-agent-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: metadata-agent-api
+  template:
+    metadata:
+      labels:
+        app: metadata-agent-api
+    spec:
+      containers:
+        - name: metadata-agent-api
+          image: $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:main
+          ports:
+            - containerPort: 8000
+          env:
+            - name: B_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: metadata-agent-secrets
+                  key: b-api-key
+            - name: WLO_GUEST_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: metadata-agent-secrets
+                  key: wlo-username
+            - name: WLO_GUEST_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: metadata-agent-secrets
+                  key: wlo-password
+            - name: METADATA_AGENT_B_API_BASE_URL
+              value: "https://b-api.prod.openeduhub.net"
+            - name: METADATA_AGENT_TEXT_EXTRACTION_API_URL
+              value: "https://text-extraction.prod.openeduhub.net"
+            - name: METADATA_AGENT_REPOSITORY_URL
+              value: "https://redaktion.openeduhub.net/edu-sharing/rest"
+            - name: METADATA_AGENT_LLM_PROVIDER
+              value: "b-api-openai"
+            - name: METADATA_AGENT_DEFAULT_MAX_WORKERS
+              value: "20"
+            - name: METADATA_AGENT_SCREENSHOT_METHOD
+              value: "playwright"
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: 2000m
+              memory: 2Gi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: metadata-agent-api
+spec:
+  selector:
+    app: metadata-agent-api
+  ports:
+    - port: 80
+      targetPort: 8000
+  type: ClusterIP
+```
+
+**Secrets anlegen:**
+
+```bash
+kubectl create secret generic metadata-agent-secrets \
+  --from-literal=b-api-key='<B_API_KEY>' \
+  --from-literal=wlo-username='<WLO_GUEST_USERNAME>' \
+  --from-literal=wlo-password='<WLO_GUEST_PASSWORD>'
+```
+
+**Ressourcen-Empfehlung:**
+
+| Ressource | Request | Limit |
+|---|---|---|
+| CPU | 500m | 2000m |
+| Memory | 512Mi | 2Gi |
+
+> Das Image enthält Playwright + Chromium (~400 MB). Screenshots werden immer im Container aufgenommen — auch mit dem Legacy-Alias `pageshot`.
+
+---
+
+## 7. Troubleshooting
+
+### Allgemein
+
+| Problem | Lösung |
+|---|---|
+| `ModuleNotFoundError: No module named 'src'` | Aus dem richtigen Verzeichnis starten (`metadata-agent-api/`) |
+| `B_API_KEY not configured` | `.env` prüfen oder `B_API_KEY` setzen |
+| CORS-Fehler im Browser | `METADATA_AGENT_CORS_ORIGINS` auf die Domain setzen oder `*` |
+| Timeout bei LLM-Aufrufen | `METADATA_AGENT_REQUEST_TIMEOUT` erhöhen |
+| Felder werden nicht extrahiert | Schema prüfen: `ai_fillable: true` im Schema? |
+
+### Playwright / Screenshots
+
+| Problem | Lösung |
+|---|---|
+| `Executable doesn't exist` | `playwright install chromium` ausführen |
+| `Host system is missing dependencies` | `playwright install-deps chromium` (Linux) |
+| Screenshot ist leer/weiß | `screenshot_delay` erhöhen (Seite braucht Ladezeit) |
+| Chromium-Crash (SIGTERM) | `--shm-size=256m` bei Docker, oder RAM erhöhen |
+| Screenshot schlägt fehl, Chromium fehlt | Chromium installieren (`playwright install chromium`) — `pageshot` nimmt ebenfalls lokal auf und ist kein Ausweg |
+| Screenshot oder URL-Eingabe wird mit `400` abgelehnt | Nur öffentliche http(s)-Ziele sind erlaubt. Die Prüfung löst DNS im Container auf — ein Hostname, der dort auf eine private Adresse zeigt (Split-Horizon-DNS), wird ebenfalls abgelehnt |
+
+### Docker
+
+| Problem | Lösung |
+|---|---|
+| Build schlägt bei `playwright install` fehl | Netzwerkzugriff im Build prüfen, `--network host` |
+| Container startet, Port nicht erreichbar | `docker ps` → Port-Mapping prüfen |
+| Container-Restart-Loop | `docker logs metadata-agent-api` → Fehlermeldung prüfen |
+| `permission denied` auf Dateien | User-Ownership im Dockerfile prüfen |
+| Sehr langsamer Build | `.dockerignore` erstellen (`.git`, `node_modules`, `venv`) |
+
+### GitLab CI
+
+| Problem | Lösung |
+|---|---|
+| Push zu Registry schlägt fehl | `DOCKER_REGISTRY`, `DOCKER_USERNAME`, `DOCKER_PASSWORD` in CI/CD-Variablen prüfen |
+| Build-Cache funktioniert nicht | `uv-install` Job-Log prüfen, `uv.lock` committed? |
+| DinD-Verbindungsfehler | `DIND_HOST`, `DIND_IMAGE` Variablen prüfen |

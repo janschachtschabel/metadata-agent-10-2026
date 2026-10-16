@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Metadata Agent – Default Ansicht</title>
+
+    <!-- Widget Styles -->
+    <link rel="stylesheet" href="../dist/styles.css">
+    <link rel="stylesheet" href="demo-icons.css">
+
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'Roboto', sans-serif;
+            background: #f5f5f5;
+            padding: 24px;
+        }
+
+        .page-header {
+            max-width: 1200px;
+            margin: 0 auto 16px;
+        }
+
+        .page-header h1 { font-size: 22px; font-weight: 500; color: #1d1b20; }
+        .page-header p { color: #666; margin-top: 4px; font-size: 14px; }
+
+        .widget-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            min-height: 700px;
+        }
+
+        metadata-agent-canvas {
+            display: block;
+            width: 100%;
+            min-height: 700px;
+        }
+
+        .control-bar {
+            max-width: 1200px;
+            margin: 0 auto 16px;
+            padding: 14px 20px;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .control-bar .label {
+            font-size: 13px;
+            font-weight: 500;
+            color: #49454f;
+            margin-right: 4px;
+            white-space: nowrap;
+        }
+
+        .ctrl-select {
+            padding: 7px 12px;
+            border: 1px solid #c4c7c5;
+            border-radius: 8px;
+            background: white;
+            font-size: 13px;
+            font-family: 'Roboto', sans-serif;
+            color: #1d1b20;
+            cursor: pointer;
+            min-width: 140px;
+            transition: border-color 0.2s;
+        }
+
+        .ctrl-select:hover, .ctrl-select:focus {
+            border-color: #1976d2;
+            outline: none;
+        }
+
+        .toggle-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 14px;
+            border: 1px solid #c4c7c5;
+            border-radius: 8px;
+            background: white;
+            cursor: pointer;
+            font-size: 13px;
+            font-family: 'Roboto', sans-serif;
+            color: #1d1b20;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .toggle-btn:hover {
+            background: #e8f0fe;
+            border-color: #1976d2;
+        }
+
+        .toggle-btn.on {
+            background: #1976d2;
+            color: white;
+            border-color: #1976d2;
+        }
+
+        .info-box {
+            max-width: 1200px;
+            margin: 16px auto 0;
+            padding: 12px 16px;
+            background: #e3f2fd;
+            border-radius: 8px;
+            font-size: 13px;
+            color: #1565c0;
+            line-height: 1.5;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="page-header">
+        <h1>Default Ansicht</h1>
+        <p>Volle Bearbeitungsansicht mit Texteingabe, KI-Extraktion, Statusbar und allen Steuerelementen.</p>
+    </div>
+
+    <div class="control-bar">
+        <span class="label">Layout:</span>
+        <select class="ctrl-select" id="layoutSelect" onchange="switchLayout(this.value)">
+            <option value="default" selected>Default</option>
+            <option value="plugin">Plugin</option>
+            <option value="dialog">Dialog</option>
+            <option value="detail">Detail</option>
+            <option value="clean">Clean</option>
+            <option value="prueftisch">Prueftisch</option>
+            <option value="prueftisch-org">Prueftisch Org</option>
+        </select>
+
+        <span class="label" style="margin-left: 16px;">Anzeige:</span>
+        <button class="toggle-btn on" id="toggleCore" onclick="toggleCoreFields(this)">
+            <span class="material-icons" style="font-size:16px">checklist</span> Kernfelder
+        </button>
+        <button class="toggle-btn" id="toggleFlat" onclick="toggleFlatGroups(this)">
+            <span class="material-icons" style="font-size:16px">view_stream</span> Flat Groups
+        </button>
+    </div>
+
+    <div class="widget-container">
+        <!--
+            Default: layout="default"
+            Volle Ansicht mit Eingabebereich, Statusbar, Floating Controls.
+            Keine Daten vorgeladen – der Nutzer gibt Text/URL ein und startet die KI-Extraktion.
+            Siehe full.html für die vollständige Attribut-Dokumentation.
+        -->
+        <metadata-agent-canvas
+            id="canvas"
+            api-url=""
+            layout="default"
+            context-name="default"
+            schema-version="latest"
+            input-mode="text"
+            show-input-area="true"
+            show-status-bar="true"
+            show-core-fields="true"
+            show-special-fields="true"
+            show-footer="false"
+            show-floating-controls="true"
+            show-field-actions="true"
+            show-upload-button="false"
+            show-page-mode="false"
+            show-content-type-only="false"
+            readonly="false"
+            borderless="true"
+            highlight-ai="true"
+            auto-extract="false"
+            flat-groups="false"
+            show-preview="true"
+            enable-screenshot="true"
+            screenshot-method="playwright">
+        </metadata-agent-canvas>
+    </div>
+
+    <div class="info-box">
+        <strong>Hinweis:</strong> Text oder URL eingeben und auf „Extrahieren" klicken.
+        Die KI analysiert den Inhalt und füllt die Metadatenfelder automatisch aus.
+        Alle Felder können anschließend manuell bearbeitet werden.
+    </div>
+
+    <!-- API-Basis relativ zur Beispielseite ableiten, damit Proxy-Prefixe erhalten bleiben -->
+    <script>window.__ENV = window.__ENV || { agentUrl: new URL('../../', window.location.href).pathname.replace(/\/$/, '') };</script>
+
+    <!-- Widget Scripts -->
+    <script src="../dist/runtime.js" defer></script>
+    <script src="../dist/polyfills.js" defer></script>
+    <script src="../dist/main.js" defer></script>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+
+        function switchLayout(value) {
+            canvas.setAttribute('layout', value);
+        }
+
+        function toggleCoreFields(btn) {
+            const isOn = btn.classList.toggle('on');
+            canvas.setAttribute('show-core-fields', isOn ? 'true' : 'false');
+        }
+
+        function toggleFlatGroups(btn) {
+            const isOn = btn.classList.toggle('on');
+            canvas.setAttribute('flat-groups', isOn ? 'true' : 'false');
+        }
+
+        // Listen for events
+        customElements.whenDefined('metadata-agent-canvas').then(() => {
+
+            canvas.addEventListener('metadataChange', (e) => {
+                if (canvas.debug) console.log('Metadata changed:', e.detail);
+            });
+
+            canvas.addEventListener('metadataSubmit', (e) => {
+                if (canvas.debug) console.log('Metadata submitted:', e.detail);
+            });
+
+            canvas.addEventListener('extractionComplete', (e) => {
+                if (canvas.debug) console.log('Extraction complete:', e.detail);
+            });
+        });
+    </script>
+
+</body>
+</html>
