@@ -1,7 +1,7 @@
 # Steckbrief: Metadata Agent API
 
 Entstanden aus der ausführlichen Beschreibung unter [UEBERGABE.md](../UEBERGABE.md)
-(Stand 16.10.2026, Version 2.1.0).
+(Stand 17.10.2026, Version 2.1.1).
 
 | | |
 |---|---|
@@ -17,9 +17,9 @@ Entstanden aus der ausführlichen Beschreibung unter [UEBERGABE.md](../UEBERGABE
 | Punkt | Text oder Link | Status |
 |---|---|---|
 | Anzeigename und Beschreibung | `Metadata Agent API`: erzeugt aus Text, Webseite oder Repository-Eintrag Metadaten (Titel, Beschreibung, Schlagworte, Bildungsstufe …) und schreibt sie ins WLO-Repository (`info.summary` der Spec) | erfüllt |
-| Repository-Link | GitLab: [metadata-agent](https://scm.edu-sharing.com/edu-sharing/projects/wlo/metaservices/metadata-agent), [metadata-agent-webcomponent](https://scm.edu-sharing.com/edu-sharing/projects/wlo/metaservices/metadata-agent-webcomponent). GitHub (privat, 2.1.0 ohne Helm-Chart und neue Metriken): [metadata-agent-10-2026](https://github.com/janschachtschabel/metadata-agent-10-2026), [metadata-agent-webcomponent-10-2026](https://github.com/janschachtschabel/metadata-agent-webcomponent-10-2026). Zugriff für T6 offen | offen |
+| Repository-Link | GitLab: [metadata-agent](https://scm.edu-sharing.com/edu-sharing/projects/wlo/metaservices/metadata-agent), [metadata-agent-webcomponent](https://scm.edu-sharing.com/edu-sharing/projects/wlo/metaservices/metadata-agent-webcomponent). GitHub (privat, 2.1.1): [metadata-agent-10-2026](https://github.com/janschachtschabel/metadata-agent-10-2026), [metadata-agent-webcomponent-10-2026](https://github.com/janschachtschabel/metadata-agent-webcomponent-10-2026). Zugriff für T6 offen | offen |
 | OpenAPI Spec | `/openapi.json` aus dem Code; 16 Operationen beschrieben; Swagger UI `/docs` ohne Dritt-Server | erfüllt |
-| Pipeline und Git-Tags | GitLab-CI: Branch-Images und Versions-Image je Tag (Variablen: UEBERGABE §1), dazu Prüfung von Chart (`helm lint`) und Alarmregeln (`promtool`). GitHub Actions grün (1.589 Tests, Stand vor dem Chart). **Kritisch:** 2.1.0 im GitLab-Repo nicht committet, Tag `v2.1.0` fehlt | offen |
+| Pipeline und Git-Tags | GitLab-CI: Branch-Images und Versions-Image je Tag (Variablen: UEBERGABE §1), dazu Prüfung von Chart (`helm lint`) und Alarmregeln (`promtool`). GitHub Actions mit Tests, Chart-Prüfung und Image-Bau. **Kritisch:** 2.1.1 im GitLab-Repo nicht committet, Tag `v2.1.1` fehlt | offen |
 | Endpunkte (öffentliche und Infrastruktur) | Port 8000: API, `/docs`, `/openapi.json`, `/widget/*`. Interner Port (z.B. 9000): `/health`, `/ready`, `/metrics`. `/debug/*` standardmäßig aus (im Chart ausdrücklich), der interne Port ist nicht im Ingress | erfüllt |
 | spezielle Header und Content-Types | ein: `Authorization: Bearer` (B-API, `forwardApiKey`), `x-client-trace-id`, B3; aus: `X-Request-ID`. API nur JSON; Widget-Dateien (JS, CSS, `woff2`, HTML) mit Wolli abstimmen | offen |
 | Asynchrone Job-Endpunkte | keine. `/generate` dauert 12–22 s (`gpt-6-luna`), bis 90 s (AcademicCloud) → Timeout ≥ 120 s; Async nur nötig, falls der Proxy das nicht erlaubt | offen |
@@ -37,7 +37,7 @@ Entstanden aus der ausführlichen Beschreibung unter [UEBERGABE.md](../UEBERGABE
 | Punkt | Text oder Link | Status |
 |---|---|---|
 | Docker-Files | `Dockerfile` (Multi-Stage, `python:3.13-slim`, Nutzer `appuser`, HEALTHCHECK) und `docker-compose.yml` im Repo | erfüllt |
-| HELM-Chart und Beispiel-Values | [helm/metadata-agent/](../helm/metadata-agent/README.md): Deployment (Probes intern), Service, Ingress (`proxy-read-timeout 120`, `proxy-body-size 20m`), Secret, ServiceMonitor, PrometheusRule; `helm lint` und kubeconform grün, noch nicht im Cluster installiert | erfüllt |
+| HELM-Chart und Beispiel-Values | [helm/metadata-agent/](../helm/metadata-agent/README.md): Deployment (Probes intern), Service, PodDisruptionBudget, Secret, ServiceMonitor, PrometheusRule; Ingress abschaltbar, hinter der B-API aus; `helm lint` und kubeconform grün, noch nicht im Cluster installiert | erfüllt |
 | Abschaltbare Komponenten | keine; nur der interne Port ist optional | nicht anwendbar |
 | Datenbank | keine | nicht anwendbar |
 | Quelle und Volume-Größe für große Daten | keine; im Image nur Schemata (8 MB), Widget (2,5 MB), Swagger UI (1,8 MB) | nicht anwendbar |
@@ -57,7 +57,7 @@ Entstanden aus der ausführlichen Beschreibung unter [UEBERGABE.md](../UEBERGABE
 | Punkt | Text oder Link | Status |
 |---|---|---|
 | Prometheus-Endpunkt | `/metrics` auf dem internen Port | erfüllt |
-| Applikationsmetriken und Alarmregeln | HTTP, LLM-Aufrufe (Ergebnis, Dauer), Erschließungen, Aufrufe an abhängige Dienste, Tokens. Acht Alarmregeln als `PrometheusRule` im Chart, per promtool getestet (UEBERGABE §4); Empfänger legt T6 fest | erfüllt |
+| Applikationsmetriken und Alarmregeln | HTTP, LLM-Aufrufe (Ergebnis, Dauer), Erschließungen, Aufrufe an abhängige Dienste, Tokens. Zehn Alarmregeln als `PrometheusRule` im Chart, per promtool getestet; kritisch nur für eigenen Key und konfiguriertes Modell (UEBERGABE §4); Empfänger legt T6 fest | erfüllt |
 | Log-Format und x-client-trace-id | stdout, JSON mit `trace_id` oder Text; Trace-Header gehen an B-API, Textextraktion und Repository, nie an Fremddienste | erfüllt |
 
 ## Ressourcen und Kosten
@@ -79,7 +79,7 @@ Entstanden aus der ausführlichen Beschreibung unter [UEBERGABE.md](../UEBERGABE
 ## Offene Punkte
 
 **Kritisch**
-1. 2.1.0 im GitLab-Repo committen und als `v2.1.0` taggen (API und Webkomponente).
+1. 2.1.1 im GitLab-Repo committen und als `v2.1.1` taggen (API und Webkomponente).
 2. Mit dem Helm-Chart auf Staging deployen, Dienst in der B-API mit `forwardApiKey` eintragen und testen (DEPLOYMENT.md, „Nach dem Deployment prüfen“); dabei prüfen, ob Prometheus die Metriken und Alarmregeln übernimmt.
 
 **Offen**

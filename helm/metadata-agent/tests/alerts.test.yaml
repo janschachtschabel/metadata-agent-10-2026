@@ -7,9 +7,9 @@ evaluation_interval: 1m
 tests:
 - interval: 1m
   input_series:
-  - series: metadata_agent_llm_requests_total{namespace="wlo",provider="b-api-openai",result="LLM_AUTH_REJECTED"}
+  - series: metadata_agent_llm_requests_total{namespace="wlo",provider="b-api-openai",result="LLM_AUTH_REJECTED",auth_source="static",config="default"}
     values: 0 1x10
-  - series: metadata_agent_llm_requests_total{namespace="wlo",provider="b-api-openai",result="LLM_ROUTE_NOT_FOUND"}
+  - series: metadata_agent_llm_requests_total{namespace="wlo",provider="b-api-openai",result="LLM_ROUTE_NOT_FOUND",auth_source="static",config="default"}
     values: 0 1x10
   alert_rule_test:
   - eval_time: 5m
@@ -18,21 +18,22 @@ tests:
     - exp_labels:
         severity: critical
         namespace: wlo
-      exp_annotations:
-        summary: B-API lehnt den Schlüssel ab oder er fehlt
-        description: KI-Aufrufe enden mit LLM_AUTH_* (401/403 oder kein Key). Key im Secret bzw. die LLM-Berechtigung des weitergereichten Keys prüfen.
+      exp_annotations: &id002
+        summary: B-API lehnt den eigenen Schlüssel ab oder es fehlt jeder Schlüssel
+        description: KI-Aufrufe mit der konfigurierten Einstellung enden mit LLM_AUTH_* (401/403, oder kein Key - im Modus forward fehlt dann der vom Proxy weitergereichte). B_API_KEY im Secret bzw. forwardApiKey
+          im B-API-Proxy prüfen.
   - eval_time: 5m
     alertname: MetadataAgentLlmRouteMisconfigured
     exp_alerts:
     - exp_labels:
         severity: critical
         namespace: wlo
-      exp_annotations:
-        summary: B-API-Route unbekannt oder falsch eingerichtet
-        description: KI-Aufrufe enden mit LLM_ROUTE_*. Route in der B-API und METADATA_AGENT_LLM_MODEL prüfen.
+      exp_annotations: &id001
+        summary: Konfiguriertes Modell bzw. B-API-Route nicht verfügbar
+        description: KI-Aufrufe mit dem konfigurierten Modell enden mit LLM_ROUTE_* oder LLM_MODEL_NOT_FOUND. Route in der B-API und das Modell (METADATA_AGENT_B_API_*_MODEL) prüfen.
 - interval: 1m
   input_series:
-  - series: metadata_agent_llm_requests_total{namespace="wlo",provider="b-api-openai",result="ok"}
+  - series: metadata_agent_llm_requests_total{namespace="wlo",provider="b-api-openai",result="ok",auth_source="static",config="default"}
     values: 0+5x10
   alert_rule_test:
   - eval_time: 5m
@@ -43,9 +44,82 @@ tests:
     exp_alerts: []
 - interval: 1m
   input_series:
-  - series: metadata_agent_llm_requests_total{namespace="wlo",provider="b-api-openai",result="LLM_RATE_LIMITED"}
+  - series: metadata_agent_llm_requests_total{namespace="wlo",provider="b-api-openai",result="LLM_MODEL_NOT_FOUND",auth_source="static",config="default"}
+    values: 0 1x10
+  - series: metadata_agent_llm_requests_total{namespace="wlo",provider="b-api-openai",result="LLM_AUTH_MISSING",auth_source="none",config="default"}
+    values: 0 1x10
+  alert_rule_test:
+  - eval_time: 5m
+    alertname: MetadataAgentLlmRouteMisconfigured
+    exp_alerts:
+    - exp_labels:
+        severity: critical
+        namespace: wlo
+      exp_annotations: *id001
+  - eval_time: 5m
+    alertname: MetadataAgentLlmKeyRefused
+    exp_alerts:
+    - exp_labels:
+        severity: critical
+        namespace: wlo
+      exp_annotations: *id002
+- interval: 1m
+  input_series:
+  - series: metadata_agent_llm_requests_total{namespace="wlo",provider="b-api-openai",result="LLM_AUTH_FORBIDDEN",auth_source="forwarded",config="default"}
+    values: 0 1x10
+  - series: metadata_agent_llm_requests_total{namespace="wlo",provider="b-api-openai",result="LLM_ROUTE_NOT_FOUND",auth_source="static",config="override"}
+    values: 0 1x10
+  alert_rule_test:
+  - eval_time: 5m
+    alertname: MetadataAgentLlmKeyRefused
+    exp_alerts: []
+  - eval_time: 5m
+    alertname: MetadataAgentLlmRouteMisconfigured
+    exp_alerts: []
+  - eval_time: 5m
+    alertname: MetadataAgentLlmCallerKeyRefused
+    exp_alerts: []
+  - eval_time: 5m
+    alertname: MetadataAgentLlmRequestedModelRejected
+    exp_alerts: []
+- interval: 1m
+  input_series:
+  - series: metadata_agent_llm_requests_total{namespace="wlo",provider="b-api-openai",result="LLM_AUTH_FORBIDDEN",auth_source="forwarded",config="default"}
     values: 0+1x15
-  - series: metadata_agent_llm_requests_total{namespace="wlo",provider="b-api-openai",result="LLM_UNREACHABLE"}
+  - series: metadata_agent_llm_requests_total{namespace="wlo",provider="b-api-openai",result="LLM_ROUTE_NOT_FOUND",auth_source="static",config="override"}
+    values: 0+1x15
+  alert_rule_test:
+  - eval_time: 15m
+    alertname: MetadataAgentLlmCallerKeyRefused
+    exp_alerts:
+    - exp_labels:
+        severity: warning
+        namespace: wlo
+      exp_annotations:
+        summary: Weitergereichte Schlüssel von Aufrufern werden abgelehnt
+        description: Mehr als 5 KI-Aufrufe in 15 Minuten mit dem vom B-API-Proxy weitergereichten Schlüssel enden mit LLM_AUTH_*. Den Schlüsseln der aufrufenden Anwendungen fehlt die LLM-Berechtigung; der
+          eigene Betrieb ist nicht betroffen.
+  - eval_time: 15m
+    alertname: MetadataAgentLlmRequestedModelRejected
+    exp_alerts:
+    - exp_labels:
+        severity: warning
+        namespace: wlo
+      exp_annotations:
+        summary: Von Anfragen gewählte Modelle oder Routen scheitern
+        description: Mehr als 5 KI-Aufrufe in 15 Minuten mit einem per Anfrage gewählten Provider oder Modell (llm_provider/llm_model) scheitern an Route, Modell oder Berechtigung. Die aufrufende Anwendung
+          nennt ein Modell, das es nicht gibt oder das der Schlüssel nicht darf.
+  - eval_time: 15m
+    alertname: MetadataAgentLlmKeyRefused
+    exp_alerts: []
+  - eval_time: 15m
+    alertname: MetadataAgentLlmRouteMisconfigured
+    exp_alerts: []
+- interval: 1m
+  input_series:
+  - series: metadata_agent_llm_requests_total{namespace="wlo",provider="b-api-openai",result="LLM_RATE_LIMITED",auth_source="static",config="default"}
+    values: 0+1x15
+  - series: metadata_agent_llm_requests_total{namespace="wlo",provider="b-api-openai",result="LLM_UNREACHABLE",auth_source="static",config="default"}
     values: 0+1x15
   alert_rule_test:
   - eval_time: 15m
@@ -68,9 +142,9 @@ tests:
         description: Mehr als 3 KI-Aufrufe in 10 Minuten bekamen auch nach Wiederholung keine Antwort (Timeout, Verbindung abgelehnt).
 - interval: 1m
   input_series:
-  - series: metadata_agent_llm_requests_total{namespace="wlo",provider="b-api-openai",result="LLM_RATE_LIMITED"}
+  - series: metadata_agent_llm_requests_total{namespace="wlo",provider="b-api-openai",result="LLM_RATE_LIMITED",auth_source="static",config="default"}
     values: 0 1 2 2x12
-  - series: metadata_agent_llm_requests_total{namespace="wlo",provider="b-api-openai",result="LLM_UNREACHABLE"}
+  - series: metadata_agent_llm_requests_total{namespace="wlo",provider="b-api-openai",result="LLM_UNREACHABLE",auth_source="static",config="default"}
     values: 0 1 1x13
   alert_rule_test:
   - eval_time: 15m

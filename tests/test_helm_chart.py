@@ -93,6 +93,25 @@ def test_llm_result_values_are_real_error_codes():
             assert _matches_one(pattern, codes), f"{rule['alert']}: {pattern}"
 
 
+def test_key_source_and_config_values_exist():
+    """The labels _call_llm sets (tests/test_llm_metric_labels.py)."""
+    for rule in _alert_rules():
+        for value in _label_values(rule["expr"], "auth_source"):
+            assert value in {"forwarded", "static", "openai", "none"}, rule["alert"]
+        for value in _label_values(rule["expr"], "config"):
+            assert value in {"default", "override"}, rule["alert"]
+
+
+def test_critical_llm_rules_ignore_the_callers_problems():
+    """A caller's key or a model the request picked must never page."""
+    for rule in _alert_rules():
+        expr = rule["expr"]
+        if rule["labels"]["severity"] == "critical" and "llm_requests" in expr:
+            assert 'config="default"' in expr, rule["alert"]
+            if "LLM_AUTH_" in expr:
+                assert 'auth_source!="forwarded"' in expr, rule["alert"]
+
+
 def test_generation_status_values_exist():
     for rule in _alert_rules():
         for value in _label_values(rule["expr"], "status"):

@@ -92,7 +92,8 @@ def _bind(host: str, port: int) -> socket.socket:
     and the public API with it. Bound here, a taken port is an exception the
     lifespan can report.
     """
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    sock = socket.socket(family, socket.SOCK_STREAM)
     if os.name != "nt":
         # A restart must not wait for TIME_WAIT. On Windows the option would
         # let a second process bind the same port, hiding the conflict.

@@ -26,6 +26,7 @@ from src.services import llm_service as llm_module
 from src.services.llm_auth import forwarded_authorization
 from src.services.llm_errors import (
     LLMRateLimited,
+    LLMRequestRejected,
     LLMRouteMisconfigured,
     LLMRouteNotFound,
     LLMUnreachable,
@@ -267,6 +268,31 @@ async def test_a_wrong_family_names_the_setting(monkeypatch):
         await service._call_llm(MESSAGES)
 
     assert "LLM_REQUEST_STYLE" in raised.value.message
+
+
+@pytest.mark.asyncio
+async def test_other_providers_are_not_read_as_the_router(monkeypatch):
+    """
+    LLM_REQUEST_STYLE is ignored outside the router, so advising it there sends
+    the operator nowhere - and a route error code would page for a route that
+    does not exist. A refused parameter is an ordinary rejected request.
+    """
+    router = _Router(
+        400, '{"error": {"message": "Unsupported parameter: \'max_tokens\'"}}'
+    )
+    cfg = _settings()
+    monkeypatch.setattr(llm_module, "get_settings", lambda: cfg)
+    service = LLMService(llm_provider="b-api-openai", llm_model="o9-preview")
+    service.http_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(router.handler)
+    )
+
+    with pytest.raises(LLMRequestRejected) as raised:
+        await service._call_llm(MESSAGES)
+
+    assert "LLM_REQUEST_STYLE" not in raised.value.message
+    assert "max_tokens" in raised.value.message
+    assert len(router.calls) == 1
 
 
 @pytest.mark.asyncio

@@ -11,7 +11,7 @@ from weakref import WeakKeyDictionary
 
 from ..config import get_settings
 from ..utils.text_utils import levenshtein_distance
-from .llm_auth import b_api_auth
+from .llm_auth import b_api_auth, current_auth_source
 from ..metrics import LLM_DURATION, LLM_REQUESTS, OWN_SERVICE_HOOKS, count_llm_tokens
 from .llm_errors import (
     AUTH_SOURCE_LABELS,
@@ -254,6 +254,16 @@ class LLMService:
         self.max_concurrent_requests = self.llm_config["max_concurrent_requests"]
         self.requests_per_second = self.llm_config["requests_per_second"]
 
+        # "override" when a request picked its own provider or model: its
+        # failures are the caller's, not the operator's (alerts.yaml).
+        configured = settings.get_llm_config()
+        self.config_origin = (
+            "default"
+            if (self.provider, self.model)
+            == (configured["provider"], configured["model"])
+            else "override"
+        )
+
         # HTTP client for B-API (requires custom headers).
         #
         # The read timeout is what bounds a single LLM call, so it comes from
@@ -284,6 +294,12 @@ class LLMService:
         """One LLM answer, counted and timed for /metrics (src/metrics.py)."""
         start = time.monotonic()
         result = "ok"
+        # Same rule as the call itself (b_api_auth), read before it is made.
+        auth_source = (
+            current_auth_source(self.settings) or "none"
+            if self.requires_custom_header
+            else "openai"
+        )
         try:
             return await self._send_llm_request(messages, temperature, max_tokens)
         except LLMError as e:
@@ -293,7 +309,9 @@ class LLMService:
             result = "error"
             raise
         finally:
-            LLM_REQUESTS.labels(self.provider, result).inc()
+            LLM_REQUESTS.labels(
+                self.provider, result, auth_source, self.config_origin
+            ).inc()
             LLM_DURATION.labels(self.provider).observe(time.monotonic() - start)
 
     async def _send_llm_request(
@@ -393,7 +411,14 @@ class LLMService:
 
                 last_status = response.status_code
                 last_detail = short_upstream_detail(response.text)
-                last_kind = router_failure(last_status, response.text)
+                # Only the router words its errors this way; read elsewhere, a
+                # 400 "unsupported parameter" became a route error with advice
+                # (LLM_REQUEST_STYLE) that other providers ignore.
+                last_kind = (
+                    router_failure(last_status, response.text)
+                    if self.provider == "b-api-router"
+                    else None
+                )
 
                 # A configuration error answers the same way on every try.
                 if last_kind in _LASTING_ROUTER_FAILURES:

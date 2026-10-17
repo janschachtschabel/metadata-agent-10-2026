@@ -62,6 +62,12 @@ def validate_node_id(value: Any) -> Any:
     )
 
 
+# llm_model goes on unchanged into the B-API body, error messages and logs;
+# model and route names fit this, blanks and control characters do not.
+LLM_MODEL_PATTERN = r"^[A-Za-z0-9._:/@-]+$"
+LLM_MODEL_MAX_LENGTH = 200
+
+
 def normalize_provider(value: Any) -> Any:
     """Read a provider name like the setting does: case and spaces do not matter."""
     if isinstance(value, str):
@@ -249,6 +255,8 @@ class GenerateRequest(BaseModel):
     )
     llm_model: Optional[str] = Field(
         default=None,
+        max_length=LLM_MODEL_MAX_LENGTH,
+        pattern=LLM_MODEL_PATTERN,
         description="LLM model to use. Without it the provider's configured default applies: 'gpt-6-luna' (b-api-openai), 'deepseek-v4-flash' (b-api-academiccloud), 'openai/gpt-6-luna' (b-api-router; works without a route), 'gpt-4o-mini' (openai).",
     )
 
@@ -1368,6 +1376,8 @@ class DetectContentTypeRequest(BaseModel):
     )
     llm_model: Optional[str] = Field(
         default=None,
+        max_length=LLM_MODEL_MAX_LENGTH,
+        pattern=LLM_MODEL_PATTERN,
         description="LLM model to use. Without it the provider's configured default applies: 'gpt-6-luna' (b-api-openai), 'deepseek-v4-flash' (b-api-academiccloud), 'openai/gpt-6-luna' (b-api-router; works without a route), 'gpt-4o-mini' (openai).",
     )
 
@@ -1516,6 +1526,8 @@ class ExtractFieldRequest(BaseModel):
     )
     llm_model: Optional[str] = Field(
         default=None,
+        max_length=LLM_MODEL_MAX_LENGTH,
+        pattern=LLM_MODEL_PATTERN,
         description="LLM model to use. Without it the provider's configured default applies: 'gpt-6-luna' (b-api-openai), 'deepseek-v4-flash' (b-api-academiccloud), 'openai/gpt-6-luna' (b-api-router; works without a route), 'gpt-4o-mini' (openai).",
     )
 

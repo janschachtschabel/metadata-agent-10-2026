@@ -117,8 +117,8 @@ helm lint:
     name: alpine/helm:3.20.0
     entrypoint: [""]
   script:
-    - helm lint helm/metadata-agent --strict
-    - helm template ci helm/metadata-agent --set ingress.enabled=true > /dev/null
+    - helm lint helm/metadata-agent --strict --set image.repository=ci/metadata-agent-api
+    - helm template ci helm/metadata-agent --set image.repository=ci/metadata-agent-api --set ingress.enabled=true > /dev/null
 
 alert rules:
   stage: test

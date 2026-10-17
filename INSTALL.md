@@ -184,7 +184,7 @@ uvicorn src.main:app --host 0.0.0.0 --port 8000
 ```bash
 # Health Check
 curl http://localhost:8000/health
-# → {"status": "healthy", "version": "2.1.0", "llm_provider": "b-api-openai", "b_api_auth_mode": "auto"}
+# → {"status": "healthy", "version": "2.1.1", "llm_provider": "b-api-openai", "b_api_auth_mode": "auto"}
 
 # Einfacher Test
 curl -X POST http://localhost:8000/generate \
@@ -731,11 +731,16 @@ Vorteile: Playwright/Chromium vorinstalliert, Health Check, einfaches Update, re
 
 Für Kubernetes gibt es einen Helm-Chart unter
 [`helm/metadata-agent/`](helm/metadata-agent/README.md) (Deployment, Service,
-Ingress, Secret, ServiceMonitor, Alarmregeln). Kurzform:
+Secret, ServiceMonitor, Alarmregeln; kein Ingress hinter der B-API). Kurzform:
 
 ```bash
-kubectl create secret generic metadata-agent   --from-literal=B_API_KEY='<B_API_KEY>'   --from-literal=WLO_GUEST_USERNAME='<WLO_GUEST_USERNAME>'   --from-literal=WLO_GUEST_PASSWORD='<WLO_GUEST_PASSWORD>'
-helm install metadata-agent helm/metadata-agent   --set image.repository=$DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api   --set secret.existingSecret=metadata-agent
+kubectl create secret generic metadata-agent \
+  --from-literal=B_API_KEY='<B_API_KEY>' \
+  --from-literal=WLO_GUEST_USERNAME='<WLO_GUEST_USERNAME>' \
+  --from-literal=WLO_GUEST_PASSWORD='<WLO_GUEST_PASSWORD>'
+helm install metadata-agent helm/metadata-agent \
+  --set image.repository=$DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api \
+  --set secret.existingSecret=metadata-agent
 ```
 
 **Ressourcen-Empfehlung:**

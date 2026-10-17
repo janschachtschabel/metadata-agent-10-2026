@@ -3,6 +3,6 @@ name: metadata-agent
 description: Metadata Agent API - erschließt Bildungsinhalte mit KI (inkl. Webkomponente)
 type: application
 # Chart version: raise on every change to the chart itself.
-version: 0.1.0
+version: 0.2.1
 # The service version the chart deploys by default (tests/test_helm_chart.py).
-appVersion: "2.1.0"
+appVersion: "2.1.1"

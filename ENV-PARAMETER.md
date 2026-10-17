@@ -103,7 +103,7 @@ die B-API den Schlüssel annimmt.
   einen Schlüssel.
 
 ```json
-{"version": "2.1.0", "llm_provider": "b-api-openai", "b_api_auth_mode": "auto",
+{"version": "2.1.1", "llm_provider": "b-api-openai", "b_api_auth_mode": "auto",
  "config_warnings": [],
  "checks": {
    "llm": {"url": "https://b-api.prod.openeduhub.net/api/v1/llm/openai/models",
@@ -364,11 +364,12 @@ mit privater Adresse (z.B. Split-Horizon-DNS im Cluster) wird abgelehnt.
 | Variable | Default | Beschreibung |
 |---|---|---|
 | `METADATA_AGENT_APP_NAME` | `Metadata Agent API` | |
-| `METADATA_AGENT_APP_VERSION` | `2.1.0` | |
+| `METADATA_AGENT_APP_VERSION` | `2.1.1` | |
 | `METADATA_AGENT_CORS_ORIGINS` | `*` | Komma-getrennt oder `*` |
 | `METADATA_AGENT_LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING` oder `ERROR` |
 | `METADATA_AGENT_LOG_FORMAT` | `text` | `text`: nur die Meldung, wie bisher. `json`: ein Objekt je Zeile mit `time`, `level`, `logger`, `message` und `trace_id`; auch für die Server- und Zugriffslogs von uvicorn |
 | `METADATA_AGENT_INTERNAL_PORT` | leer | Zweiter, interner Port mit `/health`, `/ready` und `/metrics` (Prometheus). Leer: kein zweiter Server, kein `/metrics`. Nur mit **einem Worker je Container**. Ist der Port belegt, meldet der Agent das im Log und läuft ohne internen Port weiter |
+| `METADATA_AGENT_INTERNAL_HOST` | `0.0.0.0` | Adresse des internen Ports; `::` in einem IPv6-Cluster (Dual-Stack, Probes über IPv6) |
 | `METADATA_AGENT_MAX_REQUEST_BYTES` | `20971520` (20 MB) | Größter angenommener Request-Body in Bytes. Größere Anfragen beantwortet der Agent mit `413`, bevor er sie liest. Platz genug für `/upload` mit Vorschaubild als Data-URL |
 
 Logs gehen immer nach stdout. Eingehende Tracing-Header – `x-client-trace-id`,

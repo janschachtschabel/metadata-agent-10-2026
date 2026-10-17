@@ -176,7 +176,12 @@ async def test_llm_calls_are_counted_by_result(monkeypatch):
     service.http_client = httpx.AsyncClient(
         transport=httpx.MockTransport(lambda r: httpx.Response(403, text="Forbidden"))
     )
-    labels = {"provider": "b-api-openai", "result": "LLM_AUTH_FORBIDDEN"}
+    labels = {
+        "provider": "b-api-openai",
+        "result": "LLM_AUTH_FORBIDDEN",
+        "auth_source": "static",
+        "config": "default",
+    }
     before = _sample("metadata_agent_llm_requests_total", **labels)
 
     with pytest.raises(LLMAuthForbidden):
@@ -246,6 +251,38 @@ async def test_an_occupied_internal_port_is_named():
 
     assert str(port) in str(raised.value)
     assert "Worker" in str(raised.value)
+
+
+def _ipv6_available() -> bool:
+    try:
+        with socket.socket(socket.AF_INET6) as probe:
+            probe.bind(("::1", 0))
+        return True
+    except OSError:
+        return False
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(not _ipv6_available(), reason="no IPv6 on this host")
+async def test_the_internal_port_can_listen_on_ipv6():
+    """An IPv6-only cluster probes the pod over IPv6 (METADATA_AGENT_INTERNAL_HOST)."""
+    with socket.socket(socket.AF_INET6) as free:
+        free.bind(("::1", 0))
+        port = free.getsockname()[1]
+
+    stop = await start_internal_server(
+        create_internal_app(lambda: _settings()), port, host="::1"
+    )
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(f"http://[::1]:{port}/health")
+        assert response.status_code == 200
+    finally:
+        await stop()
+
+
+def test_the_internal_host_defaults_to_all_ipv4_addresses():
+    assert _settings().internal_host == "0.0.0.0"
 
 
 def test_the_api_keeps_running_when_the_internal_port_is_taken(monkeypatch, caplog):

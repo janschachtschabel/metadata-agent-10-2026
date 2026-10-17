@@ -2,26 +2,45 @@
 # wraps it into a PrometheusRule, promtool tests it (tests/alerts.test.yaml),
 # tests/test_helm_chart.py checks every metric and label value against the code.
 # Aggregated by namespace, so staging and production alert separately.
+# Critical rules only count the operator's own key (auth_source != forwarded)
+# and the configured provider/model (config = default): a caller's key or a
+# model a request picked is the caller's problem and only warns.
 # Pod down / restarting is left to the cluster's own rules (TargetDown,
 # KubePodCrashLooping in kube-prometheus-stack).
 groups:
   - name: metadata-agent
     rules:
       - alert: MetadataAgentLlmKeyRefused
-        expr: sum by (namespace) (increase(metadata_agent_llm_requests_total{result=~"LLM_AUTH_.*"}[10m])) > 0
+        expr: sum by (namespace) (increase(metadata_agent_llm_requests_total{result=~"LLM_AUTH_.*",auth_source!="forwarded",config="default"}[10m])) > 0
         labels:
           severity: critical
         annotations:
-          summary: B-API lehnt den Schlüssel ab oder er fehlt
-          description: KI-Aufrufe enden mit LLM_AUTH_* (401/403 oder kein Key). Key im Secret bzw. die LLM-Berechtigung des weitergereichten Keys prüfen.
+          summary: B-API lehnt den eigenen Schlüssel ab oder es fehlt jeder Schlüssel
+          description: KI-Aufrufe mit der konfigurierten Einstellung enden mit LLM_AUTH_* (401/403, oder kein Key - im Modus forward fehlt dann der vom Proxy weitergereichte). B_API_KEY im Secret bzw. forwardApiKey im B-API-Proxy prüfen.
 
       - alert: MetadataAgentLlmRouteMisconfigured
-        expr: sum by (namespace) (increase(metadata_agent_llm_requests_total{result=~"LLM_ROUTE_.*"}[10m])) > 0
+        expr: sum by (namespace) (increase(metadata_agent_llm_requests_total{result=~"LLM_ROUTE_.*|LLM_MODEL_NOT_FOUND",config="default"}[10m])) > 0
         labels:
           severity: critical
         annotations:
-          summary: B-API-Route unbekannt oder falsch eingerichtet
-          description: KI-Aufrufe enden mit LLM_ROUTE_*. Route in der B-API und METADATA_AGENT_LLM_MODEL prüfen.
+          summary: Konfiguriertes Modell bzw. B-API-Route nicht verfügbar
+          description: KI-Aufrufe mit dem konfigurierten Modell enden mit LLM_ROUTE_* oder LLM_MODEL_NOT_FOUND. Route in der B-API und das Modell (METADATA_AGENT_B_API_*_MODEL) prüfen.
+
+      - alert: MetadataAgentLlmCallerKeyRefused
+        expr: sum by (namespace) (increase(metadata_agent_llm_requests_total{result=~"LLM_AUTH_.*",auth_source="forwarded"}[15m])) > 5
+        labels:
+          severity: warning
+        annotations:
+          summary: Weitergereichte Schlüssel von Aufrufern werden abgelehnt
+          description: Mehr als 5 KI-Aufrufe in 15 Minuten mit dem vom B-API-Proxy weitergereichten Schlüssel enden mit LLM_AUTH_*. Den Schlüsseln der aufrufenden Anwendungen fehlt die LLM-Berechtigung; der eigene Betrieb ist nicht betroffen.
+
+      - alert: MetadataAgentLlmRequestedModelRejected
+        expr: sum by (namespace) (increase(metadata_agent_llm_requests_total{result=~"LLM_AUTH_FORBIDDEN|LLM_ROUTE_.*|LLM_MODEL_NOT_FOUND",auth_source!="forwarded",config="override"}[15m])) > 5
+        labels:
+          severity: warning
+        annotations:
+          summary: Von Anfragen gewählte Modelle oder Routen scheitern
+          description: Mehr als 5 KI-Aufrufe in 15 Minuten mit einem per Anfrage gewählten Provider oder Modell (llm_provider/llm_model) scheitern an Route, Modell oder Berechtigung. Die aufrufende Anwendung nennt ein Modell, das es nicht gibt oder das der Schlüssel nicht darf.
 
       - alert: MetadataAgentLlmThrottled
         expr: sum by (namespace) (increase(metadata_agent_llm_requests_total{result="LLM_RATE_LIMITED"}[15m])) > 5

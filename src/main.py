@@ -223,7 +223,9 @@ async def lifespan(app: FastAPI):
     if settings.internal_port:
         try:
             stop_internal_server = await start_internal_server(
-                create_internal_app(get_internal_settings), settings.internal_port
+                create_internal_app(get_internal_settings),
+                settings.internal_port,
+                host=settings.internal_host,
             )
         except InternalPortUnavailable as e:
             # The API itself keeps running; probes on the internal port fail.

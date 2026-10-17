@@ -27,8 +27,8 @@ jobs:
       - uses: actions/checkout@v7
       - name: helm lint
         run: |
-          helm lint helm/metadata-agent --strict
-          helm template ci helm/metadata-agent --set ingress.enabled=true > /dev/null
+          helm lint helm/metadata-agent --strict --set image.repository=ci/metadata-agent-api
+          helm template ci helm/metadata-agent --set image.repository=ci/metadata-agent-api --set ingress.enabled=true > /dev/null
       - name: promtool
         run: |
           docker run --rm -v "$PWD/helm/metadata-agent:/chart:ro" --entrypoint promtool             prom/prometheus:v3.5.0 check rules /chart/files/alerts.yaml

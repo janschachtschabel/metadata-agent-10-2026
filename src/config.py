@@ -65,7 +65,7 @@ class Settings(BaseSettings):
 
     # API Settings
     app_name: str = "Metadata Agent API"
-    app_version: str = "2.1.0"
+    app_version: str = "2.1.1"
 
     # Logs go to stdout. text: the message alone, as the agent always wrote
     # them; json: one object per line with level, logger, time and trace id.
@@ -75,6 +75,9 @@ class Settings(BaseSettings):
     # Second, internal port for /health, /ready and /metrics (infra.py), not to
     # be exposed by the ingress. Unset: no second server and no /metrics.
     internal_port: Optional[int] = Field(default=None, ge=1, le=65535)
+    # Address the internal port listens on: "::" for an IPv6 (dual-stack)
+    # cluster, where probes reach the pod over IPv6.
+    internal_host: str = "0.0.0.0"
 
     # Largest request body accepted (bytes); larger ones get 413 before they are
     # read. Room for a /upload with a preview image as data URL.
@@ -302,6 +305,9 @@ class Settings(BaseSettings):
             )
         if not self.b_api_router_base:
             self.b_api_router_base = f"{self.b_api_base_url}/api/v1/llm/router"
+        # Also when set explicitly: "/chat/completions" is appended to them.
+        self.b_api_openai_base = self.b_api_openai_base.rstrip("/")
+        self.b_api_academiccloud_base = self.b_api_academiccloud_base.rstrip("/")
         self.b_api_router_base = self.b_api_router_base.rstrip("/")
         return self
 

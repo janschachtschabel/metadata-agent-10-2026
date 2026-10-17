@@ -1,6 +1,6 @@
 # Architektur-Map
 
-Überblick über Metadata Agent 2.1.0: Webkomponente, B-API-Proxy, Agent,
+Überblick über Metadata Agent 2.1: Webkomponente, B-API-Proxy, Agent,
 LLM-Anbindung, angebundene Dienste und Betrieb.
 
 | Datei | Zweck |

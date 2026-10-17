@@ -6,6 +6,12 @@ Intern:   Port {{ .Values.service.internalPort }} - /health, /ready, /metrics (n
 Ingress:  https://{{ .Values.ingress.host }}
 {{- end }}
 Secret:   {{ include "metadata-agent.secretName" . }} (Schlüssel: {{ join ", " .Values.secret.keys }})
+{{- if and .Values.ingress.enabled (ne (.Values.env.METADATA_AGENT_B_API_AUTH_MODE | default "auto") "forward") }}
+
+WARNUNG: Ingress aktiv und B_API_AUTH_MODE={{ .Values.env.METADATA_AGENT_B_API_AUTH_MODE | default "auto" }}.
+Jeder, der den Ingress erreicht, kann Erschließungen auf B_API_KEY auslösen.
+Hinter der B-API gehört der Dienst nicht ins Internet (values.yaml, ingress).
+{{- end }}
 {{- if not .Values.prometheusRule.enabled }}
 
 Hinweis: prometheusRule.enabled=false - die Alarmregeln sind nicht installiert.

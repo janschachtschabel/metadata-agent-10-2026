@@ -1,6 +1,6 @@
 # Abdeckung der Dienstanforderungen von Team 6
 
-Stand: Metadata Agent 2.1.0, 16.10.2026. Abgeglichen mit der Seite
+Stand: Metadata Agent 2.1.1, 17.10.2026. Abgeglichen mit der Seite
 „Dienstanforderungen für den Betrieb durch Team 6“ (Abschnitte 1–7 und
 Checkliste Übergabepaket). Einzelheiten stehen in [UEBERGABE.md](../UEBERGABE.md).
 
@@ -28,12 +28,12 @@ Checkliste Übergabepaket). Einzelheiten stehen in [UEBERGABE.md](../UEBERGABE.m
 | **3. Monitoring und Logging** | | |
 | Prometheus-Basis-Metriken, nur intern | ✅ | `prometheus-client`, auf dem internen Port |
 | Applikationsmetriken | ✅ | HTTP nach Route, LLM-Aufrufe nach Provider/Ergebnis und Dauer, Erschließungen nach `success`/`partial`/`failed`, Aufrufe an abhängige Dienste (gesendet/beantwortet/Dauer), Tokens |
-| Alarmregeln im Helm-Chart | ✅ | acht Regeln als `PrometheusRule` in [helm/metadata-agent/](../helm/metadata-agent/README.md), mit promtool-Tests (UEBERGABE §4); Empfänger legt T6 im Alertmanager fest |
+| Alarmregeln im Helm-Chart | ✅ | zehn Regeln als `PrometheusRule` in [helm/metadata-agent/](../helm/metadata-agent/README.md), mit promtool-Tests (UEBERGABE §4); Empfänger legt T6 im Alertmanager fest |
 | Tracing B3, `x-client-trace-id` durchreichen | ✅ | `x-client-trace-id`, `x-request-id`, `x-b3-*`, `b3` gehen unverändert an B-API, Textextraktion und Repository (eigene Spans erzeugt der Dienst nicht) |
 | Logs nach stdout, JSON/Text, Level per Env | ✅ | `METADATA_AGENT_LOG_FORMAT`, `METADATA_AGENT_LOG_LEVEL`; JSON mit `trace_id` |
 | **4. Repository, Build, Versionierung** | | |
 | Repo-Zugang für T6 | 🟡 | URLs in UEBERGABE §1 (scm.edu-sharing.com); Zugriff für T6 noch bestätigen |
-| CI baut Images automatisch, Prod nur getaggt | ✅ | GitLab CI: Branch-Images für `main`/`develop`, Versions-Images bei Git-Tags (`v2.1.0`) |
+| CI baut Images automatisch, Prod nur getaggt | ✅ | GitLab CI: Branch-Images für `main`/`develop`, Versions-Images bei Git-Tags (`v2.1.1`) |
 | Schlankes Image | 🟡 | `python:3.13-slim`, Multi-Stage, `.dockerignore`, Nutzer `appuser`, nur Laufzeit-Abhängigkeiten. Chromium für Screenshots (~400 MB) macht das Image trotzdem groß |
 | **5. Deployment und Betrieb** | | |
 | Zustand und Skalierung beschrieben | ✅ | zustandslos, horizontal skalierbar; Grenzen: ein Worker je Container, gemeinsames GWDG-Limit (~10 Aufrufe/min) |

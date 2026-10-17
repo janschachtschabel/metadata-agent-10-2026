@@ -84,7 +84,7 @@ Was sich bei Fehlschlägen ändert:
   `…_DEFAULT_VERSION`, `…_NORMALIZATION_ENABLED`, `…_NORMALIZATION_TEMPERATURE`,
   `…_TEXT_EXTRACTION_DEFAULT_METHOD`. Kein Code hat sie gelesen; sind sie noch
   gesetzt, ignoriert der Dienst sie.
-- **Widget:** Es lädt seine Texte als `/widget/i18n/<sprache>.json?v=2.1.0`.
+- **Widget:** Es lädt seine Texte als `/widget/i18n/<sprache>.json?v=<Widget-Version>`.
   Nach dem Update gibt es daher keine Mischung aus neuem Code und alten,
   gecachten Texten.
 
@@ -248,7 +248,7 @@ Response:
 ```json
 {
   "status": "healthy",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "llm_provider": "b-api-openai",
   "b_api_auth_mode": "auto"
 }
@@ -391,11 +391,16 @@ abgelehnt — auch wenn er von außen öffentlich erreichbar ist.
 
 Für Kubernetes gibt es einen Helm-Chart unter
 [`helm/metadata-agent/`](helm/metadata-agent/README.md) (Deployment, Service,
-Ingress, Secret, ServiceMonitor, Alarmregeln). Kurzform:
+Secret, ServiceMonitor, Alarmregeln; kein Ingress hinter der B-API). Kurzform:
 
 ```bash
-kubectl create secret generic metadata-agent   --from-literal=B_API_KEY='<B_API_KEY>'   --from-literal=WLO_GUEST_USERNAME='<WLO_GUEST_USERNAME>'   --from-literal=WLO_GUEST_PASSWORD='<WLO_GUEST_PASSWORD>'
-helm install metadata-agent helm/metadata-agent   --set image.repository=$DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api   --set secret.existingSecret=metadata-agent
+kubectl create secret generic metadata-agent \
+  --from-literal=B_API_KEY='<B_API_KEY>' \
+  --from-literal=WLO_GUEST_USERNAME='<WLO_GUEST_USERNAME>' \
+  --from-literal=WLO_GUEST_PASSWORD='<WLO_GUEST_PASSWORD>'
+helm install metadata-agent helm/metadata-agent \
+  --set image.repository=$DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api \
+  --set secret.existingSecret=metadata-agent
 ```
 
 ---

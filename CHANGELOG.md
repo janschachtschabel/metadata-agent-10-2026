@@ -1,5 +1,32 @@
 # Änderungen
 
+## 2.1.1 — 2026-10-17 — Korrekturen aus dem Review
+
+> **Update:** nichts zu ändern. Wer Alarme oder Abfragen auf
+> `metadata_agent_llm_requests_total` gebaut hat: der Zähler hat zwei Labels mehr.
+> Der Helm-Chart (0.2.1) verlangt `image.repository`.
+
+- **Alarme:** `metadata_agent_llm_requests_total` hat die Labels
+  `auth_source` und `config`. Kritisch melden nur noch Fehler mit dem eigenen
+  Schlüssel und dem konfigurierten Modell; ein abgelehnter weitergereichter
+  Schlüssel oder ein per Anfrage gewähltes, unbekanntes Modell warnen erst
+  gehäuft (zwei neue Regeln, jetzt zehn). Ein unbekanntes Standardmodell
+  (404) ist jetzt ebenfalls kritisch.
+- **Router-Fehler** werden nur noch beim Provider `b-api-router` als solche
+  gelesen; bei anderen Providern ist ein 400 „Unsupported parameter“ ein
+  gewöhnlicher abgelehnter Request ohne Rat zu `LLM_REQUEST_STYLE`.
+- **`llm_model`** in Anfragen: höchstens 200 Zeichen aus `A-Z a-z 0-9 . _ :
+  / @ -`, sonst `422`.
+- **B-API-Adressen** (`…_OPENAI_BASE`, `…_ACADEMICCLOUD_BASE`) verlieren wie
+  die Router-Adresse einen abschließenden `/`.
+- **`METADATA_AGENT_INTERNAL_HOST`** (Default `0.0.0.0`): `::` lässt den
+  internen Port in IPv6-Clustern lauschen.
+- **Helm-Chart 0.2.1:** kein Ingress im Installationsbeispiel, Warnung in
+  `values.yaml` und bei `helm install` (Ingress im Modus `auto`),
+  PodDisruptionBudget, `image.repository` als Pflichtwert, Hinweis zur
+  Secret-Rotation.
+- **Webkomponente 2.1.1:** neu gebaut; nur die Versionsnummer ändert sich.
+
 ## 2.1.0 — 2026-10-14 — Authentifizierung über den B-API-Proxy, ehrliche Fehler
 
 > **Update bestehender Deployments:** keine Änderung nötig; vorher prüfen, ob

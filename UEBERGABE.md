@@ -1,6 +1,6 @@
 # Übergabe an den Betrieb (Team 6)
 
-Stand 2.1.0. Gegliedert nach der Checkliste „Übergabepaket“ aus den
+Stand 2.1.1. Gegliedert nach der Checkliste „Übergabepaket“ aus den
 Anforderungen von Team 6. Einzelheiten stehen in
 [ENV-PARAMETER.md](ENV-PARAMETER.md) und [DEPLOYMENT.md](DEPLOYMENT.md);
 dieses Dokument verweist dorthin, statt sie zu wiederholen. Felder in
@@ -13,7 +13,7 @@ Anforderungen erfüllt sind, steht in
 | | |
 |---|---|
 | Repo | API: <https://scm.edu-sharing.com/edu-sharing/projects/wlo/metaservices/metadata-agent>; Webkomponente: <https://scm.edu-sharing.com/edu-sharing/projects/wlo/metaservices/metadata-agent-webcomponent> (das gebaute Widget liegt im API-Repo unter `src/static/widget/`). Ob T6 Zugriff hat, ist noch zu bestätigen. |
-| CI | `.gitlab-ci.yml` baut bei jedem Push auf `main`/`develop` ein Image mit dem Branch als Tag und bei jedem Git-Tag ein Image mit der Version (z.B. `v2.1.0`). Produktion nur mit Versions-Tags. |
+| CI | `.gitlab-ci.yml` baut bei jedem Push auf `main`/`develop` ein Image mit dem Branch als Tag und bei jedem Git-Tag ein Image mit der Version (z.B. `v2.1.1`). Produktion nur mit Versions-Tags. |
 | GitLab-CI/CD-Variablen | Die Docker-Jobs in `.gitlab-ci.yml` brauchen: `DIND_IMAGE`, `DIND_HOST`, `DIND_DRIVER`, `DIND_TLS_CERTDIR` (Docker-in-Docker), `DOCKER_REGISTRY`, `DOCKER_USERNAME`, `DOCKER_PASSWORD` (maskiert). Test- und Ruff-Jobs brauchen keine. Die Webkomponente braucht keine eigenen Variablen. |
 | GitHub-Spiegel | `.github/workflows/docker-publish.yml`: Tests, Chart-Prüfung und Image-Bau bei jedem Push; nach DockerHub nur mit Secret `DOCKERHUB_PASSWORD` |
 | Helm-Chart | [`helm/metadata-agent/`](helm/metadata-agent/README.md); die CI prüft ihn mit `helm lint` und die Alarmregeln mit `promtool` (Jobs `helm lint`, `alert rules`) |
@@ -167,7 +167,9 @@ Sonst laufen Anfragen ohne Header im Modus `auto` auf den eigenen `B_API_KEY`.
   - `metadata_agent_http_requests_total` und `…_duration_seconds` (nach
     Methode, Routen-Vorlage, Status);
   - `metadata_agent_llm_requests_total` und `…_duration_seconds` (nach
-    Provider und Ergebnis: `ok` oder Fehlercode);
+    Provider und Ergebnis: `ok` oder Fehlercode); der Zähler zusätzlich nach
+    `auth_source` (`forwarded`, `static`, `openai`, `none`) und `config`
+    (`default`, oder `override`, wenn die Anfrage Provider/Modell gewählt hat);
   - `metadata_agent_generations_total` (nach `success`, `partial`, `failed`);
   - `metadata_agent_upstream_requests_total` (gesendet),
     `…_responses_total` (beantwortet, nach HTTP-Status) und
@@ -179,13 +181,18 @@ Sonst laufen Anfragen ohne Header im Modus `auto` auf den eigenen `B_API_KEY`.
 - **Logs** gehen nach stdout. `METADATA_AGENT_LOG_FORMAT=json` schreibt ein
   Objekt je Zeile mit `time`, `level`, `logger`, `message` und `trace_id`.
   `METADATA_AGENT_LOG_LEVEL` steuert die Schwelle.
-- **Alarmregeln:** acht Regeln in
+- **Alarmregeln:** zehn Regeln in
   [`helm/metadata-agent/files/alerts.yaml`](helm/metadata-agent/files/alerts.yaml),
-  vom Chart als `PrometheusRule` installiert und je Namespace ausgewertet:
+  vom Chart als `PrometheusRule` installiert und je Namespace ausgewertet.
+  Kritisch sind nur Fehler mit dem eigenen Schlüssel und dem konfigurierten
+  Modell; Fehler mit dem weitergereichten Schlüssel eines Aufrufers oder einem
+  per Anfrage gewählten Modell warnen nur.
   | Regel | Schwere | Löst aus bei |
   |---|---|---|
-  | `MetadataAgentLlmKeyRefused` | critical | einem `LLM_AUTH_*` in 10 min |
-  | `MetadataAgentLlmRouteMisconfigured` | critical | einem `LLM_ROUTE_*` in 10 min |
+  | `MetadataAgentLlmKeyRefused` | critical | einem `LLM_AUTH_*` in 10 min mit eigenem oder fehlendem Schlüssel und konfiguriertem Modell |
+  | `MetadataAgentLlmRouteMisconfigured` | critical | einem `LLM_ROUTE_*` oder `LLM_MODEL_NOT_FOUND` in 10 min mit konfiguriertem Modell |
+  | `MetadataAgentLlmCallerKeyRefused` | warning | mehr als 5 × `LLM_AUTH_*` in 15 min mit weitergereichtem Schlüssel |
+  | `MetadataAgentLlmRequestedModelRejected` | warning | mehr als 5 Fehlern zu Route, Modell oder Berechtigung in 15 min mit per Anfrage gewähltem Modell |
   | `MetadataAgentLlmThrottled` | warning | mehr als 5 × `LLM_RATE_LIMITED` in 15 min |
   | `MetadataAgentLlmUnreachable` | warning | mehr als 3 × `LLM_UNREACHABLE` in 10 min |
   | `MetadataAgentGenerationsFailing` | warning | über 50 % `failed` in 30 min (ab 3 Läufen) |
@@ -249,8 +256,11 @@ Browser ─ edu-sharing ─ B-API-Proxy ─┐
 
 Helm-Chart: [`helm/metadata-agent/`](helm/metadata-agent/README.md) mit
 Deployment (Probes auf dem internen Port, 120 s Grace-Period für laufende
-Erschließungen), Service, optionalem Ingress (Annotationen `proxy-read-timeout
-120`, `proxy-body-size 20m`), Secret, `ServiceMonitor` und `PrometheusRule`.
+Erschließungen), Service, PodDisruptionBudget, Secret, `ServiceMonitor` und
+`PrometheusRule`. Ein Ingress (Annotationen `proxy-read-timeout 120`,
+`proxy-body-size 20m`) ist abschaltbar vorhanden, gehört aber nicht vor einen
+Dienst hinter der B-API: Der Proxy ruft den Service im Cluster auf; bei
+aktivem Ingress im Modus `auto` warnt `helm install`.
 Die Werte in `values.yaml` sind per Test mit dem Code abgeglichen. Geprüft mit
 `helm lint --strict` und kubeconform gegen Kubernetes 1.33 (16.10.2026), nicht
 in einem echten Cluster installiert. `/debug/*` ist per

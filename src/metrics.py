@@ -7,7 +7,10 @@ runtime metrics. On top come the few the operators of this service need:
 - metadata_agent_http_requests_total / _duration_seconds: by method, route
   template (/nodes/{node_id}, never the id itself) and status
 - metadata_agent_llm_requests_total / _duration_seconds: by provider and
-  result - "ok" or the error code (LLM_AUTH_FORBIDDEN, LLM_RATE_LIMITED, …)
+  result - "ok" or the error code (LLM_AUTH_FORBIDDEN, LLM_RATE_LIMITED, …);
+  the counter also by auth_source (forwarded, static, openai, none) and config
+  (default, or override when the request picked provider or model), so alerts
+  can tell the operator's problems from the caller's
 - metadata_agent_generations_total: /generate runs by status
   (success, partial, failed)
 - metadata_agent_upstream_requests_total / _responses_total /
@@ -50,8 +53,8 @@ HTTP_DURATION = Histogram(
 )
 LLM_REQUESTS = Counter(
     "metadata_agent_llm_requests_total",
-    "LLM calls by provider and result (ok or error code)",
-    ["provider", "result"],
+    "LLM calls by provider, result (ok or error code), key source and config origin",
+    ["provider", "result", "auth_source", "config"],
 )
 LLM_DURATION = Histogram(
     "metadata_agent_llm_request_duration_seconds",

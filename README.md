@@ -300,7 +300,7 @@ docker run -d -p 8000:8000 --env-file .env metadata-agent-api
 
 ```bash
 curl http://localhost:8000/health
-# → {"status": "healthy", "version": "2.1.0", "llm_provider": "b-api-openai", "b_api_auth_mode": "auto"}
+# → {"status": "healthy", "version": "2.1.1", "llm_provider": "b-api-openai", "b_api_auth_mode": "auto"}
 
 curl -X POST http://localhost:8000/generate \
   -H "Content-Type: application/json" \
@@ -1381,7 +1381,7 @@ curl -X POST http://localhost:8000/screenshot \
 #### GET /health, GET /ready
 
 ```json
-{ "status": "healthy", "version": "2.1.0", "llm_provider": "b-api-openai", "b_api_auth_mode": "auto" }
+{ "status": "healthy", "version": "2.1.1", "llm_provider": "b-api-openai", "b_api_auth_mode": "auto" }
 ```
 
 `/ready` antwortet `{"status": "ready"}` oder `503` mit den Gründen, wenn die
@@ -1954,7 +1954,7 @@ Unter `/widget/examples/` sind interaktive Beispiele verfügbar:
 
 ## Deployment
 
-> **Bestehendes Deployment auf 2.1.0 aktualisieren:** Es muss nichts geändert
+> **Bestehendes Deployment auf 2.1.x aktualisieren:** Es muss nichts geändert
 > werden. Was man vorher prüfen sollte, steht unter
 > [Update von 2.0.x auf 2.1.0](DEPLOYMENT.md#update-von-20x-auf-210).
 
@@ -2027,11 +2027,16 @@ railway up
 
 Für Kubernetes gibt es einen Helm-Chart unter
 [`helm/metadata-agent/`](helm/metadata-agent/README.md) (Deployment, Service,
-Ingress, Secret, ServiceMonitor, Alarmregeln). Kurzform:
+Secret, ServiceMonitor, Alarmregeln; kein Ingress hinter der B-API). Kurzform:
 
 ```bash
-kubectl create secret generic metadata-agent   --from-literal=B_API_KEY='<B_API_KEY>'   --from-literal=WLO_GUEST_USERNAME='<WLO_GUEST_USERNAME>'   --from-literal=WLO_GUEST_PASSWORD='<WLO_GUEST_PASSWORD>'
-helm install metadata-agent helm/metadata-agent   --set image.repository=$DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api   --set secret.existingSecret=metadata-agent
+kubectl create secret generic metadata-agent \
+  --from-literal=B_API_KEY='<B_API_KEY>' \
+  --from-literal=WLO_GUEST_USERNAME='<WLO_GUEST_USERNAME>' \
+  --from-literal=WLO_GUEST_PASSWORD='<WLO_GUEST_PASSWORD>'
+helm install metadata-agent helm/metadata-agent \
+  --set image.repository=$DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api \
+  --set secret.existingSecret=metadata-agent
 ```
 
 ---

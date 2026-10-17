@@ -2,8 +2,9 @@
 # checked against the code (tests/test_helm_chart.py).
 
 image:
-  repository: registry.example/projects/wlo/meta-services/metadata-agent-api
-  tag: v2.1.0
+  # Required, e.g. <registry>/projects/wlo/meta-services/metadata-agent-api.
+  repository: ""
+  tag: v2.1.1
   pullPolicy: IfNotPresent
 imagePullSecrets: []
 
@@ -16,6 +17,11 @@ service:
   port: 8000          # API, /docs, /widget/* - the only port behind the ingress
   internalPort: 9000  # /health, /ready, /metrics - never behind the ingress
 
+# Behind the B-API (variant A) the service must NOT be reachable from the
+# internet: the B-API proxy calls the Service inside the cluster. With an
+# ingress and METADATA_AGENT_B_API_AUTH_MODE=auto anyone could run extractions
+# on B_API_KEY. Enable only for variant B behind an access restriction, or set
+# the auth mode to forward and allow only the B-API's source addresses.
 ingress:
   enabled: false
   className: nginx
@@ -78,6 +84,11 @@ serviceMonitor:
 prometheusRule:
   enabled: true
   labels: {}
+
+# Keeps one pod running while nodes are drained (only with replicaCount > 1).
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
 
 nodeSelector: {}
 tolerations: []
