@@ -9,10 +9,17 @@ from urllib.parse import urlsplit
 
 # Default throughput per provider. Each provider has its own budget.
 #
-# b-api-academiccloud (measured 2026-08-12, staging): two requests in flight,
-# about two per second. A third parallel request is refused with 429 at once,
-# without `retry-after`, so a client has to stay under the limit; at 3 req/s
-# the effective throughput falls below what 2 req/s delivers.
+# b-api-academiccloud (GWDG) has two measured limits, both per B-API key, not
+# per process:
+# - two requests in flight (2026-08-12, staging, deepseek-v4-flash). A third
+#   parallel request is refused with 429 at once, without `retry-after`, so a
+#   client has to stay under the limit; at 3 req/s the effective throughput
+#   fell below what 2 req/s delivered.
+# - about 10 calls per minute, ~200 per hour (2026-10-15, router with Qwen
+#   models). For a whole /generate (~50 calls) this is the tighter one.
+# The defaults below only encode the first: they are per process and cannot
+# know the replica count. Lower both ENV overrides for the per-minute limit and
+# divide by the number of instances (Helm: sharedLlmLimit, values.yaml).
 #
 # b-api-openai: a real /generate run on 2026-10-06 with gpt-6-luna and 20
 # requests in flight finished without a 429. The August measurement had found
@@ -41,6 +48,9 @@ PROVIDER_LIMITS: dict[str, dict[str, Any]] = {
 # for the ENV default.
 MAX_WORKERS = 20
 
+# Proxy timeout of the ingress and termination grace period of the Helm chart.
+INGRESS_TIMEOUT_SECONDS = 120
+
 # provider name -> which budget it draws from
 LIMIT_GROUPS = {
     "b-api-openai": "b-api-openai",
@@ -65,7 +75,7 @@ class Settings(BaseSettings):
 
     # API Settings
     app_name: str = "Metadata Agent API"
-    app_version: str = "2.1.1"
+    app_version: str = "3.0.0"
 
     # Logs go to stdout. text: the message alone, as the agent always wrote
     # them; json: one object per line with level, logger, time and trace id.
@@ -202,6 +212,22 @@ class Settings(BaseSettings):
     # ingress allows for a whole /generate; long pages need more than 60 s.
     request_timeout: int = 90
 
+    # Upper bound for a whole /generate run (all field calls, retries,
+    # geocoding), in seconds - and for /detect-content-type and /extract-field.
+    # Below the 120 s of the ingress, so the client gets the agent's 504 with
+    # request id instead of a bare one from the proxy, and the field calls stop
+    # instead of running on for nobody.
+    generate_timeout: float = Field(default=110, gt=0)
+
+    # Upper bound for /upload and /nodes (screenshot, every write request; the
+    # read-back of a finished node runs after it with its own 10 s,
+    # READ_BACK_SECONDS, on a request that needs no cleanup), in seconds. Lower
+    # than generate_timeout: when the limit hits, a node this call created is
+    # looked up (if its id never arrived, up to 5 s) and discarded (up to 5 s);
+    # deadline + both + preStop (5 s) must fit into the 120 s of ingress and
+    # grace period.
+    upload_timeout: float = Field(default=100, gt=0)
+
     # Default Schema Settings
     default_context: str = "default"
 
@@ -333,6 +359,7 @@ class Settings(BaseSettings):
         """
         provider = provider_override or self.llm_provider
 
+        config: dict[str, Any]
         if provider == "b-api-openai":
             config = {
                 "provider": "b-api-openai",
@@ -413,6 +440,34 @@ class Settings(BaseSettings):
                 "auf reasoning (GPT-5/6) oder classic (alle anderen) setzen – sonst "
                 "wird classic gesendet."
             )
+
+        missing = [
+            name
+            for name, value in (
+                ("WLO_GUEST_USERNAME", self.wlo_guest_username),
+                ("WLO_GUEST_PASSWORD", self.wlo_guest_password),
+            )
+            if not value
+        ]
+        if missing:
+            warnings.append(
+                f"{' und '.join(missing)} {'fehlt' if len(missing) == 1 else 'fehlen'}: "
+                "/ready meldet 503, /upload und /nodes antworten mit 503."
+            )
+
+        # Deadline + what runs after it must fit the 120 s of ingress and grace
+        # period: /upload looks up and discards its node (5 s each), both wait
+        # for preStop (5 s); /generate needs its answer and preStop.
+        for name, deadline, after in (
+            ("METADATA_AGENT_UPLOAD_TIMEOUT", self.upload_timeout, 15),
+            ("METADATA_AGENT_GENERATE_TIMEOUT", self.generate_timeout, 10),
+        ):
+            if deadline + after > INGRESS_TIMEOUT_SECONDS:
+                warnings.append(
+                    f"{name}={deadline:g}: mit {after} s danach (Aufräumen, preStop) "
+                    f"über den {INGRESS_TIMEOUT_SECONDS} s von Ingress und "
+                    "Grace-Period – der Proxy bricht vorher ab."
+                )
 
         environments: dict[str, list[str]] = {}
         for name, url in (

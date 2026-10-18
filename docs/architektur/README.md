@@ -1,7 +1,12 @@
 # Architektur-Map
 
-Überblick über Metadata Agent 2.1: Webkomponente, B-API-Proxy, Agent,
+Überblick über Metadata Agent 3.0: Webkomponente, B-API-Proxy, Agent,
 LLM-Anbindung, angebundene Dienste und Betrieb.
+
+> **Stand der Dateien (18.10.2026):** 3.0.0 – Titel, NetworkPolicy und
+> schreibgeschütztes Dateisystem im Chart, `/generate` höchstens 110 s. HTML mit
+> Archify 3.1.0 neu erzeugt (alle Prüfungen bestanden), PNG und SVG daraus
+> exportiert.
 
 | Datei | Zweck |
 |---|---|

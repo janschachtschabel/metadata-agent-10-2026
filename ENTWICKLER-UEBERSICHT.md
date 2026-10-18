@@ -38,7 +38,7 @@ Der komplette Umschlag kann **unverändert** als `/upload`-Body gesendet werden.
 ### Body-Format beim Upload
 
 **Nimm Form 1:** die `/generate`-Antwort unverändert weiterreichen. `/generate`
-antwortet **flach** — Umschlag und Felder auf einer Ebene ([main.py](src/main.py:1786)).
+antwortet **flach** — Umschlag und Felder auf einer Ebene ([generate.py](src/api/routers/generate.py:595)).
 Nichts umbauen, nichts verlieren.
 
 Form 2 und 3 sind gleichwertig und schreiben dieselben Felder; sie existieren,

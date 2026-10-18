@@ -127,11 +127,14 @@ async def test_only_a_few_browsers_run_at_once(monkeypatch, public_url):
     service = module.ScreenshotService()
     active = peak = 0
     release = asyncio.Event()
+    slots_full = asyncio.Event()
 
     async def capture(*args):
         nonlocal active, peak
         active += 1
         peak = max(peak, active)
+        if active == module.MAX_PARALLEL_CAPTURES:
+            slots_full.set()
         try:
             await release.wait()
             return module.ScreenshotResult(b"image")
@@ -141,7 +144,10 @@ async def test_only_a_few_browsers_run_at_once(monkeypatch, public_url):
     monkeypatch.setattr(service, "_capture_playwright", capture)
     burst = module.MAX_PARALLEL_CAPTURES + 3
     tasks = [asyncio.create_task(service.capture(URL, delay=0)) for _ in range(burst)]
-    await asyncio.sleep(0.05)
+    await asyncio.wait_for(slots_full.wait(), 2)
+    # Give every queued capture its turns on the loop - none may get a slot.
+    for _ in range(10 * burst):
+        await asyncio.sleep(0)
     assert peak == module.MAX_PARALLEL_CAPTURES
     release.set()
     results = await asyncio.gather(*tasks)

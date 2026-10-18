@@ -1,0 +1,74 @@
+{
+ "_asked": [
+  [
+   "ccm:oeh_publisher",
+   "cclom:general_description",
+   "schema:contactPoint",
+   "schema:maximumAttendeeCapacity",
+   "schema:isAccessibleForFree",
+   "schema:startDate",
+   "schema:doorTime",
+   "schema:startTime",
+   "ccm:wwwurl",
+   "geo:latitude",
+   "geo:longitude",
+   "cclom:general_language",
+   "schema:location"
+  ]
+ ],
+ "_origins": {
+  "cclom:general_description": "ai",
+  "cclom:general_language": "ai",
+  "cclom:title": "user",
+  "ccm:oeh_publisher": "ai",
+  "ccm:wwwurl": "ai",
+  "geo:latitude": "ai",
+  "geo:longitude": "ai",
+  "schema:contactPoint": "ai",
+  "schema:doorTime": "ai",
+  "schema:isAccessibleForFree": "ai",
+  "schema:location": "ai",
+  "schema:maximumAttendeeCapacity": "ai",
+  "schema:startDate": "ai",
+  "schema:startTime": "ai"
+ },
+ "contextName": "default",
+ "language": "de",
+ "metadata": {
+  "cclom:general_description": "Neu",
+  "cclom:general_language": [],
+  "cclom:title": "Mein Titel",
+  "ccm:oeh_publisher": "",
+  "ccm:wwwurl": [],
+  "geo:latitude": [],
+  "geo:longitude": [],
+  "schema:contactPoint": [],
+  "schema:doorTime": [],
+  "schema:isAccessibleForFree": null,
+  "schema:location": [
+   {}
+  ],
+  "schema:maximumAttendeeCapacity": null,
+  "schema:startDate": [
+   "2026-05-03"
+  ],
+  "schema:startTime": []
+ },
+ "metadataset": "event.json",
+ "processing": {
+  "content_type_detection": {
+   "method": "preselected",
+   "schema_file": "event.json"
+  },
+  "errors": [],
+  "fields_extracted": 2,
+  "fields_failed": 0,
+  "fields_total": 15,
+  "llm_model": "test-model",
+  "llm_provider": "b-api-openai",
+  "status": "success",
+  "success": true,
+  "warnings": []
+ },
+ "schemaVersion": "latest"
+}

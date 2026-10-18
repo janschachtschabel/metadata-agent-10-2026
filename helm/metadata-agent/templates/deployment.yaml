@@ -13,15 +13,17 @@ spec:
     metadata:
       labels:
         {{- include "metadata-agent.labels" . | nindent 8 }}
-      annotations:
-        # Restart the pods when a chart-created Secret changes.
-        checksum/secret: {{ .Values.secret.values | toJson | sha256sum }}
+      {{- /* No checksum/secret annotation (audit OPS-11): an unsalted hash of
+             the secret values is readable by anyone who can read Deployments.
+             After a Secret change: kubectl rollout restart (values.yaml). */}}
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      # The agent never talks to the Kubernetes API.
+      automountServiceAccountToken: false
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
@@ -36,12 +38,34 @@ spec:
             - name: internal
               containerPort: {{ .Values.service.internalPort }}
           env:
+            {{- $shared := .Values.sharedLlmLimit }}
             {{- range $name, $value := .Values.env }}
+            {{- if has $name (list "METADATA_AGENT_INTERNAL_PORT" "FORWARDED_ALLOW_IPS") }}
+            {{- fail (printf "env.%s: set by the chart (service.internalPort, forwardedAllowIps) - remove it from the values" $name) }}
+            {{- end }}
+            {{- if and $shared.enabled (has $name (list "METADATA_AGENT_LLM_MAX_CONCURRENT_REQUESTS" "METADATA_AGENT_LLM_MAX_REQUESTS_PER_SECOND")) }}
+            {{- fail (printf "env.%s: set by the chart from sharedLlmLimit - remove it from the values or disable sharedLlmLimit" $name) }}
+            {{- end }}
             - name: {{ $name }}
               value: {{ $value | quote }}
             {{- end }}
+            # The port the probes and the ServiceMonitor use - one value.
+            - name: METADATA_AGENT_INTERNAL_PORT
+              value: {{ .Values.service.internalPort | quote }}
+            - name: FORWARDED_ALLOW_IPS
+              value: {{ .Values.forwardedAllowIps | quote }}
+            {{- if $shared.enabled }}
+            # The GWDG limit is shared by all replicas, the throttle counts per
+            # pod (values.yaml, sharedLlmLimit).
+            - name: METADATA_AGENT_LLM_MAX_CONCURRENT_REQUESTS
+              value: {{ max 1 (div (int $shared.concurrentRequests) (max 1 (int .Values.replicaCount))) | quote }}
+            - name: METADATA_AGENT_LLM_MAX_REQUESTS_PER_SECOND
+              value: {{ printf "%.4f" (divf $shared.requestsPerMinute (mulf 60 (max 1 (int .Values.replicaCount)))) | quote }}
+            {{- end }}
             {{- /* optional: a key the configured mode does not need may be
-                   missing; /ready reports a mode that cannot work. */}}
+                   missing; /ready reports a mode that cannot work and missing
+                   repository credentials (WLO_GUEST_*), so a typo in
+                   existingSecret leaves the pods unready. */}}
             {{- range .Values.secret.keys }}
             - name: {{ . }}
               valueFrom:
@@ -68,8 +92,31 @@ spec:
             preStop:
               exec:
                 command: ["sleep", "5"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: home
+              mountPath: /home/appuser
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: {{ .Values.scratchVolumes.tmpSizeLimit }}
+        - name: home
+          emptyDir:
+            sizeLimit: {{ .Values.scratchVolumes.homeSizeLimit }}
+      {{- with .Values.topologySpread }}
+      {{- if .enabled }}
+      topologySpreadConstraints:
+        - maxSkew: {{ .maxSkew }}
+          topologyKey: {{ .topologyKey }}
+          whenUnsatisfiable: {{ .whenUnsatisfiable }}
+          labelSelector:
+            matchLabels:
+              {{- include "metadata-agent.selectorLabels" $ | nindent 14 }}
+      {{- end }}
+      {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

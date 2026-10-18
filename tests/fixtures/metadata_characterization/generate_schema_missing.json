@@ -1,0 +1,25 @@
+{
+ "_asked": [],
+ "contextName": "default",
+ "language": "de",
+ "metadata": {},
+ "metadataset": "fehlt.json",
+ "processing": {
+  "error": {
+   "code": "GENERATION_FAILED",
+   "message": "Schema loading failed: Schema fehlt.json not found"
+  },
+  "errors": [
+   "Schema loading failed: Schema fehlt.json not found"
+  ],
+  "fields_extracted": 0,
+  "fields_failed": 1,
+  "fields_total": 0,
+  "llm_model": "test-model",
+  "llm_provider": "b-api-openai",
+  "status": "failed",
+  "success": false,
+  "warnings": []
+ },
+ "schemaVersion": "latest"
+}

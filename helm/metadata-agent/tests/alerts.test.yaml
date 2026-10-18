@@ -31,6 +31,76 @@ tests:
       exp_annotations: &id001
         summary: Konfiguriertes Modell bzw. B-API-Route nicht verfügbar
         description: KI-Aufrufe mit dem konfigurierten Modell enden mit LLM_ROUTE_* oder LLM_MODEL_NOT_FOUND. Route in der B-API und das Modell (METADATA_AGENT_B_API_*_MODEL) prüfen.
+# OPS-06: a series that first appears at 1 - the first failure on a fresh pod
+# before the first scrape (or a label set nobody pre-created). increase()
+# alone sees no rise there.
+- interval: 1m
+  input_series:
+  - series: metadata_agent_llm_requests_total{namespace="wlo",pod="new",provider="b-api-openai",result="LLM_AUTH_REJECTED",auth_source="static",config="default"}
+    values: 1x10
+  - series: metadata_agent_llm_requests_total{namespace="wlo",pod="new",provider="b-api-openai",result="LLM_MODEL_NOT_FOUND",auth_source="static",config="default"}
+    values: _x3 1x7
+  alert_rule_test:
+  - eval_time: 5m
+    alertname: MetadataAgentLlmKeyRefused
+    exp_alerts:
+    - exp_labels:
+        severity: critical
+        namespace: wlo
+      exp_annotations: *id002
+  - eval_time: 5m
+    alertname: MetadataAgentLlmRouteMisconfigured
+    exp_alerts:
+    - exp_labels:
+        severity: critical
+        namespace: wlo
+      exp_annotations: *id001
+# ... and stops once that failure is older than the window.
+- interval: 1m
+  input_series:
+  - series: metadata_agent_llm_requests_total{namespace="wlo",pod="old",provider="b-api-openai",result="LLM_AUTH_REJECTED",auth_source="static",config="default"}
+    values: 1x30
+  - series: metadata_agent_llm_requests_total{namespace="wlo",pod="old",provider="b-api-openai",result="LLM_ROUTE_NOT_FOUND",auth_source="static",config="default"}
+    values: 1x30
+  # Pre-created at start (src/metrics.py) and never failed.
+  - series: metadata_agent_llm_requests_total{namespace="wlo",pod="new",provider="b-api-openai",result="LLM_AUTH_MISSING",auth_source="none",config="default"}
+    values: _x15 0x15
+  alert_rule_test:
+  - eval_time: 20m
+    alertname: MetadataAgentLlmKeyRefused
+    exp_alerts: []
+  - eval_time: 20m
+    alertname: MetadataAgentLlmRouteMisconfigured
+    exp_alerts: []
+# A scrape gap of more than 10 minutes (Prometheus restart, target unreachable)
+# does not make an old counter look new.
+- interval: 1m
+  input_series:
+  - series: metadata_agent_llm_requests_total{namespace="wlo",pod="old",provider="b-api-openai",result="LLM_AUTH_REJECTED",auth_source="static",config="default"}
+    values: 1x20 _x15 1x10
+  - series: metadata_agent_llm_requests_total{namespace="wlo",pod="old",provider="b-api-openai",result="LLM_ROUTE_NOT_FOUND",auth_source="static",config="default"}
+    values: 1x20 _x15 1x10
+  alert_rule_test:
+  - eval_time: 38m
+    alertname: MetadataAgentLlmKeyRefused
+    exp_alerts: []
+  - eval_time: 38m
+    alertname: MetadataAgentLlmRouteMisconfigured
+    exp_alerts: []
+# A forwarded key or a requested model never pages, new series or not.
+- interval: 1m
+  input_series:
+  - series: metadata_agent_llm_requests_total{namespace="wlo",pod="new",provider="b-api-openai",result="LLM_AUTH_FORBIDDEN",auth_source="forwarded",config="default"}
+    values: 1x10
+  - series: metadata_agent_llm_requests_total{namespace="wlo",pod="new",provider="b-api-openai",result="LLM_ROUTE_NOT_FOUND",auth_source="static",config="override"}
+    values: 1x10
+  alert_rule_test:
+  - eval_time: 5m
+    alertname: MetadataAgentLlmKeyRefused
+    exp_alerts: []
+  - eval_time: 5m
+    alertname: MetadataAgentLlmRouteMisconfigured
+    exp_alerts: []
 - interval: 1m
   input_series:
   - series: metadata_agent_llm_requests_total{namespace="wlo",provider="b-api-openai",result="ok",auth_source="static",config="default"}
@@ -236,6 +306,21 @@ tests:
   - series: metadata_agent_upstream_responses_total{namespace="wlo",service="text-extraction",status="503"}
     values: 0 1 1x9
   alert_rule_test:
+  - eval_time: 10m
+    alertname: MetadataAgentUpstreamServerErrors
+    exp_alerts: []
+# OPS-13: service="other" is any URL a caller hands in (preview images):
+# their outages are not ours.
+- interval: 1m
+  input_series:
+  - series: metadata_agent_upstream_responses_total{namespace="wlo",service="other",status="502"}
+    values: 0+1x10
+  - series: metadata_agent_upstream_requests_total{namespace="wlo",service="other"}
+    values: 0+2x10
+  alert_rule_test:
+  - eval_time: 10m
+    alertname: MetadataAgentUpstreamUnanswered
+    exp_alerts: []
   - eval_time: 10m
     alertname: MetadataAgentUpstreamServerErrors
     exp_alerts: []

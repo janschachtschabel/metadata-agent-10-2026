@@ -26,6 +26,7 @@ from urllib.parse import urlsplit
 
 import httpx
 import pytest
+from browser_requirement import browser_missing
 
 from src import main
 
@@ -125,10 +126,10 @@ def _host_page(extra: str = "", layout: str = "default") -> str:
 @pytest.fixture
 async def browser():
     if not (DIST / "main.js").exists():
-        pytest.skip("widget bundle not built")
+        browser_missing("widget bundle not built")
     async with async_api.async_playwright() as playwright:
         if not Path(playwright.chromium.executable_path).exists():
-            pytest.skip("Chromium missing: uv run playwright install chromium")
+            browser_missing("Chromium missing: uv run playwright install chromium")
         instance = await playwright.chromium.launch()
         try:
             yield instance

@@ -1,6 +1,6 @@
 # `<metadata-agent-canvas>` — Kompaktreferenz
 
-Stand: verifiziert gegen das aktuelle `src/static/widget/dist/main.js` und `src/main.py`.
+Stand: verifiziert gegen das aktuelle `src/static/widget/dist/main.js` und `src/api/routers/widget.py`.
 
 ---
 
@@ -57,7 +57,7 @@ Floating Controls, Reset-Button und Sprachumschalter sind in **allen** Layouts a
 | `prueftisch` | `reviewtable`, `table`, `qa`, `prueftisch-gross`, `prueftisch-large`, `reviewtable-large`, `qa-large` |
 | `prueftisch-org` | `reviewtable-org`, `qa-org`, `prueftisch-org-large`, `reviewtable-org-large`, `qa-org-large` |
 
-> ⚠️ **Abweichung zur README:** Die `-gross`/`-large`-Aliase setzen **keine** 2 Spalten. `getLayout()` löst nur den Namen auf. Für 2 Spalten zusätzlich `columns="2"` setzen.
+> ⚠️ Die `-gross`/`-large`-Aliase setzen **keine** 2 Spalten. `getLayout()` löst nur den Namen auf. Für 2 Spalten zusätzlich `columns="2"` setzen.
 > ⚠️ `layout="readonly"` ist ein Alias auf `default` — schaltet **nicht** readonly. Dafür `readonly="true"`.
 
 ---
@@ -146,7 +146,7 @@ canvas.addEventListener('uploadResult',  e => {/* nach /upload */});
 canvas.addEventListener('reloadFromPage', () => {/* "Seite neu laden", Plugin-Modus */});
 ```
 
-> ⚠️ `GET /widget/info` nennt zusätzlich `extractionComplete` und `contentTypeDetected` — **die existieren im aktuellen Build nicht.**
+`GET /widget/info` nennt genau diese vier Events (`events`) und `plugin-extract` als Event, das man an die Komponente schickt (`incoming_events`).
 
 ### Payload `metadataChange` / `metadataSubmit`
 
@@ -196,17 +196,23 @@ Gleiche `instance-id` → geteilter State. Events feuern nur von der **ersten re
 |---|---|---|
 | **Lesen** (Metadaten + Volltext aus Node) | ✅ `input-mode="nodeId"`, Node-ID **manuell ins Feld tippen** | ✅ `POST /generate` mit `input_source: "node_id"` |
 | **Ändern** (im Canvas editieren) | ✅ | ✅ (`existing_metadata`) |
-| **Zurückspeichern in denselben Node** | ❌ | ❌ |
+| **Zurückspeichern in denselben Node** | ❌ | ✅ `POST /nodes` mit `node_id`, bis 2 Stunden nach dem Anlegen |
 
 **Details:**
 
 - **Lesen:** `startNodeIdExtraction()` ruft `POST /generate` mit `input_source: "node_id"`, `node_id`, `include_core: true`, `enable_geocoding: true`, `normalize: true` und — falls schon Felder gefüllt sind — `existing_metadata`. Serverseitig holt `InputSourceService` `…/node/v1/nodes/-home-/{id}/metadata` + `…/textContent`. `input_source: "node_url"` nimmt zusätzlich die `ccm:wwwurl` als Crawler-Fallback, wenn kein Volltext hinterlegt ist.
-- **Kein `node-id`-Attribut.** Die Input-Liste des Custom Elements enthält `text`, `url`, `inputMode` — aber **kein** `nodeId`. `GET /widget/info` dokumentiert `node-id` und `source-url`; beide existieren als Element-Attribute nicht. Node-ID ist derzeit nur über das UI-Eingabefeld setzbar.
-- **Speichern:** `POST /upload` legt **immer einen neuen Node** im konfigurierten Inbox-Ordner an (`_create_node` → `_ensure_aspects` → `_set_metadata` → Collections → Extended Data → Workflow). Es gibt keinen Endpunkt, der einen vorhandenen Node aktualisiert.
+- **Kein `node-id`-Attribut.** Die Input-Liste des Custom Elements enthält `text`, `url`, `inputMode` — aber **kein** `nodeId` und kein `sourceUrl`; `GET /widget/info` listet beide auch nicht. Node-ID ist derzeit nur über das UI-Eingabefeld setzbar.
+- **Speichern (Widget):** Der Upload-Button ruft `POST /upload`. Das legt einen **neuen Node** im konfigurierten Inbox-Ordner an (`_create_node` → `_ensure_aspects` → `_set_metadata` → Collections → Extended Data → Workflow). Mit `node_id` schreibt `/upload` in einen Node, den `POST /node` kurz vorher angelegt hat (zweistufiger Upload, README).
+- **Speichern (API): `POST /nodes`** legt an (ohne `node_id`) oder **aktualisiert** einen vorhandenen Node (mit `node_id`) und antwortet immer mit dem vollständigen Node (`node_full`, `node_created`):
+  - Nur die mitgeschickten Felder ändern sich; leere Werte löschen nichts.
+  - `write_extended_data` ist standardmäßig **aus**, weil `ccm:oeh_extendedData` als Ganzes ersetzt würde.
+  - **Zwei-Stunden-Fenster:** Updates nur bis 2 Stunden nach `cm:created`, danach `403`; unbekannter Node `404`, fehlende Zugangsdaten `503`.
+  - `metadataset` immer mitschicken, sonst fallen typspezifische Felder weg.
+  - Details und Statuscodes: README, Abschnitt `POST /nodes`.
 - **Duplikatlogik:** `check_duplicates: true` sucht per `ccm:wwwurl`. Bei Treffer bricht der Upload ab (`duplicate: true` + vorhandene `nodeId`). Der Widget-Dialog bietet dann „trotzdem hochladen" — das erzeugt einen **zweiten Node**, kein Update.
 - **Gegenprüfen:** `POST /upload/verify/{node_id}` — ohne Body reines Auslesen, mit Body SOLL/IST-Diff je Feld (`match`, `mismatch`, `missing_in_repo`, `extra_in_repo`, `not_written`).
 
-**Wenn echtes In-place-Update gebraucht wird:** Round-trip selbst bauen — `POST /generate` (`input_source: node_id`) → bearbeiten → `PUT …/node/v1/nodes/-home-/{id}/metadata?versionComment=…&obeyMds=false` direkt gegen edu-sharing. Die Logik dafür liegt in `RepositoryService._set_metadata()`, ist aber nicht über einen Endpunkt erreichbar. Ein `target_node_id`-Parameter an `/upload` wäre der kleinste Eingriff.
+**Round-trip für ein Update:** `POST /generate` (`input_source: node_id`) → im Canvas bearbeiten → `POST /nodes` mit derselben `node_id` und `metadataset`. Nicht direkt gegen edu-sharing schreiben: Das umginge das Zwei-Stunden-Fenster, das die Arbeit der Redaktion schützt. Ältere Nodes ändert die Redaktionsoberfläche.
 
 ---
 
@@ -252,12 +258,12 @@ Nur die gelisteten Felder werden neu extrahiert, der Rest kommt unverändert aus
 
 ---
 
-## 7. API-Endpunkte (alle 14)
+## 7. API-Endpunkte (Auswahl; `/ready` und `/debug/*` siehe README)
 
 | Methode | Pfad | Zweck |
 |---|---|---|
 | GET | `/health` | Health Check |
-| GET | `/widget/info` | Einbettungs-Infos (⚠️ teils veraltet, s. o.) |
+| GET | `/widget/info` | Einbettungs-Infos: Attribute, Layouts, Aliase und Events wie im Build |
 | GET | `/widget/i18n/{lang}.json` | UI-Übersetzungen |
 | GET | `/info/schemata` | Verfügbare Kontexte |
 | GET | `/info/schemas/{context}/{version}` | Schemas eines Kontexts |
@@ -267,7 +273,10 @@ Nur die gelisteten Felder werden neu extrahiert, der Rest kommt unverändert aus
 | POST | `/extract-field` | Einzelfeld generieren |
 | POST | `/validate` | Metadaten validieren |
 | POST | `/export/markdown` | Markdown-Export |
-| POST | `/upload` | Neuen Node im Repository anlegen |
+| POST | `/upload` | Neuen Node anlegen und beschreiben (mit `node_id`: in einen per `/node` angelegten Node schreiben) |
+| POST | `/node` | Leeren Node anlegen, nur die ID (erste Stufe eines Uploads) |
+| POST | `/nodes` | Node anlegen oder aktualisieren (2-Stunden-Fenster) |
+| POST | `/workflow/{node_id}` | Workflow-Status setzen |
 | POST | `/upload/verify/{node_id}` | SOLL/IST-Vergleich |
 | POST | `/screenshot` | Screenshot (optional direkt als Node-Preview) |
 
@@ -308,10 +317,13 @@ canvas.dispatchEvent(new CustomEvent('plugin-extract', {
 
 ## 9. Bekannte Doku-Abweichungen (verifiziert)
 
-| Quelle | Behauptung | Realität im Build |
-|---|---|---|
-| `/widget/info` | Attribute `node-id`, `source-url`, `show-input`, `show-controls` | existieren nicht (`controls` gibt es, `show-controls` nicht) |
-| `/widget/info` | Layouts `compact`, `minimal` | keine Aliase → fallen auf `default` zurück |
-| `/widget/info` | Events `extractionComplete`, `contentTypeDetected` | existieren nicht |
-| README | `prueftisch-gross` → `columns=2` | Alias ändert die Spalten nicht |
-| README | Layout-Alias `readonly` | mappt auf `default`, schaltet nicht readonly |
+`GET /widget/info` (`src/api/routers/widget.py`) und die README stimmen seit 3.0.0
+mit dem Build überein: keine Attribute `node-id`, `source-url`, `show-input`,
+`show-controls` (`controls` gibt es), keine Layouts `compact`/`minimal`
+(`minimal` ist nur ein Einbettungsbeispiel mit `layout="clean"`), keine Events
+`extractionComplete`/`contentTypeDetected`. Was leicht anders erwartet wird:
+
+| Erwartung | Realität im Build |
+|---|---|
+| `prueftisch-gross` setzt `columns=2` | Alias ändert die Spalten nicht |
+| `layout="readonly"` schaltet readonly | Alias auf `default`; dafür `readonly="true"` |

@@ -10,6 +10,21 @@ from ..metrics import THIRD_PARTY_HOOKS
 
 logger = logging.getLogger(__name__)
 
+# Lookups per request. Photon allows one per second and the schedule is shared
+# by the whole process, so every place costs every other request a second.
+MAX_GEOCODED_LOCATIONS = 10
+
+# Of the /generate deadline, this much is left over for output normalisation
+# and the answer: geocoding stops this long before it.
+GEOCODING_RESERVE_SECONDS = 1.0
+
+
+def _has_coordinates(location: Any) -> bool:
+    """A location that needs no lookup, and so uses none of the limit."""
+    return isinstance(location, dict) and bool(
+        (location.get("geo") or {}).get("latitude")
+    )
+
 
 class GeocodingService:
     """
@@ -24,10 +39,8 @@ class GeocodingService:
     RATE_LIMIT_MS = 1000
 
     def __init__(self):
-        self._last_request_time = 0.0
-        # Concurrent lookups share one schedule. Without the lock, two callers
-        # that both have to wait compute the same slot and fire together.
-        self._rate_lock = asyncio.Lock()
+        # Next free request slot (monotonic ms), shared by concurrent lookups.
+        self._next_slot = 0.0
 
     async def geocode_address(
         self, address: str, language: str = "de"
@@ -50,7 +63,7 @@ class GeocodingService:
             await self._wait_for_rate_limit()
 
             # Build API URL
-            params = {"q": address, "lang": language, "limit": 1}
+            params: dict[str, str | int] = {"q": address, "lang": language, "limit": 1}
 
             headers = {"User-Agent": "MetadataAgentAPI/1.0 (geocoding service)"}
             # Counted, but no tracing headers: Photon is a third party.
@@ -112,42 +125,12 @@ class GeocodingService:
             logger.error(f"❌ Geocoding error: {e}")
             return None
 
-    async def geocode_location_string(
-        self, location: str, language: str = "de"
-    ) -> Optional[dict]:
-        """
-        Geocode a simple location string (city name, address, etc.)
-
-        Args:
-            location: Location string
-            language: Language for results
-
-        Returns:
-            Dict with coordinates or None
-        """
-        return await self.geocode_address(location, language)
-
-    async def geocode_locations(
-        self, locations: list[str], language: str = "de"
-    ) -> list[Optional[dict]]:
-        """
-        Geocode multiple locations sequentially (respecting rate limit).
-
-        Args:
-            locations: List of location strings
-            language: Language for results
-
-        Returns:
-            List of geocoding results (None for failed ones)
-        """
-        results = []
-        for location in locations:
-            result = await self.geocode_address(location, language)
-            results.append(result)
-        return results
-
     async def enrich_metadata_with_geocoding(
-        self, metadata: dict[str, Any], language: str = "de"
+        self,
+        metadata: dict[str, Any],
+        language: str = "de",
+        deadline: Optional[float] = None,
+        warnings: Optional[list[str]] = None,
     ) -> dict[str, Any]:
         """
         Enrich metadata with geocoding results.
@@ -169,6 +152,12 @@ class GeocodingService:
         Args:
             metadata: Generated metadata dict
             language: Language for geocoding
+            deadline: Loop time (loop.time()) by which the /generate run must
+                end. Geocoding stops GEOCODING_RESERVE_SECONDS before it: no
+                lookup whose slot comes later, none still running then. The
+                locations concerned stay as they are. None: no limit.
+            warnings: Receives a warning when the deadline left locations
+                without coordinates.
 
         Returns:
             Metadata with enriched location objects including geo coordinates
@@ -190,19 +179,70 @@ class GeocodingService:
         if not isinstance(location_field, list):
             return metadata
 
-        # Process each location
-        enriched_locations = []
-        for i, location in enumerate(location_field):
-            logger.info(
-                f"📍 Processing location {i + 1}/{len(location_field)}: {location}"
+        budget = None if deadline is None else deadline - GEOCODING_RESERVE_SECONDS
+        enriched_locations, skipped, out_of_time = await self._enrich_locations(
+            location_field, language, budget
+        )
+        if skipped:
+            logger.warning(
+                f"⚠️ Geocoding limited to {MAX_GEOCODED_LOCATIONS} lookups; "
+                f"{skipped} locations passed through without coordinates"
             )
-            enriched_location = await self._enrich_single_location(location, language)
-            enriched_locations.append(enriched_location)
+        if out_of_time:
+            message = (
+                f"Geocoding stopped at the time limit: {out_of_time} location(s) "
+                "kept without coordinates"
+            )
+            logger.warning(f"⚠️ {message}")
+            if warnings is not None:
+                warnings.append(message)
 
         # Update metadata with enriched locations
         metadata["schema:location"] = enriched_locations
 
         return metadata
+
+    async def _enrich_locations(
+        self, locations: list, language: str, budget: Optional[float]
+    ) -> tuple[list, int, int]:
+        """
+        (locations, skipped by the lookup limit, left out by the budget).
+
+        Past the lookup limit or the budget (loop time) a location passes
+        through unchanged; a lookup still running at the budget is cut.
+        """
+        enriched_locations: list = []
+        lookups = skipped = out_of_time = 0
+        for i, location in enumerate(locations):
+            if not _has_coordinates(location):
+                if lookups >= MAX_GEOCODED_LOCATIONS:
+                    skipped += 1
+                    enriched_locations.append(location)
+                    continue
+                if budget is not None and not self._slot_before(budget):
+                    out_of_time += 1
+                    enriched_locations.append(location)
+                    continue
+                lookups += 1
+            logger.info(f"📍 Processing location {i + 1}/{len(locations)}: {location}")
+            try:
+                async with asyncio.timeout_at(budget):
+                    enriched = await self._enrich_single_location(location, language)
+            except TimeoutError:
+                out_of_time += 1
+                enriched = location
+            enriched_locations.append(enriched)
+        return enriched_locations, skipped, out_of_time
+
+    def _slot_before(self, budget: float) -> bool:
+        """
+        Whether the next free Photon slot comes before `budget` (loop time).
+
+        Checked without reserving: a slot after the budget would only make
+        every other request wait for a lookup that is never made.
+        """
+        wait = max(0.0, self._next_slot - time.monotonic() * 1000) / 1000
+        return asyncio.get_running_loop().time() + wait < budget
 
     async def _enrich_single_location(
         self, location: Any, language: str
@@ -351,16 +391,18 @@ class GeocodingService:
         return ", ".join(parts)
 
     async def _wait_for_rate_limit(self) -> None:
-        """Wait for rate limit (1 request per second), also across concurrent calls."""
-        async with self._rate_lock:
-            # Monotonic: a wall-clock jump must not open or close the window.
-            now = time.monotonic() * 1000
-            time_since_last = now - self._last_request_time
+        """
+        Wait for this call's slot (1 request per second across concurrent calls).
 
-            if time_since_last < self.RATE_LIMIT_MS:
-                await asyncio.sleep((self.RATE_LIMIT_MS - time_since_last) / 1000)
-
-            self._last_request_time = time.monotonic() * 1000
+        The slot is taken without an await in between - atomic on the event
+        loop - and the sleep happens outside any lock: a cancelled or slow
+        waiter no longer holds up the others (audit P-03). Monotonic: a
+        wall-clock jump must not open or close the window.
+        """
+        now = time.monotonic() * 1000
+        slot = max(now, self._next_slot)
+        self._next_slot = slot + self.RATE_LIMIT_MS
+        await asyncio.sleep((slot - now) / 1000)
 
 
 # Singleton instance

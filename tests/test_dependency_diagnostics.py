@@ -13,6 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src import main
+from src.api import deps
 from src.config import Settings
 from src.services import diagnostics
 from src.services.llm_auth import forwarded_authorization
@@ -123,19 +124,19 @@ async def test_the_report_names_version_mode_and_config_warnings():
 
 
 def test_the_endpoint_does_not_exist_unless_switched_on(monkeypatch):
-    monkeypatch.setattr(main, "settings", _settings())
+    monkeypatch.setattr(deps, "settings", _settings())
 
     with TestClient(main.app) as client:
         assert client.get("/debug/dependencies").status_code == 404
 
 
 def test_switched_on_the_endpoint_reports(monkeypatch):
-    monkeypatch.setattr(main, "settings", _settings(debug_endpoints=True))
+    monkeypatch.setattr(deps, "settings", _settings(debug_endpoints=True))
 
     async def fake_check(settings, client=None):
         return {"checks": {"llm": {"authorized": True}}}
 
-    monkeypatch.setattr(main, "check_dependencies", fake_check)
+    monkeypatch.setattr(deps, "check_dependencies", fake_check)
 
     with TestClient(main.app) as client:
         response = client.get("/debug/dependencies")

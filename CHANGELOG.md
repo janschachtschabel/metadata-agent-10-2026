@@ -1,5 +1,358 @@
 # Änderungen
 
+## 3.0.0 — 2026-10-17 — Neuer Aufbau, Korrekturen aus dem Audit
+
+> **Update:** Einstellungen und Metriken bleiben; neu sind
+> `METADATA_AGENT_GENERATE_TIMEOUT` (Default 110 s, auch für `/detect-content-type`
+> und `/extract-field`) und `METADATA_AGENT_UPLOAD_TIMEOUT` (Default 100 s).
+> Fehlerantworten tragen jetzt überall `detail` **und** `error` (siehe unten). **Breaking für Clients:**
+> einige Statuscodes (siehe „Breaking“). **Betrieb:** Der Helm-Chart 0.3.0
+> legt eine NetworkPolicy an (Standard an) – die Namespaces in
+> `networkPolicy.*` vor der Installation an den Cluster anpassen, sonst
+> erreicht die B-API den Dienst nicht. Das Root-Dateisystem ist schreibgeschützt
+> (`/tmp`, `/home/appuser` als emptyDir), `METADATA_AGENT_INTERNAL_PORT` kommt aus
+> `service.internalPort`. Die Logger heißen nach den neuen Modulen (siehe unten)
+> – wer im Logging-System auf `logger="src.main"` filtert, muss das anpassen.
+> Helm-Chart 0.3.0 deployt `v3.0.0`. Schritt für Schritt: DEPLOYMENT.md,
+> „Update von 2.1.x auf 3.0.0“.
+
+### Korrekturen aus dem Release-Review vom 18.10.
+
+Verhalten, das Clients sehen:
+
+- **Textextraktion (S-06):** `detail` und `error.message` der
+  `TEXT_EXTRACTION_*`-Fehler nennen den (internen) Host des
+  Textextraktionsdienstes nicht mehr, nur noch „Textextraktionsdienst …“; der
+  Host steht im Log.
+- **`node_url` mit eigener `source_url`:** Ist sie nicht öffentlich und hat der
+  Node keinen gespeicherten Volltext, antworten `/generate`,
+  `/detect-content-type` und `/extract-field` jetzt wirklich mit `400` (siehe
+  „Breaking“); bisher griff stillschweigend der Ersatztext. Mit Volltext wird
+  die URL wie bisher nicht abgerufen.
+- **Billige Ablehnungen vor dem Abruf, auch in `/generate`,
+  `/detect-content-type` und `/extract-field`:** Ein nicht erlaubter
+  `llm_provider` ist `422`, bevor die Quelle abgerufen wird (Reihenfolge bei
+  mehreren Fehlern geändert).
+- **`/validate` mit Objekten in Vokabularfeldern:** Ein Objekt oder eine Liste
+  in einem geschlossenen bzw. SKOS-Feld (z. B. `ccm:taxonid: [{"uri": …}]`) ist
+  eine Warnung „… is no concept of the closed vocabulary“ statt `500`.
+- **Geocoding im Zeitlimit von `/generate`:** Das Geocoding bekommt nur, was vom
+  Zeitlimit übrig ist (abzüglich 1 s Reserve). Lookups, deren Photon-Slot danach
+  läge, entfallen, ein laufender wird abgebrochen. Die Orte bleiben ohne
+  Koordinaten, `processing.warnings` sagt es – statt `504 GENERATION_TIMEOUT`
+  mit Verlust aller Felder.
+- **Vom Redakteur gefüllte Felder (`_origins: "user"`) gehen nicht mehr an die
+  KI**, außer sie stehen in `regenerate_fields` – dann ersetzt der neue Wert den
+  alten (Herkunft `ai`) und zählt in `fields_extracted`; sonst bleibt der Wert
+  des Redakteurs und kostet keinen Aufruf.
+- **URI-Felder mit SKOS-Vokabular (`dpt:concept`):** Ein exaktes Label wird
+  gleich beim ersten Aufruf auf die Konzept-URI abgebildet (vorher vier
+  Aufrufe), und nach dem letzten Versuch bleibt kein Wert, der kein Konzept ist.
+- **Leere Antworten (`""`) für optionale Vokabularfelder** gelten als „kein
+  Wert“ und werden nicht mehr bis zu dreimal neu angefragt.
+- **Zahlen und Wahrheitswerte in geschlossenen Vokabularen** (Import- und
+  Schreibpfad): `0` → `"0"`, `true` → `"true"`, Werte außerhalb der Skala
+  (z. B. `7` bei `ccm:oeh_quality_relevancy_for_education`) entfallen – wie
+  bereits im KI-Pfad.
+- **Antwort `200` ohne JSON vom KI-Dienst** (z. B. HTML eines Proxys) ist
+  `LLM_UPSTREAM_ERROR` und wird wiederholt wie ein 5xx, statt „Internal error
+  while extracting …“ mit Stacktrace je Feld.
+- **`/generate` mit einem JSON-Body, der kein Objekt ist,** antwortet `400` wie
+  die anderen Endpunkte statt `422` mit Python-Meldung.
+- **„Did you mean …?“ bei `/validate`** schlägt nur noch Konzepte vor, deren URI
+  auf den Wert endet (z. B. `460`), oder solche mit ähnlichem Label.
+- **`/upload`: das Vorschaubild kostet keinen fertigen Node mehr:** Der
+  Screenshot wird nur so lange abgewartet, wie das Zeitlimit abzüglich 15 s
+  Reserve für den Workflow erlaubt; danach geht der Upload ohne Vorschau weiter
+  (`preview.success: false`, Grund in `error`). Das Zurücklesen
+  (`return_full_node`, `/nodes`) läuft außerhalb des Zeitlimits mit eigenen
+  10 s: ein langsames Zurücklesen ergibt `node_full: null` statt `504` und
+  verwirft nichts – auch ein Client-Abbruch danach nicht.
+- **Kein Verwerfen nach dem Workflow:** Ein unerwarteter Fehler nach dem
+  Workflow-Schritt verwirft den Node nicht mehr, die Antwort nennt ihn in
+  `node`. Zahlen als Titel oder Beschreibung führen nach vollständigem
+  Schreiben nicht mehr zu `500`.
+- **Verlorene Create-Antwort (D-01):** Ein Kandidat mit `ccm:wf_status`
+  (gleichzeitiger, schon übergebener Upload derselben URL) wird nicht mehr als
+  eigener Node verworfen; die erlaubte Uhrabweichung sinkt von 30 s auf 3 s.
+- **`POST /node`:** sucht bei verlorener Antwort im Eingangsordner und liefert
+  den gefundenen Node als Erfolg (statt `502` und Doppelanlage beim
+  Wiederholen); endet nach `METADATA_AGENT_UPLOAD_TIMEOUT` mit
+  `504 UPLOAD_TIMEOUT`; unerwartete Fehler nennen nur den Fehlertyp.
+- **Repository-Ausfall ist kein `404`:** Kann ein übergebener Node wegen eines
+  Repository-Fehlers (5xx, Timeout, Verbindung) nicht gelesen werden,
+  antworten `/upload`, `/nodes` und `/screenshot` mit `node_id` jetzt `502`
+  (`node_unreadable`); `404` bleibt für 403/404 des Repositorys.
+- **`/screenshot` mit `node_id`:** prüft das Bearbeitungsfenster vor der
+  Aufnahme (ein abgelehnter Node belegt keinen Browser-Slot) und endet nach
+  `METADATA_AGENT_UPLOAD_TIMEOUT` mit `504 UPLOAD_TIMEOUT`.
+- **Teil-Update per `/nodes` mit `write_extended_data: true`:** überschreibt
+  einen genauen Lernressourcentyp (`ccm:oeh_lrt`) des Nodes nicht mehr mit dem
+  groben abgeleiteten. Nur teilweise geschriebene erweiterte Felder gelten
+  nicht mehr als Erfolg; `error` nennt die fehlenden.
+- **Fehlertexte (S-06):** `422` von `/upload` nennt Feld und Grund ohne
+  Eingabewerte („Ungültiger Request-Body: …“); ein fehlgeschlagener
+  Vorschaubild-Upload nennt nur den Fehlertyp. Ein Zeitlimit beim Update vor
+  dem ersten Schreiben heißt „wurde nicht verändert“.
+- **OpenAPI:** `ErrorResponse` deklariert `node` und `discarded_node`.
+- **Fehlertexte (S-06), Rest:** Schlägt das Schreiben in `/upload` oder
+  `/nodes` mit Timeout, Verbindungs- oder unerwartetem Fehler fehl, nennt
+  `error` nur noch den Fehlertyp (z. B. „Timeout bei der Verbindung zum
+  Repository (ReadTimeout)“), ebenso ein nicht verfügbares Vorschaubild; die
+  Einzelheiten stehen im Log. `422` von `/nodes` und `/workflow/{node_id}`
+  nennt wie `/upload` nur Feld und Grund – ohne Eingabewerte und pydantic-Links.
+- **Fehlertexte (S-06), letzte Stellen:** Auch `/upload/verify`,
+  `/workflow/{node_id}`, die Ergebnisse je Sammlung, Workflow-Schritt und Feld
+  (`collections`, `workflow`, `field_errors`) sowie Fehler beim Laden oder
+  Dekodieren eines Vorschaubilds nennen nur noch einen neutralen Text mit dem
+  Fehlertyp (z. B. „Verknüpfung fehlgeschlagen (ReadTimeout)“); der
+  Originaltext, der interne Hosts oder Adressen enthalten kann, steht im Log.
+- **Vorschaubild ohne Workflow:** Ohne Workflow-Schritte (Standard bei
+  `/nodes`) darf das Vorschaubild das Zeitlimit bis auf 1 s ausschöpfen; die
+  15 s Reserve gilt nur, wenn ein Workflow folgt.
+- **Übergebener Node nach Fehler:** Bleibt ein per `node_id` übergebener Node
+  nach einem Fehler erhalten, weil er schon im Workflow oder vollständig
+  geschrieben ist, nennt die Antwort ihn in `node`.
+- **Verlorene Create-Antwort, gleichzeitiger Upload:** Ein Kandidat, der nach
+  dem Anlegen schon geändert wurde (oder dessen Änderungszeit fehlt), gilt als
+  Node eines gleichzeitigen Uploads derselben URL und wird nicht verworfen; die
+  Antwort bittet, den Eingangsordner zu prüfen.
+
+Betrieb:
+
+- **Startwarnungen:** fehlende `WLO_GUEST_USERNAME`/`WLO_GUEST_PASSWORD` (wie
+  in OPS-12 vorgesehen), und Fristen, die samt Aufräumen und preStop die 120 s
+  von Ingress und Grace-Period überschreiten
+  (`METADATA_AGENT_UPLOAD_TIMEOUT` + 15 s, `METADATA_AGENT_GENERATE_TIMEOUT` + 10 s).
+- **Helm-Chart:** `helm install` warnt, wenn Ingress und NetworkPolicy an sind –
+  der Namespace des Ingress-Controllers gehört in
+  `networkPolicy.ingressNamespaces`, sonst blockiert die Policy ihn (auch in
+  `values.yaml` und der Chart-README). `sharedLlmLimit` mit `replicaCount=0`
+  bricht das Rendern nicht mehr ab („integer divide by zero“).
+- **docker-compose / `.env.template`:** Eine vorhandene `.env` erreicht den
+  Container ganz (`env_file`, optional) – bisher nur die gelisteten Variablen,
+  `B_API_IGNORE_CACHE`, `SCREENSHOT_*` & Co. kamen nie an.
+  `METADATA_AGENT_UPLOAD_TIMEOUT` steht in Liste und Vorlage. `OPENAI_API_KEY`
+  und `B_API_KEY` sind in der Vorlage leer: ein Platzhalter ließ `/ready`
+  bestehen.
+- **Logs:** Client-Fehler (4xx) werden einzeilig geloggt – ein Zeilenumbruch
+  aus dem Request konnte mit `LOG_FORMAT=text` eine Logzeile fälschen.
+  Blockierte Anfragen des Screenshot-Browsers erscheinen ohne Query-String und
+  Zugangsdaten.
+- **Aufräumen nach Abbruch:** Suche des verlorenen Nodes und Verwerfen haben
+  je ein Gesamtbudget von 5 s (bisher 5 s pro httpx-Phase).
+- **`/upload/verify`:** Ein vorübergehend nicht lesbares Schema bleibt nicht
+  mehr bis zum Neustart unvollständig im Cache der Vokabularfelder.
+- **Vorschau-Abruf:** meldet sich als `MetadataAgentAPI/3.0.0` (bisher 2.0).
+- **Aufräumen abgeschirmt:** Das Verwerfen nach Zeitlimit oder Fehler läuft
+  weiter, wenn der Client in diesem Moment geht oder der Pod herunterfährt; ein
+  halb geschriebener Node bleibt so nicht mehr liegen.
+- **Tracing-Header (B3, `x-request-id`)** gehen mit `LLM_PROVIDER=openai` nicht
+  mehr an api.openai.com, nur an die B-API.
+- **Robustheit:** Ein `startDate`/`endDate`, das kein Text ist, überspringt
+  nicht mehr die ganze Ausgabe-Normalisierung; Fehler der Agent-Logik bei der
+  Inhaltsart-Erkennung stehen mit Traceback im Log; bricht eine
+  Feldextraktion unerwartet ab, werden die übrigen Feldaufrufe gestoppt.
+- **Schema-Cache** je aufgelöster Version („latest“, „2.0.0“ und „v2.0.0“ sind
+  ein Eintrag).
+
+CI und Tests:
+
+- **GitLab rendert den Chart in den Tests:** `tests/test_helm_chart.py`
+  übersprang die gerenderten Prüfungen dort immer (kein helm im Test-Image).
+  Der Job `helm binary` kopiert helm aus dem gepinnten Image; `REQUIRE_HELM=1`
+  (beide CI) lässt ein fehlendes helm scheitern statt überspringen.
+- **Kein Netz im Testlauf:** Der Abgleich mit dem veröffentlichten
+  LRT-Vokabular läuft nur mit `RUN_NETWORK_TESTS=1`.
+
+Doku: `/health`-Beispiele (README, INSTALL) ohne Provider/Auth-Modus;
+Fehlercodes je Endpunkt in der README (`/upload` 504 `UPLOAD_TIMEOUT`,
+`/screenshot` mit `node_id` 403/404/502 und 504 `UPLOAD_TIMEOUT`, `/detect-content-type` und `/extract-field` 504
+`GENERATION_TIMEOUT`, `/upload/verify` 422 bei Schemaverstoß, nicht öffentliche
+`source_url` 400 mit eigenem Grund); DEPLOYMENT „Fehler melden“ (jede
+Fehlerantwort hat `error.request_id` und eine Logzeile), Update-Abschnitt mit
+`METADATA_AGENT_UPLOAD_TIMEOUT`; INSTALL-Paketliste nach `pyproject.toml`;
+WIDGET-REFERENZ §9 nach dem Stand von `/widget/info`; in diesem Abschnitt die
+Breaking-Zeile zu `node_url`, die ruff-Grenze (15) und Zeilenzahlen.
+
+### Breaking: Statuscodes
+
+Vereinheitlicht nach „wer ist schuld“ (Audit API-01). Antwortformen bleiben.
+
+| Endpunkt | Fall | bisher | jetzt |
+|---|---|---|---|
+| `/detect-content-type`, `/extract-field` | Quelle (URL, Node) nicht lesbar | 400 | **502** wie bei `/generate` |
+| `/generate`, `/detect-content-type`, `/extract-field` | eigene `source_url` bei `input_source=node_url` nicht öffentlich (ohne gespeicherten Volltext) | Ersatztext aus Titel/Beschreibung des Nodes (200), ohne beides Fehler | **400** wie bei `input_source=url`; eine nicht öffentliche `ccm:wwwurl` des Nodes führt weiter zum Ersatztext mit Hinweis |
+| `/upload/verify` | Node existiert nicht | 502 | **404** wie bei `/nodes` |
+| `/upload/verify` | Body ist JSON, aber ungültig | 400 | **422** wie bei `/nodes`, `/upload` |
+| `POST /node` | Repository-Fehler beim Anlegen | 400 | **502** (fehlender Titel bleibt 400) |
+| `/screenshot` mit `node_id` | Node außerhalb des Bearbeitungsfensters | 200, Vorschau gesetzt | **403** (`404` unbekannt), wie `/upload` |
+| alle | unerwartete Ausnahme | 500 als Klartext ohne Request-ID/CORS | **500** JSON mit `error.code: INTERNAL_ERROR`, Request-ID und CORS |
+| `/generate` | Lauf länger als `METADATA_AGENT_GENERATE_TIMEOUT` | 504 vom Ingress nach 120 s | **504** vom Agenten mit `error.code: GENERATION_TIMEOUT` |
+
+`/upload` und `/workflow` antworten bei `success:false` weiter mit 200: Die
+Antwort ist ein Teilergebnis (Node angelegt, Schritte einzeln bewertet), das
+die Webkomponente auswertet.
+
+### Korrekturen aus dem Audit vom 18.10. (`docs/audits/2026-10-18-audit-3.0.0-nachkorrektur.md`)
+
+Verhalten, das Clients sehen:
+
+| Bereich | bisher | jetzt |
+|---|---|---|
+| Fehlerantworten (API-03) | drei Formen; `HTTPException` und 422 nur mit `detail` | überall `detail` (wie bisher) **plus** `error` mit `code`, `message`, `request_id`; in der OpenAPI-Spec als `ErrorResponse` (4XX/5XX) |
+| `/upload`, `/nodes` (D-04) | kein Gesamt-Zeitlimit | **504** `UPLOAD_TIMEOUT` nach `METADATA_AGENT_UPLOAD_TIMEOUT`; die Antwort nennt den Node: `discarded_node` (verworfen) oder `node` (nicht verwerfbar oder schon im Workflow) |
+| `/detect-content-type`, `/extract-field` (P-01) | kein Gesamt-Zeitlimit | **504** `GENERATION_TIMEOUT` wie `/generate` |
+| `/extract-field` (API-05) | unbekanntes Feld erst nach dem Abruf der Quelle 404 | 404 vor dem Abruf |
+| Korrekturanweisung (API-05) | ohne eigene Grenze | höchstens 10.000 Zeichen, sonst **400** |
+| Zeiten (L-10) | `HH:MM:SS` oder `HH:MM` je nach Pfad | immer `HH:MM`, Datum mit Uhrzeit `YYYY-MM-DDTHH:MM` (eine Zeitzone wie `Z` oder `+02:00` bleibt) |
+| Geschlossene und SKOS-Vokabulare (L-07–L-09) | Werte außerhalb des Vokabulars blieben teils stehen; Fach/Bildungsstufe/Ressourcentyp ohne Wiederholung | nur Konzepte; passt nichts, fragt der Agent das Modell erneut, danach bleibt nur, was passt |
+| Zahlen (L-11) | `"NaN"`, `"inf"`, `"null"` wurden Zahlen | kein Wert |
+| Vorschaubild (S-10) | jeder 200-Body als PNG | nur PNG, JPEG, GIF, WebP nach den ersten Bytes |
+| öffentliches `/health` (S-08) | nannte Provider und Auth-Modus | nur `status` und `version`; Details auf dem internen Port |
+| `/ready` (OPS-12) | bereit auch ohne `WLO_GUEST_USERNAME`/`-PASSWORD`; Gründe in der Antwort | **503** ohne sie (`/upload` und `/nodes` antworten dann ohnehin 503); die Gründe nur noch im Log und auf dem internen Port |
+| Repository-Fehlertexte (S-06) | ganzer Antworttext (mit Stacktrace) | Status und die kurze `message` des Repositorys |
+
+Weitere Korrekturen:
+
+- **Verlorene Anlege-Antwort (D-01):** Kommt die Antwort auf „Node anlegen“
+  nicht an, sucht der Agent den Node im Eingangsordner und verwirft ihn.
+- **Feld-für-Feld-Fallback mit Budget (D-02):** höchstens 30 s, danach als
+  „Nicht versucht“ gemeldet.
+- **Ein Schreibweg (M-02):** `/upload` und `/nodes` laufen durch denselben
+  Ablauf; `/upload` meldet ein fehlgeschlagenes Vorschaubild jetzt wie `/nodes` (D-05).
+- **Sicherheit:** WebSockets im Screenshot-Browser nur zu öffentlichen Hosts
+  (S-09); der Vorschau-Abruf verbindet sich mit genau der geprüften Adresse
+  (DNS-Rebinding, S-04); `X-Content-Type-Options: nosniff` und
+  `Referrer-Policy: no-referrer` (S-12); interne Hosts nicht mehr in Fehlertexten (S-06).
+- **Korrekturmodus (L-13):** nur noch durch den Abschnitt, den der Agent selbst
+  anhängt, nicht durch „--- UPDATE“ im Seitentext. „LETZTER VERSUCH“ steht nur
+  im letzten Versuch (L-14).
+- **Grobe LRT (L-03):** überschreibt die extrahierte auch in der verschachtelten
+  Body-Form nicht mehr.
+- **Programmfehler (P-06)** wiederholen keine LLM-Aufrufe mehr.
+- **Performance:** unscharfer Vokabular-Abgleich mit begrenzter Editierdistanz
+  (220 Labels × 50 Werte: 1,4 s → 0,01 s, P-05); Geocoding-Takt ohne Lock über
+  dem Warten (P-03); Prompt-Cache auch für `b-api-router` mit `openai/…`-Modell (P-02).
+- **Wartbarkeit:** keine Funktion mehr über Komplexität 15 (ruff-Grenze jetzt 15),
+  eine Regel für Metadaten-Schlüssel (L-05), Modelle importieren keine Services (M-05),
+  verschluckte Ausnahmen werden geloggt (L-04), Datum/Zeit/Zahl an einer Stelle
+  (`src/utils/dates_numbers.py`).
+- **Betrieb, CI, Doku, Lizenz:** siehe DEPLOYMENT.md („Erste Installation auf
+  Staging“, „Rollback“, „Grenzen der NetworkPolicy“); Lizenz Apache-2.0 (LICENSE, NOTICE).
+
+### Korrekturen aus dem Audit (`docs/audits/2026-10-17-audit-3.0.0.md`)
+
+- **Vorschaubilder ohne SVG (S-03):** SVG wird abgelehnt, egal ob deklariert,
+  vom Host geliefert oder hinter einem anderen Typ versteckt – ein SVG kann
+  Skript tragen.
+- **`/screenshot` respektiert das Bearbeitungsfenster (S-02):** Die Vorschau
+  geht nur in Nodes, die `/upload` auch schreiben dürfte; eine einzige
+  Implementierung (`RepositoryService.upload_preview`) statt zwei.
+- **Vorschau vor dem Workflow (D-03):** `/upload` setzt das Screenshot-Bild,
+  bevor der Node in die Redaktionsqueue geht.
+- **Keine Tracing-Header an fremde Hosts (S-07):** Vorschau-URLs werden mit
+  einem eigenen Client ohne B3-/Request-ID-Header abgerufen.
+- **Client-Leck bei Abbruch (L-06):** `/generate` schließt den LLM-Client einer
+  Anfrage mit eigenem Modell auch bei Abbruch.
+- **Eingangsquelle an einer Stelle (A-01):** `/detect-content-type`,
+  `/extract-field` und `/generate` lesen Text, URL und Node über
+  `src/api/input_resolver.py`.
+- **Korrekturanweisung bleibt erhalten (L-02):** Bei URL- und Node-Quellen
+  ging sie verloren, bei langen Texten wurde sie abgeschnitten. Sie steht jetzt
+  nach dem geholten Text, Platz dafür ist beim Kürzen reserviert.
+  `_source_text` ist der reine Quelltext – ohne Anweisung und ohne den Block
+  „BISHERIGER STAND“, der sonst je Runde wuchs und als `ccm:oeh_extendedText`
+  ins Repository ging.
+- **Eingaben der Redaktion bleiben (U-06):** Ein Feld mit Herkunft `user` in
+  `_origins` wird bei einer neuen Generierung nicht überschrieben und bleibt
+  `user` – bisher konnte ein getippter Titel durch den Seitentitel ersetzt
+  werden, und die Herkunft wurde immer zu `ai`.
+- **Gesamt-Zeitlimit (P-01):** `METADATA_AGENT_GENERATE_TIMEOUT` (110 s) begrenzt
+  einen ganzen `/generate`-Lauf samt Abruf der Quelle (URL, Node); laufende
+  Feldaufrufe werden abgebrochen.
+- **Geocoding begrenzt (P-03):** höchstens 10 Abfragen je Anfrage (Orte mit
+  Koordinaten zählen nicht), der Rest bleibt unverändert. Photon erlaubt einen
+  Aufruf pro Sekunde für den ganzen Prozess.
+- **Helm (S-01):** NetworkPolicy (eingehend nur aus der B-API und für
+  Prometheus, ausgehend DNS, B-API und Internet ohne private Netze),
+  `automountServiceAccountToken: false`. Werte und Annahmen: UEBERGABE §6.
+- **Doku (S-05):** Lesezugriffe mit dem Service-Konto als offene Entscheidung
+  in UEBERGABE §3.
+
+### Audit Phase 3 und 4 (`docs/plans/2026-10-17-audit-fixes-phase-3-4.md`)
+
+- **Gottfunktionen zerlegt (M-01):** `metadata_service.py` (1.426 Zeilen) ist
+  geteilt in `metadata_generation` (Schritte eines Laufs), `metadata_validation`
+  und `metadata_export`; `/generate`, `/extract-field` und der Feld-Prompt sind
+  in benannte Schritte zerlegt. Die fünf schlimmsten Funktionen haben jetzt
+  Komplexität ≤ 15 (vorher 31–53); ruff lässt in der CI keine Funktion über 15
+  zu. Ausgaben unverändert: Charakterisierungstests (15 Abläufe, 218 Feld-Prompts
+  in allen Varianten) gegen den Stand vor der Teilung.
+- **Toter Code entfernt (M-03):** KI-Normalisierung ohne Aufrufer und ein
+  unerreichbarer Zweig der Validierung (Zahlwörter).
+- **Typprüfung (M-04):** mypy prüft API, LLM-, Repository- und Metadaten-Module
+  in der CI; was die Mixins voneinander brauchen, ist deklariert statt nur
+  beschrieben.
+- **Coverage (T-01):** gemessen in beiden CI-Systemen, Untergrenze 79 %
+  (vorher nicht gemessen, 73 % vor diesen Korrekturen). Neue direkte Tests für
+  Datum/Zahl; dabei behoben: „14:30 Uhr“ wurde nicht als Uhrzeit erkannt.
+- **Abhängigkeiten (DEP-01/02):** `requirements.txt` ist der Export von `uv.lock`
+  mit Hashes; `pip-audit` (Python), `npm audit` (Widget) und Trivy (Image,
+  kritisch und behebbar) laufen in der CI.
+- **Betrieb (OPS-01–04):** `FORWARDED_ALLOW_IPS` im Chart (`forwardedAllowIps`) –
+  hinter TLS lieferte `/widget/info` sonst `http://`-URLs; schreibgeschütztes
+  Root-Dateisystem; Basis-Images per Digest, `/app` gehört root; GitHub
+  Actions per Commit-SHA; das gebaute Image wird schreibgeschützt gestartet und
+  muss `/health` beantworten, in GitLab auch in Merge Requests; ein Port-Wert
+  statt zwei.
+- **Doku (DOC-01):** Update-Kapitel 3.0.0 und „Hinter TLS“ in DEPLOYMENT.md,
+  Versionsbeispiele auf 3.0.0.
+
+### Neuer Aufbau
+
+Die vier großen Dateien sind nach Zuständigkeit aufgeteilt; der Code wurde
+verschoben, nicht umgeschrieben (Plan und Nachweise:
+`docs/plans/2026-10-17-refactoring-3-0-0.md`; Audit-Korrekturen:
+`docs/plans/2026-10-17-audit-fixes-phase-1-2.md`).
+
+- **`src/main.py`** (3.530 → 275 Zeilen) baut nur noch die App. Die Endpunkte
+  liegen in `src/api/routers/` (ein Router je Bereich, in der bisherigen
+  Reihenfolge eingebunden), gemeinsame Abhängigkeiten in `src/api/deps.py`,
+  Fehlerantworten in `src/api/responses.py`, das OpenAPI-Dokument in
+  `src/api/openapi.py`.
+- **`llm_service.py`** (2.107 → 365 Zeilen) behält die Feld-Extraktion; Transport,
+  Durchsatz-Gates, Prompts, Wert-Normalisierung, Datum/Zahl und
+  Inhaltsart-Erkennung liegen in `llm_transport`, `llm_gate`, `llm_prompts`,
+  `llm_values`, `llm_dates_numbers`, `llm_content_type` (Mixins von
+  `LLMService`; jedes nennt im Docstring, was es braucht).
+- **`repository_service.py`** (1.968 → 1.189) behält die Abläufe; Node-Operationen,
+  Metadaten-Schreibpfad, Prüfen/Workflow, Vorschaubild und gemeinsame Hilfen
+  liegen in `repository_nodes`, `repository_metadata`, `repository_review`,
+  `repository_preview`, `repository_support`. Die Hilfen tragen öffentliche
+  Namen (`get_repository_config`, `first_value` …); `_get_repository_config`
+  bleibt aus `repository_service` importierbar.
+- **Logger-Namen:** Fehlerzeilen (`❌ [<id>] …`) kommen von `src.api.responses`,
+  Endpunkt-Logs von `src.api.routers.generate`, `…upload`, `…screenshot`;
+  KI-Aufrufe von `src.services.llm_transport` und `…llm_values`, das Repository
+  von `src.services.repository_nodes`, `…repository_metadata` und
+  `…repository_service`. `src.main` loggt nur noch Start und Ende.
+- **Importe:** Alle öffentlichen Namen, die `llm_service` und
+  `repository_service` in 2.1.1 definiert haben, bleiben dort importierbar
+  (`tests/test_import_compatibility.py`). Nicht mehr: die internen
+  `_`-Helfer von `repository_service` (heute öffentlich in
+  `repository_support`, z.B. `first_value`; nur `_get_repository_config` bleibt
+  als Alias) und alles außer `app` aus `src.main` – Endpunkte, `settings` und
+  Hilfen liegen in `src/api/`.
+- **Für Entwickler:** Tests ersetzen Abhängigkeiten über `src.api.deps`
+  (`monkeypatch.setattr(deps, "get_metadata_service", …)`), nicht mehr über
+  `src.main`. FastAPI ≥ 0.142 führt eingebundene Router als einen Eintrag in
+  `app.routes`; die tatsächlichen Routen liefert
+  `fastapi.routing.iter_route_contexts`. Neu: `tests/test_relative_imports.py`
+  prüft, dass jeder relative Import in `src/` auflösbar ist – Modul und
+  importierte Namen, auch innerhalb von Funktionen, die nur selten laufen.
+- **Webkomponente 3.0.0:** neu gebaut, siehe deren CHANGELOG.
+
 ## 2.1.1 — 2026-10-17 — Korrekturen aus dem Review
 
 > **Update:** nichts zu ändern. Wer Alarme oder Abfragen auf

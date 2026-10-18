@@ -6,11 +6,11 @@
   "status": "pass",
   "visualReview": "not-requested",
   "provenance": "current",
-  "deliveryReceiptId": "f9da0f11-aa6c-4428-9b0b-3762f966ef0a",
+  "deliveryReceiptId": "33ded41b-d449-4e10-b5ab-b52c06e9309f",
   "artifact": {
-    "path": "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent\\docs\\architektur\\metadata-agent-ablauf.html",
-    "sha256": "379a23e435ade527d4fabe3012f39de44ef835e690ae413b4ae1714cb65238fb",
-    "bytes": 836069
+    "path": "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent-3\\docs\\architektur\\metadata-agent-ablauf.html",
+    "sha256": "3ae40e02124a9de424fc333edf74d000e81c511cd8dc38186603a467f6c539a9",
+    "bytes": 836229
   },
   "state": {
     "detail": "read",
@@ -715,7 +715,6 @@
     "contactSheet": null
   },
   "sidecars": {
-    "directory": "C:\\Users\\jan\\AppData\\Local\\Temp\\claude\\C--Users-jan-staging-Windsurf-metadata-agent-005\\d181bcd5-68cb-4345-a515-34f1bfd95a3f\\scratchpad\\review-metadata-agent-ablauf-3",
     "receipt": "metadata-agent-ablauf.browser-check.json",
     "files": []
   }

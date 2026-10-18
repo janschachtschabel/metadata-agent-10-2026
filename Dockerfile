@@ -8,20 +8,24 @@
 # Run:    docker run -d -p 8000:8000 -e B_API_KEY=... metadata-agent-api
 # =============================================================================
 
+# Base images by digest: a tag can move under an unchanged Dockerfile. Update
+# both with `docker buildx imagetools inspect <image:tag>` (the CI's Trivy scan
+# reports when a fixed vulnerability makes that due).
+
 # Build stage — install Python dependencies via uv
-FROM python:3.13-slim AS builder
+FROM python:3.13-slim@sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f AS builder
 
 WORKDIR /app
 
 # Pinned: the version that wrote uv.lock; :latest could change the build unnoticed.
-COPY --from=ghcr.io/astral-sh/uv:0.7.13 /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.7.13@sha256:6c1e19020ec221986a210027040044a5df8de762eb36d5240e382bc41d7a9043 /uv /usr/local/bin/uv
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 
 COPY pyproject.toml uv.lock ./
 RUN uv sync --locked --no-install-project --no-dev
 
 # Production stage
-FROM python:3.13-slim
+FROM python:3.13-slim@sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f
 
 WORKDIR /app
 
@@ -62,10 +66,13 @@ RUN mkdir -p $PLAYWRIGHT_BROWSERS_PATH \
 
 # Copy application code (includes src/static/widget/ if present)
 COPY src/ ./src/
+# The image distributes third-party components; their notices go with it.
+COPY LICENSE NOTICE ./
 
-# Create non-root user and grant access to Playwright browsers
+# Non-root user. /app stays owned by root: the process serving requests can
+# read its code but not change it, and no chown copies the venv into another
+# layer. Chromium writes only to /tmp and the home directory.
 RUN useradd -m -u 1000 appuser \
-    && chown -R appuser:appuser /app \
     && chmod -R o+rx $PLAYWRIGHT_BROWSERS_PATH
 USER appuser
 

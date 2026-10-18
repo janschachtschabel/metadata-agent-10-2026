@@ -2,7 +2,7 @@
   "schema_version": 1,
   "diagram_type": "architecture",
   "meta": {
-    "title": "Metadata Agent – Architektur (2.1.0)",
+    "title": "Metadata Agent – Architektur (3.0.0)",
     "output": "docs/architektur/metadata-agent-architektur.html",
     "locale": "de",
     "quality_profile": "showcase",
@@ -528,7 +528,7 @@
         170,
         64
       ],
-      "tag": "2.1.0"
+      "tag": "3.0.0"
     },
     {
       "id": "llm",
@@ -750,7 +750,9 @@
       "items": [
         "Fehler mit error.code und X-Request-ID; Logs als Text oder JSON",
         "Tracing-Header (x-client-trace-id, B3) gehen an eigene Dienste",
-        "ohne B-API-Proxy: Widget ruft den Agent direkt, LLM über B_API_KEY (wie 2.0.x) oder OPENAI_API_KEY"
+        "ohne B-API-Proxy: Widget ruft den Agent direkt, LLM über B_API_KEY (wie 2.0.x) oder OPENAI_API_KEY",
+        "Helm-Chart: NetworkPolicy (API nur aus dem B-API-Namespace, intern nur Prometheus; ausgehend Cluster-DNS, B-API-Ports, Internet ohne private Netze), schreibgeschütztes Root-Dateisystem",
+        "/generate endet spätestens nach 110 s (504), unter den 120 s von Ingress und Grace Period"
       ]
     }
   ]

@@ -15,7 +15,7 @@ expired session of the user.
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
 AUTH_SOURCE_LABELS = {
     "forwarded": "durchgereichter Schlüssel des Aufrufers",
@@ -45,7 +45,7 @@ class LLMError(Exception):
 
     def to_dict(self) -> dict:
         """What the API reports - never a key, never an upstream stack trace."""
-        data = {"code": self.code, "message": self.message}
+        data: dict[str, Any] = {"code": self.code, "message": self.message}
         if self.upstream_status is not None:
             data["upstream_status"] = self.upstream_status
         if self.auth_source:

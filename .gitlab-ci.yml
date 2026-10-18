@@ -1,12 +1,30 @@
 stages:
-  - .pre
   - build
   - test
   - deploy
 
-default:
-  image: python:3.13-slim
-  #  see: https://hub.docker.com/_/python
+# One pipeline per push (audit OPS-05): a merge request pipeline for a branch
+# with an open MR - the one the MR widget and "Pipelines must succeed" look at -
+# otherwise a branch or tag pipeline. main and develop always get their branch
+# pipeline, because the image is published from it; with an open MR from
+# develop that means two pipelines for the same commit, on purpose.
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_TAG
+    - if: $CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "develop"
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
+      when: never
+    - if: $CI_COMMIT_BRANCH
+
+# Every check job extends this. A job without rules only runs in branch and
+# tag pipelines, never in a merge request pipeline - the tests did not gate
+# merges until 2026-10-18.
+.check:
+  interruptible: true
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH || $CI_COMMIT_TAG
 
 variables:
   # Same uv as the Dockerfile, so CI and image resolve alike.
@@ -19,25 +37,9 @@ variables:
 
 # see: https://docs.astral.sh/uv/guides/integration/gitlab/#using-uv-in-gitlab-cicd
 
-uv-install:
-  image: ghcr.io/astral-sh/uv:$UV_VERSION-python$PYTHON_VERSION-$BASE_LAYER
-  stage: .pre
-  variables:
-    UV_CACHE_DIR: .uv-cache
-  cache:
-    - key:
-        files:
-          - uv.lock
-      paths:
-        - $UV_CACHE_DIR
-  script:
-    - uv venv  # create .venv
-    - uv sync --locked  # install exactly uv.lock; fail if it is out of date
-    - uv cache prune --ci
-
 .base_ruff:
+  extends: .check
   stage: build
-  interruptible: true
   image:
     # Same ruff as uv.lock, so `ruff format --diff` agrees with local runs.
     name: ghcr.io/astral-sh/ruff:0.15.5-alpine
@@ -60,6 +62,23 @@ Ruff Format:
   script:
     - ruff format --diff
 
+# helm for "run tests": tests/test_helm_chart.py renders the chart and skipped
+# itself here until 2026-10-18 - the uv image has no helm. The binary is static
+# and comes from the same pinned image as "helm lint" (audit OPS-09).
+helm binary:
+  extends: .check
+  stage: build
+  image:
+    name: alpine/helm:3.20.0@sha256:2240b3c3e917a156c4af570c7f8bdf951072196de69f2a0d06e2cd2fc0ba40a8
+    entrypoint: [""]
+  script:
+    - mkdir -p tools
+    - cp "$(command -v helm)" tools/helm
+  artifacts:
+    paths:
+      - tools/helm
+    expire_in: 1 day
+
 # Runs the whole pytest suite. Until 2026-08-18 this job printed a reminder to
 # implement tests and went green — 1176 tests existed and none of them ran.
 #
@@ -72,23 +91,29 @@ Ruff Format:
 #   tests/test_object_shape_is_enforced.py — /validate and the repository write
 #     path must both refuse a bare string in an object-typed field.
 #
-# Tests that reach an external service carry the `slow` marker and skip
-# themselves when it is unreachable, so this stays runnable on a sealed runner.
+# Tests that reach an external service carry the `slow` marker and run only
+# with RUN_NETWORK_TESTS=1 (skipping when it is unreachable), so this stays
+# offline and runnable on a sealed runner.
 run tests:
+  extends: .check
   stage: test
-  interruptible: true
   image: ghcr.io/astral-sh/uv:$UV_VERSION-python$PYTHON_VERSION-$BASE_LAYER
   variables:
     UV_CACHE_DIR: .uv-cache
     PLAYWRIGHT_BROWSERS_PATH: $CI_PROJECT_DIR/.playwright-browsers
+    # Without Chromium the browser tests fail here instead of skipping (T-03).
+    REQUIRE_BROWSER: "1"
+    # Likewise the rendered-chart tests without helm ("helm binary").
+    REQUIRE_HELM: "1"
+  dependencies: ["helm binary"]
   cache:
     - key:
         files:
           - uv.lock
       paths:
         - $UV_CACHE_DIR
-    # Own key: uv-install uploads the cache above without this path, which
-    # would drop the browsers again. uv.lock pins the Playwright version.
+    # Own key, so the uv cache above never drops the browsers. uv.lock pins the
+    # Playwright version.
     - key:
         files:
           - uv.lock
@@ -96,6 +121,8 @@ run tests:
       paths:
         - .playwright-browsers
   script:
+    - export PATH="$CI_PROJECT_DIR/tools:$PATH"
+    - helm version --short
     - uv sync --locked
     # The browser tests (shipped widget bundle, screenshot URL policy) skip
     # themselves without Chromium — install it so they actually run here.
@@ -103,35 +130,67 @@ run tests:
     # installs the system libraries each time.
     - uv run playwright install --with-deps chromium
     # -rs lists every skipped test with its reason in the job log.
-    - uv run pytest -q -rs
+    - uv run pytest -q -rs --cov
+    - uv run mypy
   after_script:
     - uv cache prune --ci
+
+# Known vulnerabilities in exactly what the image installs: requirements.txt is
+# the export of uv.lock, with hashes (audit DEP-02).
+pip audit:
+  extends: .check
+  stage: test
+  image: ghcr.io/astral-sh/uv:$UV_VERSION-python$PYTHON_VERSION-$BASE_LAYER
+  script:
+    - uvx pip-audit==2.10.1 -r requirements.txt --require-hashes --disable-pip
 
 # The Helm chart and its alert rules. tests/test_helm_chart.py (run tests)
 # checks them against the code; these check that helm and Prometheus accept
 # them, and promtool runs the alert unit tests (helm/metadata-agent/tests/).
+# The tool images are pinned by digest (audit OPS-09): they read the chart, and
+# a moved tag would silently change what checks it.
 helm lint:
+  extends: .check
   stage: test
-  interruptible: true
   image:
-    name: alpine/helm:3.20.0
+    name: alpine/helm:3.20.0@sha256:2240b3c3e917a156c4af570c7f8bdf951072196de69f2a0d06e2cd2fc0ba40a8
     entrypoint: [""]
   script:
     - helm lint helm/metadata-agent --strict --set image.repository=ci/metadata-agent-api
-    - helm template ci helm/metadata-agent --set image.repository=ci/metadata-agent-api --set ingress.enabled=true > /dev/null
+    - helm lint helm/metadata-agent --strict --set image.repository=ci/metadata-agent-api --set ingress.enabled=true
+    - mkdir -p rendered
+    - helm template ci helm/metadata-agent --set image.repository=ci/metadata-agent-api > rendered/default.yaml
+    - helm template ci helm/metadata-agent --set image.repository=ci/metadata-agent-api --set ingress.enabled=true > rendered/ingress.yaml
+  artifacts:
+    paths:
+      - rendered/
+    expire_in: 1 day
+
+# The rendered manifests against the Kubernetes schemas (audit T-07); the
+# Prometheus Operator kinds against the CRDs catalog. Both schema sets are
+# fetched at run time. The image has a shell only in its -alpine variant; it
+# runs by tag because its digest could not be read without pulling it.
+kubeconform:
+  extends: .check
+  stage: test
+  needs: ["helm lint"]
+  image:
+    name: ghcr.io/yannh/kubeconform:v0.7.0-alpine
+    entrypoint: [""]
+  script:
+    - /kubeconform -strict -summary -schema-location default -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' rendered/default.yaml rendered/ingress.yaml
 
 alert rules:
+  extends: .check
   stage: test
-  interruptible: true
   image:
-    name: prom/prometheus:v3.5.0
+    name: prom/prometheus:v3.5.0@sha256:63805ebb8d2b3920190daf1cb14a60871b16fd38bed42b857a3182bc621f4996
     entrypoint: [""]
   script:
     - promtool check rules helm/metadata-agent/files/alerts.yaml
     - promtool test rules helm/metadata-agent/tests/alerts.test.yaml
 
-build and push docker image from main and develop branches:
-  stage: deploy
+.dind:
   image: $DIND_IMAGE
   #  see: https://hub.docker.com/_/docker
   variables:
@@ -145,38 +204,53 @@ build and push docker image from main and develop branches:
       command: [ "dockerd-entrypoint.sh" ]
   before_script:
     - docker --version
+
+# Started read-only and without keys the image must answer /health and start
+# Chromium (scripts/smoke-image.sh; the published port is reachable under the
+# service alias "docker"), and critical vulnerabilities with a fix available
+# stop it (audit OPS-03).
+.check image: &check_image
+  - sh scripts/smoke-image.sh "$IMAGE" docker
+  - docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.67.2@sha256:e2b22eac59c02003d8749f5b8d9bd073b62e30fefaef5b7c8371204e0a4b0c08 image --exit-code 1 --severity CRITICAL --ignore-unfixed --no-progress "$IMAGE"
+
+# A merge request builds and checks the image without publishing it.
+check docker image in merge requests:
+  extends: .dind
+  stage: test
+  variables:
+    IMAGE: metadata-agent-api:mr-$CI_MERGE_REQUEST_IID
   script:
-    # login to (self-hosted) docker registry
+    - docker buildx build --load --tag "$IMAGE" .
+    - *check_image
+  rules:
+    - if: "$CI_PIPELINE_SOURCE == 'merge_request_event'"
+
+build and push docker image from main and develop branches:
+  extends: .dind
+  stage: deploy
+  variables:
+    IMAGE: $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:$CI_COMMIT_REF_SLUG
+  script:
+    - docker buildx build --load --tag "$IMAGE" .
+    - *check_image
+    # Log in only now (audit OPS-09): build, smoke test and scanner run with
+    # the Docker socket, the password must not be in the daemon's config yet.
     - echo "$DOCKER_PASSWORD" | docker login $DOCKER_REGISTRY -u $DOCKER_USERNAME --password-stdin
-    # build docker image
-    - docker buildx build --tag $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:$CI_COMMIT_REF_SLUG .
-    # push docker image to (self-hosted) docker registry
-    - docker image push $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:$CI_COMMIT_REF_SLUG
+    - docker image push "$IMAGE"
   rules:
     - if: "$CI_COMMIT_BRANCH == 'main'"
     - if: "$CI_COMMIT_BRANCH == 'develop'"
 
 build and push docker image on tag creation:
+  extends: .dind
   stage: deploy
-  image: $DIND_IMAGE
-  #  see: https://hub.docker.com/_/docker
   variables:
-    DOCKER_HOST: "$DIND_HOST"
-    DOCKER_DRIVER: "$DIND_DRIVER"
-    DOCKER_TLS_CERTDIR: "$DIND_TLS_CERTDIR"
-  services:
-    - name: "$DIND_IMAGE"
-      alias: docker
-      entrypoint: [ "env", "-u", "DOCKER_HOST" ]
-      command: [ "dockerd-entrypoint.sh" ]
-  before_script:
-    - docker --version
+    IMAGE: $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:$CI_COMMIT_REF_NAME
   script:
-    # login to (self-hosted) docker registry
+    - docker buildx build --load --tag "$IMAGE" .
+    - *check_image
+    # Log in only now, as above.
     - echo "$DOCKER_PASSWORD" | docker login $DOCKER_REGISTRY -u $DOCKER_USERNAME --password-stdin
-    # build docker image
-    - docker buildx build --tag $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:$CI_COMMIT_REF_NAME .
-    # push docker image to (self-hosted) docker registry
-    - docker image push $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:$CI_COMMIT_REF_NAME
+    - docker image push "$IMAGE"
   rules:
     - if: "$CI_COMMIT_TAG"

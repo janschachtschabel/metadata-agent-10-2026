@@ -5,16 +5,16 @@
   "status": "pass",
   "type": "sequence",
   "quality": "showcase",
-  "startedAt": "2026-10-16T10:32:50.202Z",
+  "startedAt": "2026-10-18T11:26:46.949Z",
   "specification": {
-    "path": "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent\\docs\\architektur\\metadata-agent-ablauf.json",
-    "sha256": "d2ed94844d73609c418bd741c748de99404015f19f925d7ac094950b010c467f",
-    "bytes": 39565
+    "path": "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent-3\\docs\\architektur\\metadata-agent-ablauf.json",
+    "sha256": "fb96d22fc8071526ad64f60ec31233c6981eb31ccfe8bbb70d3c3b1e166bb94f",
+    "bytes": 39634
   },
   "artifact": {
-    "path": "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent\\docs\\architektur\\metadata-agent-ablauf.html",
-    "sha256": "379a23e435ade527d4fabe3012f39de44ef835e690ae413b4ae1714cb65238fb",
-    "bytes": 836069
+    "path": "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent-3\\docs\\architektur\\metadata-agent-ablauf.html",
+    "sha256": "3ae40e02124a9de424fc333edf74d000e81c511cd8dc38186603a467f6c539a9",
+    "bytes": 836229
   },
   "stages": {
     "validate": {
@@ -27,8 +27,8 @@
         "C:\\Users\\jan\\.claude\\skills\\archify\\bin\\archify.mjs",
         "deliver",
         "sequence",
-        "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent\\docs\\architektur\\metadata-agent-ablauf.json",
-        "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent\\docs\\architektur\\metadata-agent-ablauf.html",
+        "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent-3\\docs\\architektur\\metadata-agent-ablauf.json",
+        "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent-3\\docs\\architektur\\metadata-agent-ablauf.html",
         "--quality",
         "showcase",
         "--json"
@@ -38,8 +38,8 @@
         "ok": true,
         "command": "validate",
         "specification": {
-          "sha256": "d2ed94844d73609c418bd741c748de99404015f19f925d7ac094950b010c467f",
-          "bytes": 39565
+          "sha256": "fb96d22fc8071526ad64f60ec31233c6981eb31ccfe8bbb70d3c3b1e166bb94f",
+          "bytes": 39634
         },
         "validation": {
           "checksPassed": 9,
@@ -54,33 +54,33 @@
     "deliver": {
       "status": "pass",
       "exitCode": 0,
-      "durationMs": 758,
+      "durationMs": 777,
       "command": [
         "C:\\Program Files\\nodejs\\node.exe",
         "C:\\Users\\jan\\.claude\\skills\\archify\\bin\\archify.mjs",
         "deliver",
         "sequence",
-        "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent\\docs\\architektur\\metadata-agent-ablauf.json",
-        "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent\\docs\\architektur\\metadata-agent-ablauf.html",
+        "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent-3\\docs\\architektur\\metadata-agent-ablauf.json",
+        "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent-3\\docs\\architektur\\metadata-agent-ablauf.html",
         "--quality",
         "showcase",
         "--json"
       ],
       "receipt": {
         "schemaVersion": 1,
-        "receiptId": "f9da0f11-aa6c-4428-9b0b-3762f966ef0a",
+        "receiptId": "33ded41b-d449-4e10-b5ab-b52c06e9309f",
         "ok": true,
         "command": "deliver",
         "type": "sequence",
-        "input": "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent\\docs\\architektur\\metadata-agent-ablauf.json",
-        "output": "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent\\docs\\architektur\\metadata-agent-ablauf.html",
+        "input": "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent-3\\docs\\architektur\\metadata-agent-ablauf.json",
+        "output": "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent-3\\docs\\architektur\\metadata-agent-ablauf.html",
         "specification": {
-          "sha256": "d2ed94844d73609c418bd741c748de99404015f19f925d7ac094950b010c467f",
-          "bytes": 39565
+          "sha256": "fb96d22fc8071526ad64f60ec31233c6981eb31ccfe8bbb70d3c3b1e166bb94f",
+          "bytes": 39634
         },
         "artifact": {
-          "sha256": "379a23e435ade527d4fabe3012f39de44ef835e690ae413b4ae1714cb65238fb",
-          "bytes": 836069
+          "sha256": "3ae40e02124a9de424fc333edf74d000e81c511cd8dc38186603a467f6c539a9",
+          "bytes": 836229
         },
         "validation": {
           "checksPassed": 9,
@@ -154,20 +154,20 @@
     "check": {
       "status": "pass",
       "exitCode": 0,
-      "durationMs": 261,
+      "durationMs": 255,
       "command": [
         "C:\\Program Files\\nodejs\\node.exe",
         "C:\\Users\\jan\\.claude\\skills\\archify\\bin\\archify.mjs",
         "check",
-        "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent\\docs\\architektur\\metadata-agent-ablauf.html",
+        "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent-3\\docs\\architektur\\metadata-agent-ablauf.html",
         "--require-provenance"
       ],
       "receipt": {
         "ok": true,
-        "file": "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent\\docs\\architektur\\metadata-agent-ablauf.html",
+        "file": "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent-3\\docs\\architektur\\metadata-agent-ablauf.html",
         "artifact": {
-          "sha256": "379a23e435ade527d4fabe3012f39de44ef835e690ae413b4ae1714cb65238fb",
-          "bytes": 836069
+          "sha256": "3ae40e02124a9de424fc333edf74d000e81c511cd8dc38186603a467f6c539a9",
+          "bytes": 836229
         },
         "checks": [
           {
@@ -298,22 +298,20 @@
           "issues": []
         },
         "provenance": "current",
-        "deliveryReceiptId": "f9da0f11-aa6c-4428-9b0b-3762f966ef0a"
+        "deliveryReceiptId": "33ded41b-d449-4e10-b5ab-b52c06e9309f"
       }
     },
     "browser-check": {
       "status": "pass",
       "exitCode": 0,
-      "durationMs": 2285,
+      "durationMs": 2314,
       "command": [
         "C:\\Program Files\\nodejs\\node.exe",
         "C:\\Users\\jan\\.claude\\skills\\archify\\bin\\archify.mjs",
         "browser-check",
-        "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent\\docs\\architektur\\metadata-agent-ablauf.html",
+        "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent-3\\docs\\architektur\\metadata-agent-ablauf.html",
         "--json",
-        "--require-provenance",
-        "--out-dir",
-        "C:\\Users\\jan\\AppData\\Local\\Temp\\claude\\C--Users-jan-staging-Windsurf-metadata-agent-005\\d181bcd5-68cb-4345-a515-34f1bfd95a3f\\scratchpad\\review-metadata-agent-ablauf-3"
+        "--require-provenance"
       ],
       "execution": "in-process",
       "receipt": {
@@ -324,11 +322,11 @@
         "status": "pass",
         "visualReview": "not-requested",
         "provenance": "current",
-        "deliveryReceiptId": "f9da0f11-aa6c-4428-9b0b-3762f966ef0a",
+        "deliveryReceiptId": "33ded41b-d449-4e10-b5ab-b52c06e9309f",
         "artifact": {
-          "path": "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent\\docs\\architektur\\metadata-agent-ablauf.html",
-          "sha256": "379a23e435ade527d4fabe3012f39de44ef835e690ae413b4ae1714cb65238fb",
-          "bytes": 836069
+          "path": "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent-3\\docs\\architektur\\metadata-agent-ablauf.html",
+          "sha256": "3ae40e02124a9de424fc333edf74d000e81c511cd8dc38186603a467f6c539a9",
+          "bytes": 836229
         },
         "state": {
           "detail": "read",
@@ -1033,7 +1031,6 @@
           "contactSheet": null
         },
         "sidecars": {
-          "directory": "C:\\Users\\jan\\AppData\\Local\\Temp\\claude\\C--Users-jan-staging-Windsurf-metadata-agent-005\\d181bcd5-68cb-4345-a515-34f1bfd95a3f\\scratchpad\\review-metadata-agent-ablauf-3",
           "receipt": "metadata-agent-ablauf.browser-check.json",
           "files": []
         }
@@ -1088,19 +1085,19 @@
     }
   ],
   "evidence": {
-    "receipt": "C:\\Users\\jan\\AppData\\Local\\Temp\\claude\\C--Users-jan-staging-Windsurf-metadata-agent-005\\d181bcd5-68cb-4345-a515-34f1bfd95a3f\\scratchpad\\review-metadata-agent-ablauf-3\\metadata-agent-ablauf.finalize.json",
-    "summaryReceipt": "C:\\Users\\jan\\AppData\\Local\\Temp\\claude\\C--Users-jan-staging-Windsurf-metadata-agent-005\\d181bcd5-68cb-4345-a515-34f1bfd95a3f\\scratchpad\\review-metadata-agent-ablauf-3\\metadata-agent-ablauf.finalize-summary.json",
-    "browserCheckReceipt": "C:\\Users\\jan\\AppData\\Local\\Temp\\claude\\C--Users-jan-staging-Windsurf-metadata-agent-005\\d181bcd5-68cb-4345-a515-34f1bfd95a3f\\scratchpad\\review-metadata-agent-ablauf-3\\metadata-agent-ablauf.browser-check.json"
+    "receipt": "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent-3\\docs\\architektur\\metadata-agent-ablauf.finalize.json",
+    "summaryReceipt": "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent-3\\docs\\architektur\\metadata-agent-ablauf.finalize-summary.json",
+    "browserCheckReceipt": "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent-3\\docs\\architektur\\metadata-agent-ablauf.browser-check.json"
   },
   "visualReview": "not-requested",
-  "finishedAt": "2026-10-16T10:32:54.697Z",
-  "durationMs": 4494,
+  "finishedAt": "2026-10-18T11:26:51.408Z",
+  "durationMs": 4459,
   "update": {
     "status": "current",
     "installedVersion": "3.1.0",
     "availableVersion": "3.1.0",
     "releaseNotes": null,
-    "checkedAt": "2026-10-16T09:35:48.769Z",
+    "checkedAt": "2026-10-18T11:26:29.875Z",
     "source": "cache",
     "noticeRequired": false,
     "noticeText": null

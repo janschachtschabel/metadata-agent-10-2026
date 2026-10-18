@@ -15,6 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src import main
+from src.api import deps
 
 NODE_ID = "5ab4b434-4832-45ca-b4b4-34483265ca5d"
 
@@ -65,8 +66,8 @@ class _StubScreenshotService:
 @pytest.fixture
 def client(monkeypatch):
     stub = _StubRepositoryService()
-    monkeypatch.setattr(main, "get_repository_service", lambda: stub)
-    monkeypatch.setattr(main, "get_screenshot_service", _StubScreenshotService)
+    monkeypatch.setattr(deps, "get_repository_service", lambda: stub)
+    monkeypatch.setattr(deps, "get_screenshot_service", _StubScreenshotService)
     with TestClient(main.app) as test_client:
         test_client.stub = stub
         yield test_client

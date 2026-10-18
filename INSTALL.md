@@ -34,7 +34,7 @@ Vollständige Anleitung zur Installation, Konfiguration und zum Betrieb der Meta
 | Python | 3.13+ | Runtime |
 | uv | 0.5+ | Paketmanager |
 | Docker | 24+ | Container-Betrieb (optional) |
-| Docker Compose | v2+ | Multi-Container (optional) |
+| Docker Compose | v2.24+ | Multi-Container (optional; `env_file` mit `required: false`) |
 | Git | 2.x | Quellcode |
 
 ### API-Keys (mindestens einer erforderlich)
@@ -73,19 +73,21 @@ Enthaltene Pakete (pyproject.toml):
 | uvicorn[standard] | ≥0.32.0 | ASGI-Server |
 | pydantic | ≥2.10.0 | Datenvalidierung |
 | pydantic-settings | ≥2.14.2 | Umgebungsvariablen |
-| httpx | ≥0.28.0 | HTTP-Client (async) |
-| python-multipart | ≥0.0.31 | File-Uploads |
-| aiofiles | ≥24.1.0 | Async File-I/O |
-| openai | ≥1.57.0 | OpenAI API Client |
-| tenacity | ≥9.0.0 | Retry-Logik |
-| python-dotenv | ≥1.2.2 | .env-Dateien |
+| httpx | ≥0.28.0 | HTTP-Client (async), auch für die KI-Aufrufe |
 | playwright | ≥1.49.0 | Browser-Automatisierung für Screenshots |
+| prometheus-client | ≥0.26.0 | Metriken (`/metrics` auf dem internen Port) |
 
 Dazu kommen Mindestversionen für Pakete, die nur indirekt installiert werden,
 wegen bekannter Sicherheitslücken in älteren Versionen: starlette ≥1.3.1,
-anyio ≥4.14.2, idna ≥3.15. uv liest sie aus `[tool.uv] constraint-dependencies`
-in `pyproject.toml`, pip aus `requirements.txt`. Installiert wird, was `uv.lock`
-festlegt — `uv sync --locked` prüft, dass Lock und `pyproject.toml` zusammenpassen.
+anyio ≥4.14.2, idna ≥3.15, python-dotenv ≥1.2.2 (kommt über
+pydantic-settings bzw. uvicorn). uv liest sie aus `[tool.uv] constraint-dependencies`
+in `pyproject.toml`. Installiert wird, was `uv.lock` festlegt — `uv sync
+--locked` prüft, dass Lock und `pyproject.toml` zusammenpassen. Für pip ist
+`requirements.txt` der Export dieses Locks mit exakten Versionen und Hashes
+(`pip install --require-hashes -r requirements.txt`); nach jeder Änderung an
+`uv.lock` neu erzeugen mit
+`uv export --frozen --no-dev --format requirements-txt --no-emit-project > requirements.txt`
+(`tests/test_requirements_in_step.py` prüft das).
 
 ### 2.3 Playwright installieren
 
@@ -184,7 +186,8 @@ uvicorn src.main:app --host 0.0.0.0 --port 8000
 ```bash
 # Health Check
 curl http://localhost:8000/health
-# → {"status": "healthy", "version": "2.1.1", "llm_provider": "b-api-openai", "b_api_auth_mode": "auto"}
+# → {"status": "healthy", "version": "3.0.0"}
+# (Provider und Auth-Modus nennt /health nur auf dem internen Port)
 
 # Einfacher Test
 curl -X POST http://localhost:8000/generate \
@@ -226,7 +229,7 @@ cd metadata-agent-api
 docker build -t metadata-agent-api .
 
 # Mit Build-Argumenten
-docker build -t metadata-agent-api:v2.0.0 .
+docker build -t metadata-agent-api:v3.0.0 .
 
 # Build-Cache nutzen (schneller bei Rebuilds)
 docker build --cache-from metadata-agent-api:latest -t metadata-agent-api .
@@ -244,14 +247,16 @@ docker build --progress=plain -t metadata-agent-api .
 # Minimal (mit einzelnen Env-Vars)
 docker run -d \
   --name metadata-agent-api \
-  -p 8000:8000 \
+  -p 127.0.0.1:8000:8000 \
+  --read-only --tmpfs /tmp --tmpfs /home/appuser --stop-timeout 120 \
   -e B_API_KEY=your-api-key \
   metadata-agent-api
 
 # Mit .env-Datei (empfohlen)
 docker run -d \
   --name metadata-agent-api \
-  -p 8000:8000 \
+  -p 127.0.0.1:8000:8000 \
+  --read-only --tmpfs /tmp --tmpfs /home/appuser --stop-timeout 120 \
   --env-file .env \
   --restart unless-stopped \
   metadata-agent-api
@@ -259,7 +264,8 @@ docker run -d \
 # Mit allen Optionen
 docker run -d \
   --name metadata-agent-api \
-  -p 8000:8000 \
+  -p 127.0.0.1:8000:8000 \
+  --read-only --tmpfs /tmp --tmpfs /home/appuser --stop-timeout 120 \
   --env-file .env \
   --restart unless-stopped \
   --memory 1g \
@@ -296,15 +302,31 @@ docker compose up -d --build
 docker compose build
 ```
 
-`docker-compose.yml`:
+Die Datei braucht **Docker Compose 2.24 oder neuer** (`docker compose version`):
+Ältere Versionen kennen die Langform `env_file: [{path: .env, required: false}]`
+nicht und brechen ab. Damit erreicht jede Einstellung aus einer vorhandenen
+`.env` den Container; ohne `.env` gelten die Defaults aus `environment`.
+
+`docker-compose.yml` (Auszug):
 
 ```yaml
 services:
   metadata-agent-api:
     build: .
     container_name: metadata-agent-api
+    # Like the Helm chart: only locally reachable, read-only root filesystem,
+    # 120 s to finish a running /generate on stop (audit OPS-15).
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /home/appuser
+    stop_grace_period: 120s
+    # The whole .env, if there is one (needs Docker Compose 2.24+)
+    env_file:
+      - path: .env
+        required: false
     environment:
       # LLM Provider
       - METADATA_AGENT_LLM_PROVIDER=b-api-openai
@@ -478,7 +500,10 @@ services:
   # Standard: B-API OpenAI (Port 8000)
   metadata-agent-api:
     build: .
-    ports: ["8000:8000"]
+    ports: ["127.0.0.1:8000:8000"]
+    read_only: true
+    tmpfs: [/tmp, /home/appuser]
+    stop_grace_period: 120s
     environment:
       - METADATA_AGENT_LLM_PROVIDER=b-api-openai
       - B_API_KEY=${B_API_KEY}
@@ -486,7 +511,10 @@ services:
   # Alternativ: B-API AcademicCloud / DeepSeek (Port 8001)
   metadata-agent-api-academiccloud:
     build: .
-    ports: ["8001:8000"]
+    ports: ["127.0.0.1:8001:8000"]
+    read_only: true
+    tmpfs: [/tmp, /home/appuser]
+    stop_grace_period: 120s
     environment:
       - METADATA_AGENT_LLM_PROVIDER=b-api-academiccloud
       - B_API_KEY=${B_API_KEY}
@@ -494,7 +522,10 @@ services:
   # Alternativ: Natives OpenAI (Port 8002)
   metadata-agent-api-openai:
     build: .
-    ports: ["8002:8000"]
+    ports: ["127.0.0.1:8002:8000"]
+    read_only: true
+    tmpfs: [/tmp, /home/appuser]
+    stop_grace_period: 120s
     environment:
       - METADATA_AGENT_LLM_PROVIDER=openai
       - OPENAI_API_KEY=${OPENAI_API_KEY}
@@ -535,7 +566,7 @@ Die aktuelle Reihenfolge im Dockerfile ist bereits optimal:
 | Problem | Ursache | Lösung |
 |---|---|---|
 | `playwright install chromium` schlägt fehl | Netzwerkproblem | `docker build --network host` |
-| Container startet, aber Health Check schlägt fehl | Port nicht exposed | `docker run -p 8000:8000` prüfen |
+| Container startet, aber Health Check schlägt fehl | Port nicht exposed | `docker run -p 127.0.0.1:8000:8000` prüfen (von außen: Reverse Proxy davor) |
 | `permission denied` im Container | Root-User nötig | Im Dockerfile: Non-Root User prüfen |
 | Image zu groß (>2 GB) | Kein Multi-Stage Build | Dockerfile prüfen, `.dockerignore` anlegen |
 | Chromium-Crash im Container | Zu wenig Shared Memory | `docker run --shm-size=256m` |
@@ -577,17 +608,17 @@ Navigiere zu **GitLab → Repository → Settings → CI/CD → Variables** und 
 |---|---|---|
 | Push auf `main` | Branch-Slug (`main`) | Automatisch bei jedem Merge/Push |
 | Push auf `develop` | Branch-Slug (`develop`) | Automatisch |
-| Git-Tag `v*` | Tag-Name (z.B. `v2.0.0`) | Für Releases |
+| Git-Tag `v*` | Tag-Name (z.B. `v3.0.0`) | Für Releases |
 
 ### 4.4 Release erstellen (neuen Tag pushen)
 
 ```bash
 # Version taggen
-git tag v2.0.0
-git push origin v2.0.0
+git tag v3.0.0
+git push origin v3.0.0
 
 # → GitLab CI baut und pusht:
-# $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v2.0.0
+# $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v3.0.0
 ```
 
 ---
@@ -644,7 +675,8 @@ METADATA_AGENT_REPOSITORY_URL=https://redaktion.openeduhub.net/edu-sharing/rest
 ```bash
 docker run -d \
   --name metadata-agent-api \
-  -p 8000:8000 \
+  -p 127.0.0.1:8000:8000 \
+  --read-only --tmpfs /tmp --tmpfs /home/appuser --stop-timeout 120 \
   -e B_API_KEY=your-api-key \
   -e METADATA_AGENT_B_API_BASE_URL=https://b-api.prod.openeduhub.net \
   -e METADATA_AGENT_TEXT_EXTRACTION_API_URL=https://text-extraction.prod.openeduhub.net \
@@ -720,7 +752,8 @@ docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:main
 
 docker run -d \
   --name metadata-agent-api \
-  -p 8000:8000 \
+  -p 127.0.0.1:8000:8000 \
+  --read-only --tmpfs /tmp --tmpfs /home/appuser --stop-timeout 120 \
   -e B_API_KEY=<key> \
   $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:main
 ```

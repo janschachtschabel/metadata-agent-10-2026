@@ -11,14 +11,22 @@ then handed on.
 import json
 from typing import Callable, Union
 
+from .request_id import current_request_id
+
 
 async def _send_too_large(send, limit: int) -> None:
+    detail = (
+        f"Anfrage zu groß: höchstens {limit} Bytes (METADATA_AGENT_MAX_REQUEST_BYTES)."
+    )
+    # The API's error shape (responses.py), built here: utils import no api.
     body = json.dumps(
         {
-            "detail": (
-                f"Anfrage zu groß: höchstens {limit} Bytes "
-                "(METADATA_AGENT_MAX_REQUEST_BYTES)."
-            )
+            "detail": detail,
+            "error": {
+                "code": "REQUEST_TOO_LARGE",
+                "message": detail,
+                "request_id": current_request_id(),
+            },
         },
         ensure_ascii=False,
     ).encode("utf-8")

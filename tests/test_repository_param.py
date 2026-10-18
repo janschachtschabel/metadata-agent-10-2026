@@ -11,6 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src import main
+from src.api import deps
 from src.models.schemas import (
     DetectContentTypeRequest,
     ExtractFieldRequest,
@@ -68,7 +69,7 @@ class _StubRepositoryService:
 
 def test_verify_endpoint_no_longer_rejects_unknown_repository(monkeypatch):
     monkeypatch.setattr(
-        main, "get_repository_service", lambda: _StubRepositoryService()
+        deps, "get_repository_service", lambda: _StubRepositoryService()
     )
 
     with TestClient(main.app) as client:

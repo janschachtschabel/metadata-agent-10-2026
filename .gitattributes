@@ -9,3 +9,5 @@ src/static/widget/dist/** -text
 # Vendored Swagger UI: byte-identical to the npm package (checksum in its README).
 src/static/docs/*.js -text
 src/static/docs/*.css -text
+# Shell scripts run on Linux runners; a CR breaks them.
+*.sh text eol=lf

@@ -15,10 +15,8 @@ from typing import Any, Optional
 from urllib.parse import urlsplit
 from weakref import WeakKeyDictionary
 
-import httpx
 
 from ..utils.public_url import PublicUrlError, require_public_http_url
-from ..metrics import OWN_SERVICE_HOOKS
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +47,12 @@ def delivered_format(requested: str) -> str:
     return requested if requested in ("png", "jpeg") else "png"
 
 
+def _loggable_url(url: str) -> str:
+    """Scheme, host and path: query strings carry tokens, user info passwords."""
+    parts = urlsplit(url)
+    return f"{parts.scheme}://{parts.netloc.rpartition('@')[2]}{parts.path}"
+
+
 def _public_requests_only():
     """
     Route handler that aborts browser requests to non-public hosts.
@@ -72,12 +76,36 @@ def _public_requests_only():
                 await require_public_http_url(request_url)
                 verdicts[origin] = True
             except PublicUrlError as e:
-                logger.warning(f"Blocked browser request to {request_url}: {e}")
+                logger.warning(
+                    f"Blocked browser request to {_loggable_url(request_url)}: {e}"
+                )
                 verdicts[origin] = False
         if verdicts[origin]:
             await route.continue_()
         else:
             await route.abort("blockedbyclient")
+
+    return handle
+
+
+def _public_websockets_only():
+    """
+    WebSocket handler that connects only to public hosts.
+
+    route() never sees WebSockets: without this, a page could open ws:// to an
+    internal address from inside the pod (audit S-09). A refused socket is
+    closed without ever reaching a server.
+    """
+
+    async def handle(ws):
+        http_url = "http" + ws.url[len("ws") :] if ws.url.startswith("ws") else ws.url
+        try:
+            await require_public_http_url(http_url)
+        except PublicUrlError as e:
+            logger.warning(f"Blocked browser WebSocket to {_loggable_url(ws.url)}: {e}")
+            await ws.close(code=1008, reason="blocked")
+            return
+        ws.connect_to_server()
 
     return handle
 
@@ -272,6 +300,7 @@ class ScreenshotService:
                         service_workers="block",
                     )
                     await context.route("**/*", _public_requests_only())
+                    await context.route_web_socket("**/*", _public_websockets_only())
 
                     # Redirect hops bypass the route handler and reach the
                     # network unchecked. Collect them so the result can be
@@ -291,14 +320,11 @@ class ScreenshotService:
                         await page.wait_for_timeout(delay)
 
                     image_format = delivered_format(format)
-                    screenshot_options = {
-                        "type": image_format,
-                        "full_page": full_page,
-                    }
-                    if image_format == "jpeg":
-                        screenshot_options["quality"] = 85
-
-                    image_bytes = await page.screenshot(**screenshot_options)
+                    image_bytes = await page.screenshot(
+                        type="jpeg" if image_format == "jpeg" else "png",
+                        full_page=full_page,
+                        quality=85 if image_format == "jpeg" else None,
+                    )
 
                     # The page may have redirected — in a frame, for an image,
                     # or while it settled. Refuse the result if anything led
@@ -327,66 +353,6 @@ class ScreenshotService:
             method="playwright",
             url=url,
         )
-
-    async def upload_preview(
-        self, result: ScreenshotResult, node_id: str, auth_header: str = ""
-    ) -> dict[str, Any]:
-        """
-        Upload an already captured screenshot as preview of an edu-sharing node.
-
-        Args:
-            result: The capture to upload — not taken a second time
-            node_id: edu-sharing node ID
-            auth_header: Basic Auth header for edu-sharing
-
-        Returns:
-            Dict with success status and details; never raises
-        """
-        try:
-            from .repository_service import _get_repository_config
-
-            config = _get_repository_config()
-            base_url = config["base_url"]
-            upload_url = (
-                f"{base_url}/rest/node/v1/nodes/-home-/{node_id}/preview"
-                f"?mimetype={result.mimetype}&createVersion=true"
-            )
-
-            async with httpx.AsyncClient(
-                timeout=45.0, event_hooks=OWN_SERVICE_HOOKS
-            ) as client:
-                response = await client.post(
-                    upload_url,
-                    headers={"Authorization": auth_header},
-                    files={
-                        "image": ("screenshot.png", result.image_bytes, result.mimetype)
-                    },
-                )
-
-                if response.status_code in (200, 201, 204):
-                    logger.info(f"✅ Preview uploaded to node {node_id}")
-                    return {
-                        "success": True,
-                        "node_id": node_id,
-                        "screenshot": result.to_dict(),
-                    }
-                else:
-                    error = response.text[:500]
-                    logger.error(
-                        f"❌ Preview upload failed: {response.status_code} {error}"
-                    )
-                    return {
-                        "success": False,
-                        "error": f"Upload failed: {response.status_code}",
-                        "screenshot": result.to_dict(),
-                    }
-
-        except Exception as e:
-            logger.error(f"❌ Preview upload failed: {type(e).__name__}: {e}")
-            return {
-                "success": False,
-                "error": f"{type(e).__name__}: {e}",
-            }
 
 
 class ScreenshotError(Exception):

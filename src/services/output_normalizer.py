@@ -3,8 +3,12 @@ Output normalizer for metadata API.
 Transforms API output to match the structure expected by the Canvas web component.
 """
 
+import logging
 import re
+from datetime import date
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 
 class OutputNormalizer:
@@ -186,58 +190,13 @@ class OutputNormalizer:
         for item in schedule:
             if not isinstance(item, dict):
                 continue
-
             normalized = item.copy()
-
-            # Parse startDate to extract components
             start_date = normalized.get("startDate", "")
-            if start_date:
-                # Extract date components
-                date_match = re.match(r"(\d{4})-(\d{2})-(\d{2})", start_date)
-                time_match = re.search(r"T?(\d{2}):(\d{2})", start_date)
-
-                if date_match:
-                    year, month, day = date_match.groups()
-
-                    # Ensure date-only format for startDate/endDate
-                    if "T" in str(start_date):
-                        normalized["startDate"] = f"{year}-{month}-{day}"
-
-                    # Add byMonth if not present
-                    if "byMonth" not in normalized:
-                        normalized["byMonth"] = [int(month)]
-
-                    # Add byMonthDay if not present
-                    if "byMonthDay" not in normalized:
-                        normalized["byMonthDay"] = [int(day)]
-
-                    # Calculate day of week
-                    if "byDay" not in normalized:
-                        from datetime import date
-
-                        try:
-                            d = date(int(year), int(month), int(day))
-                            days = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"]
-                            normalized["byDay"] = [days[d.weekday()]]
-                        except Exception:
-                            pass
-
-                if time_match:
-                    hour = int(time_match.group(1))
-                    if "byHour" not in normalized:
-                        normalized["byHour"] = [hour]
-
-            # Ensure endDate matches startDate format
-            end_date = normalized.get("endDate", "")
-            if end_date and "T" in str(end_date):
-                date_match = re.match(r"(\d{4}-\d{2}-\d{2})", end_date)
-                if date_match:
-                    normalized["endDate"] = date_match.group(1)
-            elif not end_date and normalized.get("startDate"):
-                normalized["endDate"] = normalized["startDate"]
-
+            # A number or list is no date to read; it stays for the validator.
+            if start_date and isinstance(start_date, str):
+                _fill_from_start(normalized, start_date)
+            _fill_end(normalized)
             result.append(normalized)
-
         return result
 
     def _normalize_access_service(self, services: Any) -> list[dict]:
@@ -286,6 +245,41 @@ class OutputNormalizer:
                 result.append(str(item))
 
         return result
+
+
+_WEEKDAYS = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"]
+
+
+def _fill_from_start(normalized: dict, start_date: str) -> None:
+    """byMonth, byMonthDay, byDay and byHour from startDate, unless given; startDate date-only."""
+    date_match = re.match(r"(\d{4})-(\d{2})-(\d{2})", start_date)
+    time_match = re.search(r"T?(\d{2}):(\d{2})", start_date)
+    if date_match:
+        year, month, day = date_match.groups()
+        if "T" in str(start_date):
+            normalized["startDate"] = f"{year}-{month}-{day}"
+        normalized.setdefault("byMonth", [int(month)])
+        normalized.setdefault("byMonthDay", [int(day)])
+        if "byDay" not in normalized:
+            try:
+                weekday = date(int(year), int(month), int(day)).weekday()
+                normalized["byDay"] = [_WEEKDAYS[weekday]]
+            except ValueError:
+                # An impossible date (2026-02-30): no weekday to derive.
+                logger.debug(f"No weekday for impossible date {start_date!r}")
+    if time_match:
+        normalized.setdefault("byHour", [int(time_match.group(1))])
+
+
+def _fill_end(normalized: dict) -> None:
+    """endDate date-only like startDate; without one, the start date."""
+    end_date = normalized.get("endDate", "")
+    if isinstance(end_date, str) and "T" in end_date:
+        date_match = re.match(r"(\d{4}-\d{2}-\d{2})", end_date)
+        if date_match:
+            normalized["endDate"] = date_match.group(1)
+    elif not end_date and normalized.get("startDate"):
+        normalized["endDate"] = normalized["startDate"]
 
 
 # Singleton instance

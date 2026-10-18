@@ -6,11 +6,11 @@
   "status": "pass",
   "visualReview": "not-requested",
   "provenance": "current",
-  "deliveryReceiptId": "8846fab3-4fce-4e67-9955-30323326ba3d",
+  "deliveryReceiptId": "d0a0b80f-6418-40fa-9903-d82d2b6958c7",
   "artifact": {
-    "path": "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent\\docs\\architektur\\metadata-agent-architektur.html",
-    "sha256": "f296fbfe349cb4cae671a64bab358c914aa33baca538537d482d10e4c18c704b",
-    "bytes": 833488
+    "path": "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent-3\\docs\\architektur\\metadata-agent-architektur.html",
+    "sha256": "cc4d3fd0595110294160b7a4262fa49e33cabbe007732eda891ee20e56e5c027",
+    "bytes": 833803
   },
   "state": {
     "detail": "read",
@@ -715,7 +715,6 @@
     "contactSheet": null
   },
   "sidecars": {
-    "directory": "C:\\Users\\jan\\AppData\\Local\\Temp\\claude\\C--Users-jan-staging-Windsurf-metadata-agent-005\\d181bcd5-68cb-4345-a515-34f1bfd95a3f\\scratchpad\\review-map-4",
     "receipt": "metadata-agent-architektur.browser-check.json",
     "files": []
   }

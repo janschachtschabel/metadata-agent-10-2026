@@ -3,10 +3,10 @@
 import re
 from enum import Enum
 from typing import Any, Optional
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..config import MAX_WORKERS, LLMProvider
-from ..services.repository_curation import (
+from .repository_rules import (
     DEFAULT_WORKFLOW_STATUS,
     KNOWN_WORKFLOW_STATUS,
     QUALITY_WORKFLOW_STATUS,
@@ -358,7 +358,7 @@ class GenerateResponse(BaseModel):
     def model_dump(self, **kwargs) -> dict[str, Any]:
         """Custom serialization to flatten metadata into response."""
         # Get base dict with header and processing
-        result = {
+        result: dict[str, Any] = {
             "contextName": self.contextName,
             "schemaVersion": self.schemaVersion,
             "metadataset": self.metadataset,
@@ -1048,7 +1048,7 @@ class SaveNodeRequest(BaseModel):
             "Vorschaubild des Nodes. Entweder eine http(s)-URL, die der Dienst "
             "lädt, oder das Bild selbst als Data-URL "
             "('data:image/png;base64,…') bzw. nacktes Base64. Erlaubt sind PNG, "
-            "JPEG, GIF, WebP und SVG bis 10 MB. Ohne Angabe bleibt ein "
+            "JPEG, GIF und WebP bis 10 MB (SVG nicht). Ohne Angabe bleibt ein "
             "vorhandenes Vorschaubild unverändert."
         ),
     )
@@ -1594,4 +1594,41 @@ class ExtractFieldResponse(BaseModel):
     schema_file: str = Field(description="Schema file used")
     processing: dict[str, Any] = Field(
         description="Processing info (provider, model, time)"
+    )
+
+
+class ErrorInfo(BaseModel):
+    """Machine-readable part of an error answer."""
+
+    model_config = ConfigDict(extra="allow")
+
+    code: str = Field(
+        ...,
+        description="Fehlercode, z. B. NOT_FOUND, LLM_AUTH_REJECTED, UPLOAD_TIMEOUT",
+    )
+    message: str = Field(..., description="Kurze Beschreibung")
+    request_id: Optional[str] = Field(
+        None,
+        description="ID der Anfrage, auch im Header X-Request-ID; im Log des Dienstes zu finden",
+    )
+
+
+class ErrorResponse(BaseModel):
+    """Every error answer of the API: `detail` for people, `error` for programs."""
+
+    detail: Any = Field(
+        ..., description="Lesbare Meldung; bei 422 die Liste der Schema-Verstöße"
+    )
+    error: ErrorInfo
+    # Only on 504 UPLOAD_TIMEOUT: what happened to the node (audit D-04).
+    node: Optional[dict[str, Any]] = Field(
+        None,
+        description="Nur bei 504 UPLOAD_TIMEOUT: der Node, der erhalten blieb "
+        "(im Workflow, vollständig geschrieben, nicht verwerfbar oder vom Aufrufer "
+        "übergeben) — mit nodeId",
+    )
+    discarded_node: Optional[str] = Field(
+        None,
+        description="Nur bei 504 UPLOAD_TIMEOUT: ID des dabei angelegten und "
+        "wieder verworfenen Nodes",
     )

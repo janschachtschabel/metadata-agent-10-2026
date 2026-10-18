@@ -1,6 +1,6 @@
 # Abdeckung der Dienstanforderungen von Team 6
 
-Stand: Metadata Agent 2.1.1, 17.10.2026. Abgeglichen mit der Seite
+Stand: Metadata Agent 3.0.0, 17.10.2026. Abgeglichen mit der Seite
 „Dienstanforderungen für den Betrieb durch Team 6“ (Abschnitte 1–7 und
 Checkliste Übergabepaket). Einzelheiten stehen in [UEBERGABE.md](../UEBERGABE.md).
 
@@ -33,7 +33,7 @@ Checkliste Übergabepaket). Einzelheiten stehen in [UEBERGABE.md](../UEBERGABE.m
 | Logs nach stdout, JSON/Text, Level per Env | ✅ | `METADATA_AGENT_LOG_FORMAT`, `METADATA_AGENT_LOG_LEVEL`; JSON mit `trace_id` |
 | **4. Repository, Build, Versionierung** | | |
 | Repo-Zugang für T6 | 🟡 | URLs in UEBERGABE §1 (scm.edu-sharing.com); Zugriff für T6 noch bestätigen |
-| CI baut Images automatisch, Prod nur getaggt | ✅ | GitLab CI: Branch-Images für `main`/`develop`, Versions-Images bei Git-Tags (`v2.1.1`) |
+| CI baut Images automatisch, Prod nur getaggt | ✅ | GitLab CI: Branch-Images für `main`/`develop`, Versions-Images bei Git-Tags (`v3.0.0`) |
 | Schlankes Image | 🟡 | `python:3.13-slim`, Multi-Stage, `.dockerignore`, Nutzer `appuser`, nur Laufzeit-Abhängigkeiten. Chromium für Screenshots (~400 MB) macht das Image trotzdem groß |
 | **5. Deployment und Betrieb** | | |
 | Zustand und Skalierung beschrieben | ✅ | zustandslos, horizontal skalierbar; Grenzen: ein Worker je Container, gemeinsames GWDG-Limit (~10 Aufrufe/min) |

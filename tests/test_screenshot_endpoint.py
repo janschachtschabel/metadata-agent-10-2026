@@ -8,10 +8,10 @@ import threading
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-import httpx
 from fastapi.testclient import TestClient
 
 from src import main
+from src.api import deps
 from src.services import screenshot_service as module
 
 NODE_ID = "0b1c2d3e-4f50-4617-8899-aabbccddeeff"
@@ -31,17 +31,23 @@ def test_a_preview_upload_reuses_the_single_capture(monkeypatch):
         return_value=module.ScreenshotResult(IMAGE, method="playwright", url=url)
     )
     monkeypatch.setattr(service, "_capture_playwright", browser)
-    monkeypatch.setattr(main, "get_screenshot_service", lambda: service)
-    monkeypatch.setattr(
-        main, "get_repository_service", lambda: SimpleNamespace(_auth_header="Basic x")
-    )
+    monkeypatch.setattr(deps, "get_screenshot_service", lambda: service)
     uploads = []
 
-    async def post(self, upload_url, **kwargs):
-        uploads.append((upload_url, kwargs))
-        return httpx.Response(200)
+    async def upload_preview(node_id, image, mimetype, **kwargs):
+        uploads.append((node_id, image, mimetype))
+        return {"success": True}
 
-    monkeypatch.setattr(httpx.AsyncClient, "post", post)
+    async def preview_refusal(node_id):
+        return None
+
+    monkeypatch.setattr(
+        deps,
+        "get_repository_service",
+        lambda: SimpleNamespace(
+            upload_preview=upload_preview, preview_refusal=preview_refusal
+        ),
+    )
 
     with TestClient(main.app) as client:
         response = client.post("/screenshot", json={"url": url, "node_id": NODE_ID})
@@ -49,17 +55,14 @@ def test_a_preview_upload_reuses_the_single_capture(monkeypatch):
     assert response.status_code == 200, response.text
     assert response.json()["preview_uploaded"] is True
     browser.assert_awaited_once()
-    assert len(uploads) == 1
-    upload_url, kwargs = uploads[0]
-    assert f"/nodes/-home-/{NODE_ID}/preview" in upload_url
-    assert kwargs["files"]["image"][1] == IMAGE
+    assert uploads == [(NODE_ID, IMAGE, "image/png")]
 
 
 def test_an_internal_target_is_a_400_before_any_browser_starts(monkeypatch):
     service = module.ScreenshotService()
     browser = AsyncMock(side_effect=AssertionError("browser must not start"))
     monkeypatch.setattr(service, "_capture_playwright", browser)
-    monkeypatch.setattr(main, "get_screenshot_service", lambda: service)
+    monkeypatch.setattr(deps, "get_screenshot_service", lambda: service)
 
     with TestClient(main.app) as client:
         response = client.post("/screenshot", json={"url": "http://127.0.0.1/admin"})
@@ -78,7 +81,7 @@ def test_an_unexpected_failure_does_not_reveal_its_details(monkeypatch):
         "_capture_playwright",
         AsyncMock(side_effect=RuntimeError("connect 10.0.0.5:6379 from /srv/app")),
     )
-    monkeypatch.setattr(main, "get_screenshot_service", lambda: service)
+    monkeypatch.setattr(deps, "get_screenshot_service", lambda: service)
 
     with TestClient(main.app) as client:
         response = client.post("/screenshot", json={"url": url})
@@ -91,26 +94,28 @@ def test_an_unexpected_failure_does_not_reveal_its_details(monkeypatch):
 def test_generate_stops_its_screenshot_when_the_extraction_fails(monkeypatch):
     """Only two captures run at once; an orphan would hold a slot for up to 90 s."""
     cancelled = threading.Event()
+    capturing = asyncio.Event()
 
     async def capture(**kwargs):
+        capturing.set()
         try:
-            await asyncio.sleep(30)
+            await asyncio.Event().wait()  # until cancelled
         except asyncio.CancelledError:
             cancelled.set()
             raise
 
     async def failing_extraction(**kwargs):
-        await asyncio.sleep(0.05)  # the capture is under way by now
+        await asyncio.wait_for(capturing.wait(), 2)
         raise RuntimeError("extraction failed")
 
     monkeypatch.setattr(
-        main, "get_screenshot_service", lambda: SimpleNamespace(capture=capture)
+        deps, "get_screenshot_service", lambda: SimpleNamespace(capture=capture)
     )
     service = SimpleNamespace(
         generate_metadata=failing_extraction,
         llm_service=SimpleNamespace(close=AsyncMock()),
     )
-    monkeypatch.setattr(main, "get_metadata_service", lambda **kwargs: service)
+    monkeypatch.setattr(deps, "get_metadata_service", lambda **kwargs: service)
     body = {
         "text": "A resource",
         "schema_file": "core.json",
@@ -126,23 +131,25 @@ def test_generate_stops_its_screenshot_when_the_extraction_fails(monkeypatch):
 
 def test_upload_stops_its_screenshot_when_the_upload_fails(monkeypatch):
     cancelled = threading.Event()
+    capturing = asyncio.Event()
 
     async def capture(**kwargs):
+        capturing.set()
         try:
-            await asyncio.sleep(30)
+            await asyncio.Event().wait()  # until cancelled
         except asyncio.CancelledError:
             cancelled.set()
             raise
 
     async def failing_upload(**kwargs):
-        await asyncio.sleep(0.05)  # the capture is under way by now
+        await asyncio.wait_for(capturing.wait(), 2)
         raise RuntimeError("repository unreachable")
 
     monkeypatch.setattr(
-        main, "get_screenshot_service", lambda: SimpleNamespace(capture=capture)
+        deps, "get_screenshot_service", lambda: SimpleNamespace(capture=capture)
     )
     monkeypatch.setattr(
-        main,
+        deps,
         "get_repository_service",
         lambda: SimpleNamespace(upload_metadata=failing_upload, _auth_header=""),
     )
@@ -155,3 +162,81 @@ def test_upload_stops_its_screenshot_when_the_upload_fails(monkeypatch):
         response = client.post("/upload", json=body)
         assert response.status_code == 500
         assert cancelled.wait(2), "the screenshot task kept running"
+
+
+# ------------- release review 2026-10-18 (#10): /screenshot with node_id
+
+
+def _shot():
+    return SimpleNamespace(
+        image_bytes=IMAGE,
+        mimetype="image/png",
+        format="png",
+        width=1,
+        height=1,
+        size_bytes=len(IMAGE),
+        capture_time_ms=1,
+        method="playwright",
+        url="https://example.org/",
+    )
+
+
+def test_a_node_outside_its_window_is_refused_before_the_browser_starts(
+    monkeypatch,
+):
+    captured = []
+
+    async def capture(**kwargs):
+        captured.append(kwargs)
+        return _shot()
+
+    async def preview_refusal(node_id):
+        return {"success": False, "error_code": "node_too_old", "error": "zu alt"}
+
+    async def upload_preview(*args, **kwargs):
+        raise AssertionError("no upload for a refused node")
+
+    monkeypatch.setattr(
+        deps, "get_screenshot_service", lambda: SimpleNamespace(capture=capture)
+    )
+    monkeypatch.setattr(
+        deps,
+        "get_repository_service",
+        lambda: SimpleNamespace(
+            preview_refusal=preview_refusal, upload_preview=upload_preview
+        ),
+    )
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/screenshot", json={"url": "https://example.org/", "node_id": NODE_ID}
+        )
+
+    assert response.status_code == 403, response.text
+    assert captured == [], "a refused node must not hold a browser slot"
+
+
+def test_a_screenshot_for_a_node_answers_504_at_the_upload_deadline(monkeypatch):
+    async def capture(**kwargs):
+        await asyncio.sleep(3600)
+
+    async def preview_refusal(node_id):
+        return None
+
+    monkeypatch.setattr(
+        deps, "get_screenshot_service", lambda: SimpleNamespace(capture=capture)
+    )
+    monkeypatch.setattr(
+        deps,
+        "get_repository_service",
+        lambda: SimpleNamespace(preview_refusal=preview_refusal),
+    )
+    monkeypatch.setattr(deps.settings, "upload_timeout", 0.2)
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/screenshot", json={"url": "https://example.org/", "node_id": NODE_ID}
+        )
+
+    assert response.status_code == 504, response.text
+    assert response.json()["error"]["code"] == "UPLOAD_TIMEOUT"

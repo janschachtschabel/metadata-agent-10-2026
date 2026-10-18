@@ -17,13 +17,12 @@ the model and relaxed on those two points, rather than written out by hand where
 it would drift from the model on the next added option.
 """
 
-import re
-
 import pytest
 from fastapi.testclient import TestClient
 
-import src.main as main
 from src.main import app
+from src.api import deps
+from src.api.routers import upload as upload_router
 from src.models.schemas import UploadRequest
 
 SPEC = app.openapi()
@@ -177,16 +176,11 @@ def test_the_openapi_document_can_be_built_twice():
 
 def test_the_flat_body_lifts_out_exactly_the_options_the_schema_names():
     """
-    An option missing from the pop-list in main.py is filed away as a metadata
+    An option missing from _UPLOAD_OPTIONS in src/api/routers/upload.py is filed away as a metadata
     field and silently does nothing — the bug that swallowed node_id. The schema
     and that list describe the same set, so they are checked against each other.
     """
-    import inspect
-
-    import src.main as main
-
-    source = inspect.getsource(main.upload_to_repository)
-    lifted = set(re.findall(r'data\.pop\("([^"]+)"', source))
+    lifted = set(upload_router._UPLOAD_OPTIONS)
 
     options = set(UploadRequest.model_fields) - {"metadata"}
     assert options <= lifted, f"nicht ausgehoben: {sorted(options - lifted)}"
@@ -252,8 +246,8 @@ class _StubScreenshots:
 @pytest.fixture
 def client(monkeypatch):
     stub = _StubRepository()
-    monkeypatch.setattr(main, "get_repository_service", lambda: stub)
-    monkeypatch.setattr(main, "get_screenshot_service", lambda: _StubScreenshots())
+    monkeypatch.setattr(deps, "get_repository_service", lambda: stub)
+    monkeypatch.setattr(deps, "get_screenshot_service", lambda: _StubScreenshots())
     with TestClient(app) as test_client:
         test_client.stub = stub
         yield test_client

@@ -26,7 +26,7 @@ Alert rules on these: helm/metadata-agent/files/alerts.yaml.
 """
 
 import time
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 import httpx
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
@@ -94,6 +94,42 @@ def metrics_response() -> Response:
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
+# The results the critical alerts watch (alerts.yaml; tests/test_metrics_labels.py
+# keeps both in step).
+CRITICAL_LLM_RESULTS = (
+    "LLM_AUTH_MISSING",
+    "LLM_AUTH_REJECTED",
+    "LLM_AUTH_FORBIDDEN",
+    "LLM_ROUTE_NOT_FOUND",
+    "LLM_ROUTE_MISCONFIGURED",
+    "LLM_MODEL_NOT_FOUND",
+)
+
+
+def precreate_alert_series(settings: Settings) -> None:
+    """
+    Create the series of the critical LLM alerts at 0 (audit OPS-06).
+
+    A labelled series appears with its first .inc(), and increase() does not
+    count that first value: a key refusal right after a pod start would never
+    page. Only the configured provider with config="default" - the label sets
+    the critical rules select - and the key sources it can have.
+    """
+    if settings.llm_provider.startswith("b-api"):
+        sources: tuple[str, ...] = ("static", "forwarded", "none")
+    else:
+        sources = ("openai",)
+    for result in CRITICAL_LLM_RESULTS:
+        for source in sources:
+            LLM_REQUESTS.labels(settings.llm_provider, result, source, "default")
+
+
+# Methods a client may send; anything else shares one label value (OPS-14).
+HTTP_METHODS = frozenset(
+    {"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE", "CONNECT"}
+)
+
+
 class HttpMetricsMiddleware:
     """
     ASGI middleware: count and time every request by its route template.
@@ -121,7 +157,10 @@ class HttpMetricsMiddleware:
             await self.app(scope, receive, send_with_status)
         finally:
             route = getattr(scope.get("route"), "path", None) or "unmatched"
+            # The method comes from the client: unbounded on unmatched paths.
             method = scope.get("method", "")
+            if method not in HTTP_METHODS:
+                method = "OTHER"
             HTTP_REQUESTS.labels(method, route, str(status["code"])).inc()
             HTTP_DURATION.labels(method, route).observe(time.monotonic() - start)
 
@@ -172,12 +211,12 @@ async def count_upstream_response(response: httpx.Response) -> None:
 
 
 # For clients that talk to the agent's own services: tracing plus counting.
-OWN_SERVICE_HOOKS = {
+OWN_SERVICE_HOOKS: dict[str, list[Callable[..., Any]]] = {
     "request": [propagate_trace, count_upstream_request],
     "response": [count_upstream_response],
 }
 # For third parties (the geocoder): counted, but no tracing headers.
-THIRD_PARTY_HOOKS = {
+THIRD_PARTY_HOOKS: dict[str, list[Callable[..., Any]]] = {
     "request": [count_upstream_request],
     "response": [count_upstream_response],
 }

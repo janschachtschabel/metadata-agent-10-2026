@@ -257,7 +257,7 @@ async def test_a_preview_url_httpx_cannot_send_is_a_preview_error():
 async def test_a_malformed_preview_redirect_is_reported_as_a_preview_error(location):
     """
     httpx accepts these Location values, urllib's urljoin raises ValueError.
-    Anything but PreviewError escapes _set_preview, and save_node then discards
+    Anything but PreviewError escapes the preview step, and save_node then discards
     the node it has just written.
     """
 

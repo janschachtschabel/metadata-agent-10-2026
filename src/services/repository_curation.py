@@ -9,94 +9,25 @@ The functions take an open HTTP client and the auth header rather than holding
 state — `repository_service` owns the connection.
 """
 
-import re
 from typing import Any, Optional
-from urllib.parse import unquote
 
 import httpx
 import logging
 
+from .repository_support import repository_error
+
 logger = logging.getLogger(__name__)
 
-# edu-sharing node ids are Alfresco UUIDs.
-_NODE_ID_PATTERN = re.compile(
-    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+# Defined next to the request models that check them; re-exported, as callers
+# and tests import them from here.
+from ..models.repository_rules import (  # noqa: E402
+    DEFAULT_WORKFLOW_RECEIVER as DEFAULT_WORKFLOW_RECEIVER,
+    DEFAULT_WORKFLOW_STATUS as DEFAULT_WORKFLOW_STATUS,
+    KNOWN_WORKFLOW_STATUS as KNOWN_WORKFLOW_STATUS,
+    QUALITY_WORKFLOW_STATUS as QUALITY_WORKFLOW_STATUS,
+    extract_id_from_url as extract_id_from_url,
+    is_valid_node_id as is_valid_node_id,
 )
-
-
-def is_valid_node_id(value: Any) -> bool:
-    """
-    Check whether a value is a usable edu-sharing node id.
-
-    Every node id the API accepts ends up interpolated into a repository URL
-    that is called with the service account's credentials. A value containing
-    '/', '?' or '#' would steer that authenticated request at a different
-    endpoint, so callers must reject anything that is not the plain UUID shape.
-    Collection ids are node ids too.
-    """
-    return isinstance(value, str) and _NODE_ID_PATTERN.fullmatch(value) is not None
-
-
-# Review workflow status used when a node is handed over for human checking.
-# This is the state the upload flow stops at unless further steps are requested.
-DEFAULT_WORKFLOW_STATUS = "200_tocheck"
-
-# Receiver group for DEFAULT_WORKFLOW_STATUS — the WLO upload management queue.
-DEFAULT_WORKFLOW_RECEIVER = ["GROUP_ORG_WLO-Uploadmanager"]
-
-# Editorial state reached once a node has been checked and released. Where
-# DEFAULT_WORKFLOW_STATUS hands the node over for checking, this one records the
-# outcome, so the two are separate choices rather than steps of one switch.
-QUALITY_WORKFLOW_STATUS = "140_ELEMENT_LEGALLY_APPROVED"
-
-# Workflow states of the WLO editorial process, read from the repository config
-# (/rest/config/v1/values → workflow.workflows) plus the two states that occur in
-# live data but are not listed there ('200_tocheck', '125_METADATA_QUALITY_FOR_BUFFET').
-# Kept as a documented allow-list so a typo fails fast instead of writing an
-# unknown state into the repository.
-KNOWN_WORKFLOW_STATUS = {
-    "100_unchecked",
-    "110_METADATA_RECORD_REQUESTED",
-    "120_METADATA_QUALITY_CONFIRMED",
-    "125_METADATA_QUALITY_FOR_BUFFET",
-    "130_ELEMENT_REJECTED",
-    "140_ELEMENT_LEGALLY_APPROVED",
-    "150_PUBLISH_IN_SEARCH",
-    "160_REMOVE_FROM_SEARCH",
-    "200_tocheck",
-    "TASK_CREATE_TREE",
-    "TASK_CHECK_COLLECTION_PROPOSAL",
-    "TASK_CHECK_QUALITY",
-}
-
-
-def extract_id_from_url(value: Any) -> str:
-    """
-    Extract a collection node ID from a plain ID or a repository URL.
-
-    Handles the shapes users actually paste from the WLO frontend:
-    - '3039bdb2-…'                                    → as-is
-    - '…/components/collections/3039bdb2-…'           → last path segment
-    - '…/components/collections?id=3039bdb2-…&x=1'    → 'id' query parameter
-    """
-    if not isinstance(value, str):
-        return str(value) if value else ""
-
-    candidate = value.strip()
-    if not candidate:
-        return ""
-
-    # Collection links carry the node in the 'id' query parameter
-    if "?" in candidate:
-        base, _, query = candidate.partition("?")
-        for part in query.split("&"):
-            key, _, val = part.partition("=")
-            if key == "id" and val:
-                return unquote(val).split("/")[-1]
-        candidate = base
-
-    candidate = candidate.split("#")[0].rstrip("/")
-    return unquote(candidate).split("/")[-1]
 
 
 def extract_collection_ids(
@@ -175,7 +106,7 @@ async def set_collections(
             if success:
                 logger.info(f"📚 Referenced in collection {collection_id}")
             else:
-                entry["error"] = f"HTTP {response.status_code}: {response.text[:200]}"
+                entry["error"] = repository_error(response)
                 logger.warning(
                     f"⚠️ Collection {collection_id} failed: {response.status_code}"
                 )
@@ -184,8 +115,13 @@ async def set_collections(
             logger.warning(
                 f"⚠️ Collection {collection_id} failed: {type(e).__name__}: {e}"
             )
+            # The text can name internal hosts: it stays in the log above.
             results.append(
-                {"collectionId": collection_id, "success": False, "error": str(e)}
+                {
+                    "collectionId": collection_id,
+                    "success": False,
+                    "error": f"Verknüpfung fehlgeschlagen ({type(e).__name__})",
+                }
             )
 
     return {"results": results}
@@ -209,7 +145,7 @@ async def run_workflow_steps(
     quality?") — a single jump to the final state would lose the trail.
     """
     workflow_url = f"{base_url}/rest/node/v1/nodes/-home-/{node_id}/workflow"
-    results = []
+    results: list[dict[str, Any]] = []
 
     for index, status in enumerate(steps):
         # A later state presumes the earlier ones: publishing after a failed
@@ -263,12 +199,19 @@ async def run_workflow_steps(
             if success:
                 logger.info(f"🔄 Workflow → {status}")
             else:
-                entry["error"] = f"HTTP {response.status_code}: {response.text[:200]}"
+                entry["error"] = repository_error(response)
                 logger.warning(f"⚠️ Workflow → {status} failed: {response.status_code}")
             results.append(entry)
         except Exception as e:
             logger.warning(f"⚠️ Workflow → {status} failed: {type(e).__name__}: {e}")
-            results.append({"status": status, "success": False, "error": str(e)})
+            # The text can name internal hosts: it stays in the log above.
+            results.append(
+                {
+                    "status": status,
+                    "success": False,
+                    "error": f"Schritt fehlgeschlagen ({type(e).__name__})",
+                }
+            )
 
     return {"success": all(r["success"] for r in results), "steps": results}
 

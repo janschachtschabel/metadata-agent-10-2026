@@ -20,6 +20,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src import main
+from src.api import deps
 from src.services import repository_service as repo_module
 from src.services.repository_curation import DEFAULT_WORKFLOW_STATUS
 from src.services.repository_service import RepositoryService
@@ -442,7 +443,7 @@ def test_the_endpoint_passes_a_discarded_node_on(monkeypatch, service_result, ex
         async def upload_metadata(self, **kwargs):
             return service_result
 
-    monkeypatch.setattr(main, "get_repository_service", lambda: _StubService())
+    monkeypatch.setattr(deps, "get_repository_service", lambda: _StubService())
 
     with TestClient(main.app) as client:
         body = client.post("/upload", json={"cclom:title": "Titel"}).json()

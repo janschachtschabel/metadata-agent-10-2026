@@ -14,6 +14,7 @@ import pytest
 from pydantic import ValidationError
 
 from src.models.schemas import UploadRequest
+from src.api import deps
 from src.services import repository_service as repo_module
 from src.services.repository_curation import (
     DEFAULT_WORKFLOW_STATUS,
@@ -395,7 +396,7 @@ def test_node_without_repository_credentials_answers_503(monkeypatch):
 
     from src import main
 
-    monkeypatch.setattr(main, "get_repository_service", lambda: None)
+    monkeypatch.setattr(deps, "get_repository_service", lambda: None)
 
     response = TestClient(main.app).post(
         "/node", json={"metadata": {"cclom:title": "Titel"}}
@@ -416,7 +417,7 @@ def test_upload_answers_a_refused_node_like_nodes_does(monkeypatch, error_code, 
         async def upload_metadata(self, **kwargs):
             return {"success": False, "error_code": error_code, "error": "abgelehnt"}
 
-    monkeypatch.setattr(main, "get_repository_service", lambda: _Refusing())
+    monkeypatch.setattr(deps, "get_repository_service", lambda: _Refusing())
 
     response = TestClient(main.app).post(
         "/upload", json={"cclom:title": "Titel", "node_id": NODE_ID}
@@ -450,7 +451,7 @@ def test_a_skipped_workflow_step_is_marked_in_the_api_answer(monkeypatch):
                 ],
             }
 
-    monkeypatch.setattr(main, "get_repository_service", lambda: _Stopped())
+    monkeypatch.setattr(deps, "get_repository_service", lambda: _Stopped())
 
     response = TestClient(main.app).post("/upload", json={"cclom:title": "Titel"})
 

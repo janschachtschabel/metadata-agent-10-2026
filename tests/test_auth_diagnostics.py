@@ -9,6 +9,7 @@ At startup the agent warns about settings that cannot work together.
 from fastapi.testclient import TestClient
 
 from src import main
+from src.api import deps
 from src.config import Settings
 
 KEY = "Bearer 0123456789abcdef0123456789abcdef"
@@ -16,7 +17,7 @@ KEY = "Bearer 0123456789abcdef0123456789abcdef"
 
 def _client(monkeypatch, **overrides):
     monkeypatch.setattr(
-        main, "settings", Settings(_env_file=None, b_api_key="own-key", **overrides)
+        deps, "settings", Settings(_env_file=None, b_api_key="own-key", **overrides)
     )
     return TestClient(main.app)
 
@@ -50,13 +51,18 @@ def test_debug_auth_tells_when_the_own_key_would_be_used(monkeypatch):
     assert data["b_api_key_configured"] is True
 
 
-def test_health_names_provider_and_auth_mode_but_no_secret(monkeypatch):
-    with _client(monkeypatch, b_api_auth_mode="forward") as client:
-        response = client.get("/health")
+def test_internal_health_names_provider_and_auth_mode_but_no_secret(monkeypatch):
+    """The public /health says only that the process lives (audit S-08)."""
+    from src.infra import health_payload
 
-    assert response.json()["b_api_auth_mode"] == "forward"
-    assert "llm_provider" in response.json()
-    assert "own-key" not in response.text
+    with _client(monkeypatch, b_api_auth_mode="forward") as client:
+        public = client.get("/health")
+
+    payload = health_payload(deps.settings)
+    assert payload["b_api_auth_mode"] == "forward"
+    assert "llm_provider" in payload
+    assert "b_api_auth_mode" not in public.json()
+    assert "own-key" not in public.text + str(payload)
 
 
 # ------------------------------------------------------------ startup warnings
@@ -88,5 +94,30 @@ def test_mixed_staging_and_production_addresses_are_flagged():
     assert any("Staging" in w and "Produktion" in w for w in warnings)
 
 
+GUEST = {"WLO_GUEST_USERNAME": "gast", "WLO_GUEST_PASSWORD": "geheim"}
+
+
 def test_a_consistent_configuration_starts_quietly():
-    assert _warnings(b_api_key="k") == []
+    # Since OPS-12 a configuration without repository account is not ready.
+    assert _warnings(b_api_key="k", **GUEST) == []
+
+
+def test_missing_repository_credentials_are_flagged():
+    """Plan OPS-12 promised a start warning, only /ready said so."""
+    warnings = _warnings(b_api_key="k", WLO_GUEST_USERNAME="gast")
+
+    assert any("WLO_GUEST_PASSWORD" in w for w in warnings)
+    assert all("geheim" not in w for w in warnings)
+
+
+def test_deadlines_beyond_the_ingress_budget_are_flagged():
+    """Deadline + cleanup + preStop must fit the 120 s of ingress and grace period."""
+    upload = _warnings(b_api_key="k", upload_timeout=106, **GUEST)
+    generate = _warnings(b_api_key="k", generate_timeout=111, **GUEST)
+
+    assert any("METADATA_AGENT_UPLOAD_TIMEOUT" in w for w in upload)
+    assert any("METADATA_AGENT_GENERATE_TIMEOUT" in w for w in generate)
+    assert (
+        _warnings(b_api_key="k", upload_timeout=105, generate_timeout=110, **GUEST)
+        == []
+    )

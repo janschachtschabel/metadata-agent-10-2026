@@ -7,11 +7,23 @@
 # model a request picked is the caller's problem and only warns.
 # Pod down / restarting is left to the cluster's own rules (TargetDown,
 # KubePodCrashLooping in kube-prometheus-stack).
+# The critical rules must page on the first failure (audit OPS-06). increase()
+# ignores a series' first value, so each also counts series younger than its
+# window with a value above 0 - a failure on a fresh pod before the agent's
+# pre-created series (src/metrics.py) were scraped. "New" means: no sample
+# between 70 and 10 minutes ago, so a scrape gap of more than 10 minutes does
+# not make an old counter look new.
 groups:
   - name: metadata-agent
     rules:
       - alert: MetadataAgentLlmKeyRefused
-        expr: sum by (namespace) (increase(metadata_agent_llm_requests_total{result=~"LLM_AUTH_.*",auth_source!="forwarded",config="default"}[10m])) > 0
+        expr: |
+          sum by (namespace) (increase(metadata_agent_llm_requests_total{result=~"LLM_AUTH_.*",auth_source!="forwarded",config="default"}[10m])) > 0
+          or
+          sum by (namespace) (
+            metadata_agent_llm_requests_total{result=~"LLM_AUTH_.*",auth_source!="forwarded",config="default"}
+            unless last_over_time(metadata_agent_llm_requests_total{result=~"LLM_AUTH_.*",auth_source!="forwarded",config="default"}[1h] offset 10m)
+          ) > 0
         labels:
           severity: critical
         annotations:
@@ -19,7 +31,13 @@ groups:
           description: KI-Aufrufe mit der konfigurierten Einstellung enden mit LLM_AUTH_* (401/403, oder kein Key - im Modus forward fehlt dann der vom Proxy weitergereichte). B_API_KEY im Secret bzw. forwardApiKey im B-API-Proxy prüfen.
 
       - alert: MetadataAgentLlmRouteMisconfigured
-        expr: sum by (namespace) (increase(metadata_agent_llm_requests_total{result=~"LLM_ROUTE_.*|LLM_MODEL_NOT_FOUND",config="default"}[10m])) > 0
+        expr: |
+          sum by (namespace) (increase(metadata_agent_llm_requests_total{result=~"LLM_ROUTE_.*|LLM_MODEL_NOT_FOUND",config="default"}[10m])) > 0
+          or
+          sum by (namespace) (
+            metadata_agent_llm_requests_total{result=~"LLM_ROUTE_.*|LLM_MODEL_NOT_FOUND",config="default"}
+            unless last_over_time(metadata_agent_llm_requests_total{result=~"LLM_ROUTE_.*|LLM_MODEL_NOT_FOUND",config="default"}[1h] offset 10m)
+          ) > 0
         labels:
           severity: critical
         annotations:
@@ -75,13 +93,15 @@ groups:
         # Not for the LLM: during a generation many calls are in flight for up
         # to 90 s and would count as unanswered (MetadataAgentLlmUnreachable).
         # A service that never answered has no responses series yet; "or ... * 0"
-        # counts it as zero answers instead of dropping it.
+        # counts it as zero answers instead of dropping it. Not for "other"
+        # either: URLs a caller hands in (preview images) are not our
+        # dependencies (audit OPS-13).
         expr: |
           (
-            sum by (namespace, service) (increase(metadata_agent_upstream_requests_total{service!="llm"}[10m]))
+            sum by (namespace, service) (increase(metadata_agent_upstream_requests_total{service!~"llm|other"}[10m]))
             - (
-              sum by (namespace, service) (increase(metadata_agent_upstream_responses_total{service!="llm"}[10m]))
-              or sum by (namespace, service) (increase(metadata_agent_upstream_requests_total{service!="llm"}[10m])) * 0
+              sum by (namespace, service) (increase(metadata_agent_upstream_responses_total{service!~"llm|other"}[10m]))
+              or sum by (namespace, service) (increase(metadata_agent_upstream_requests_total{service!~"llm|other"}[10m])) * 0
             )
           ) > 3
         labels:
@@ -91,7 +111,7 @@ groups:
           description: Mehr als 3 Aufrufe in 10 Minuten an den Dienst im Label service blieben ohne Antwort (Timeout, Verbindung abgelehnt).
 
       - alert: MetadataAgentUpstreamServerErrors
-        expr: sum by (namespace, service) (increase(metadata_agent_upstream_responses_total{status=~"5.."}[10m])) > 5
+        expr: sum by (namespace, service) (increase(metadata_agent_upstream_responses_total{status=~"5..",service!="other"}[10m])) > 5
         labels:
           severity: warning
         annotations:

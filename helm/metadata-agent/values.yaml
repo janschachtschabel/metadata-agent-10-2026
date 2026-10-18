@@ -4,13 +4,20 @@
 image:
   # Required, e.g. <registry>/projects/wlo/meta-services/metadata-agent-api.
   repository: ""
-  tag: v2.1.1
+  tag: v3.0.0
   pullPolicy: IfNotPresent
 imagePullSecrets: []
 
 # Stateless; one worker per container, so scale here. The GWDG limit of the
-# AcademicCloud models is shared by all replicas.
+# AcademicCloud models is shared by all replicas (sharedLlmLimit below).
 replicaCount: 2
+
+# Spread the replicas over nodes, but never leave a pod pending for it.
+topologySpread:
+  enabled: true
+  maxSkew: 1
+  topologyKey: kubernetes.io/hostname
+  whenUnsatisfiable: ScheduleAnyway
 
 service:
   type: ClusterIP
@@ -22,13 +29,16 @@ service:
 # ingress and METADATA_AGENT_B_API_AUTH_MODE=auto anyone could run extractions
 # on B_API_KEY. Enable only for variant B behind an access restriction, or set
 # the auth mode to forward and allow only the B-API's source addresses.
+# With networkPolicy.enabled (the default) add the ingress controller's
+# namespace (e.g. ingress-nginx) to networkPolicy.ingressNamespaces, or the
+# policy blocks the controller and the Ingress answers 502/504.
 ingress:
   enabled: false
   className: nginx
   host: metadata-agent.example
   tlsSecretName: ""
   annotations:
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "120"  # /generate takes up to 90 s
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "120"  # /generate takes up to 110 s
     nginx.ingress.kubernetes.io/proxy-send-timeout: "120"
     nginx.ingress.kubernetes.io/proxy-body-size: "20m"     # = METADATA_AGENT_MAX_REQUEST_BYTES
 
@@ -39,13 +49,35 @@ env:
   METADATA_AGENT_REPOSITORY_URL: https://redaktion.openeduhub.net/edu-sharing/rest
   METADATA_AGENT_TEXT_EXTRACTION_API_URL: http://bildungs-api-services-full-text.b-api
   METADATA_AGENT_REQUEST_TIMEOUT: "90"              # per LLM call, below the ingress 120 s
+  METADATA_AGENT_GENERATE_TIMEOUT: "110"            # whole /generate, below the ingress 120 s
+  METADATA_AGENT_UPLOAD_TIMEOUT: "100"              # /upload, /nodes; + discard + preStop < 120 s
   METADATA_AGENT_MAX_REQUEST_BYTES: "20971520"      # 20 MB
-  METADATA_AGENT_INTERNAL_PORT: "9000"              # = service.internalPort
   METADATA_AGENT_DEBUG_ENDPOINTS: "false"           # /debug/* answers 404
   METADATA_AGENT_LOG_FORMAT: json
   METADATA_AGENT_LOG_LEVEL: INFO
 
+# AcademicCloud (b-api-academiccloud, or a b-api-router route of AcademicCloud
+# models): GWDG limits the B-API key, the agent throttles each pod. With N
+# replicas and the provider defaults (2 in flight, 2 req/s per process) the
+# pods together send N times what the gateway accepts - 429 and retries.
+# Enabled, the chart divides the shared limit by replicaCount and sets
+# METADATA_AGENT_LLM_MAX_CONCURRENT_REQUESTS (at least 1) and
+# METADATA_AGENT_LLM_MAX_REQUESTS_PER_SECOND per pod. Figures: at most 2 in
+# flight (measured 2026-08-12), ~10 calls per minute for the key (measured
+# 2026-10-15). At 10/min a /generate with ~50 calls takes about 5 minutes and
+# ends at METADATA_AGENT_GENERATE_TIMEOUT with partial results. Scaling the
+# Deployment by hand (kubectl scale, an HPA) bypasses the division. Leave it
+# off for b-api-openai and openai; their limits are per pod.
+sharedLlmLimit:
+  enabled: false
+  concurrentRequests: 2
+  requestsPerMinute: 10
+
 # Secret values never go into this file.
+# Changing the Secret does not restart the pods (no checksum annotation: an
+# unsalted hash of the values would be readable by anyone who can read the
+# Deployment). After a change: kubectl rollout restart deployment/<name> (the
+# name helm install prints in its notes).
 secret:
   # Name of an existing Secret holding the keys below. Empty: the chart
   # expects "<release>-metadata-agent", created with create: true.
@@ -54,7 +86,7 @@ secret:
   create: false
   keys:
     - B_API_KEY            # not needed with METADATA_AGENT_B_API_AUTH_MODE=forward
-    - WLO_GUEST_USERNAME
+    - WLO_GUEST_USERNAME   # both required: without them /ready answers 503
     - WLO_GUEST_PASSWORD
   values: {}
 
@@ -63,7 +95,14 @@ resources:
   requests: {cpu: 500m, memory: 512Mi}
   limits: {cpu: "2", memory: 2Gi}
 
-# A running /generate takes up to 90 s; uvicorn finishes it after SIGTERM.
+# The writable emptyDirs (/tmp and /home/appuser: Chromium's profile, caches,
+# screenshots in flight). Above the limit the kubelet evicts the pod instead of
+# letting it fill the node's disk.
+scratchVolumes:
+  tmpSizeLimit: 1Gi
+  homeSizeLimit: 512Mi
+
+# A running /generate takes up to 110 s; uvicorn finishes it after SIGTERM.
 terminationGracePeriodSeconds: 120
 
 podSecurityContext:
@@ -74,6 +113,16 @@ podSecurityContext:
 securityContext:
   allowPrivilegeEscalation: false
   capabilities: {drop: [ALL]}
+  # Writable: /tmp and /home/appuser (emptyDir, deployment.yaml) - Chromium's
+  # profile and caches. The application writes nothing.
+  readOnlyRootFilesystem: true
+
+# Proxies whose X-Forwarded-Proto/-For uvicorn trusts (uvicorn's
+# FORWARDED_ALLOW_IPS). Behind a TLS ingress the default 127.0.0.1 made
+# /widget/info answer with http:// URLs. "*" is safe only because the
+# NetworkPolicy lets nothing but the B-API (and Prometheus) reach the pod; with
+# networkPolicy.enabled=false set the proxies' addresses here.
+forwardedAllowIps: "*"
 
 # Needs the Prometheus Operator CRDs (e.g. kube-prometheus-stack). Labels:
 # whatever the Prometheus' serviceMonitorSelector / ruleSelector expects.
@@ -84,6 +133,41 @@ serviceMonitor:
 prometheusRule:
   enabled: true
   labels: {}
+
+# Only the B-API proxy may reach the API (port 8000), only Prometheus the
+# internal port (9000). Namespaces are matched by the name label Kubernetes sets
+# on every namespace - adjust them to the cluster before installing, or the
+# B-API cannot call the agent. Egress: DNS to the cluster DNS, the listed
+# namespaces on egressPorts, and the public internet (IPv4) without private
+# ranges.
+#
+# Caveats (check on the first install, DEPLOYMENT.md):
+# - IPv6: no IPv6 egress is allowed. On a dual-stack cluster calls to a host
+#   with an AAAA record must fall back to IPv4.
+# - LoadBalancer / DNAT: a public name served by this cluster (repository,
+#   B-API behind the cluster's ingress or a LoadBalancer Service) resolves to a
+#   public address, but kube-proxy rewrites it to a pod address in a private
+#   range - which egressExceptCidrs blocks. Add the namespace of the ingress
+#   controller (or of the service) to egressNamespaces.
+# - egressPorts are the ports of the target pods (targetPort), not of the
+#   Service: policies apply after the Service's address translation.
+networkPolicy:
+  enabled: true
+  ingressNamespaces: [b-api]
+  prometheusNamespaces: [monitoring]
+  egressNamespaces: [b-api]
+  egressPorts: [80, 443, 8000, 8080]
+  # The cluster DNS. With NodeLocal DNSCache (a link-local address on the
+  # node) set namespace to "": port 53 is then open to every address.
+  dns:
+    namespace: kube-system
+    podLabels: {k8s-app: kube-dns}
+  egressExceptCidrs:
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+    - 192.168.0.0/16
+    - 169.254.0.0/16
+    - 100.64.0.0/10
 
 # Keeps one pod running while nodes are drained (only with replicaCount > 1).
 podDisruptionBudget:

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="generator" content="archify 3.1.0">
   <meta name="archify-reader-contract" content="declared-wide-v1">
-  <title>Metadata Agent – Architektur (2.1.0) Diagramm</title>
+  <title>Metadata Agent – Architektur (3.0.0) Diagramm</title>
   <script>
     // Resolve the theme before first paint so light-preference users don't
     // see a dark flash. The toolbar script below re-applies with UI state.
@@ -5150,7 +5150,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
            data-preset-badge-blueprint="BAUPLAN / REV. 01"
            data-preset-badge-editorial="EDITORIAL / FELDNOTIZ">
         <div class="pulse-dot"></div>
-        <h1>Metadata Agent – Architektur (2.1.0)</h1>
+        <h1>Metadata Agent – Architektur (3.0.0)</h1>
       </div>
     </div>
 
@@ -5160,7 +5160,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
     <div class="diagram-container" data-detail-level="read"
          data-preset-badge-editorial-plate="ARCHIFY / TAFEL 04">
       <svg viewBox="0 0 1610 638" role="img" lang="de" aria-labelledby="archify-diagram-title archify-diagram-description" data-animation="trace" data-preset="classic" data-quality-profile="showcase" data-node-ui="" data-reader-fit="intrinsic-height" data-reader-min-text="7.5" data-reader-primary-text="14">
-        <title id="archify-diagram-title">Metadata Agent – Architektur (2.1.0)</title>
+        <title id="archify-diagram-title">Metadata Agent – Architektur (3.0.0)</title>
         <desc id="archify-diagram-description">Ein von Archify erstelltes Architekturdiagramm.</desc>
         <!-- Definitions -->
         <defs>
@@ -5295,8 +5295,8 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <text data-detail="fine" x="600" y="352" class="t-security" font-size="7" text-anchor="middle">forwardApiKey</text>
         </g>
 
-        <g id="node-agent" data-node-id="agent" data-node-label="Metadata Agent" tabindex="0" role="button" aria-label="Metadata Agent fokussieren, FastAPI :8000, Architekturkomponente" aria-pressed="false" data-node-kind="backend" data-node-sublabel="FastAPI :8000" data-node-tag="2.1.0" data-node-context="Architekturkomponente">
-          <title>Metadata Agent · FastAPI :8000 · Architekturkomponente · 2.1.0</title>
+        <g id="node-agent" data-node-id="agent" data-node-label="Metadata Agent" tabindex="0" role="button" aria-label="Metadata Agent fokussieren, FastAPI :8000, Architekturkomponente" aria-pressed="false" data-node-kind="backend" data-node-sublabel="FastAPI :8000" data-node-tag="3.0.0" data-node-context="Architekturkomponente">
+          <title>Metadata Agent · FastAPI :8000 · Architekturkomponente · 3.0.0</title>
           <rect x="790" y="298" width="170" height="64" rx="8" class="c-mask"/>
           <rect x="790" y="298" width="170" height="64" rx="8" class="c-backend" data-animate="node" style="--step:3" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(796 304) scale(0.6875)">
@@ -5304,7 +5304,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           </g>
           <text data-node-label="" data-detail-anchor="" x="875" y="328" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Metadata Agent</text>
         <text data-detail="context" x="875" y="344" class="t-muted" font-size="9" text-anchor="middle">FastAPI :8000</text>
-        <text data-detail="fine" x="875" y="354" class="t-backend" font-size="7" text-anchor="middle">2.1.0</text>
+        <text data-detail="fine" x="875" y="354" class="t-backend" font-size="7" text-anchor="middle">3.0.0</text>
         </g>
 
         <g id="node-llm" data-node-id="llm" data-node-label="B-API LLM" tabindex="0" role="button" aria-label="B-API LLM fokussieren, openai · academiccloud · router, Architekturkomponente" aria-pressed="false" data-node-kind="cloud" data-node-sublabel="openai · academiccloud · router" data-node-context="Architekturkomponente">
@@ -5699,6 +5699,8 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <li>Fehler mit error.code und X-Request-ID; Logs als Text oder JSON</li>
           <li>Tracing-Header (x-client-trace-id, B3) gehen an eigene Dienste</li>
           <li>ohne B-API-Proxy: Widget ruft den Agent direkt, LLM über B_API_KEY (wie 2.0.x) oder OPENAI_API_KEY</li>
+          <li>Helm-Chart: NetworkPolicy (API nur aus dem B-API-Namespace, intern nur Prometheus; ausgehend Cluster-DNS, B-API-Ports, Internet ohne private Netze), schreibgeschütztes Root-Dateisystem</li>
+          <li>/generate endet spätestens nach 110 s (504), unter den 120 s von Ingress und Grace Period</li>
         </ul>
       </div>
     </div>

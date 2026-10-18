@@ -41,7 +41,7 @@ DOCS_EXAMPLE = {
     "context": "default",
     "version": "latest",
     "schema_file": "event.json",
-    "field_id": "schema:startDate",
+    "field_id": "ccm:oeh_event_begin",
     "existing_metadata": {},
     "language": "de",
     "normalize": True,
@@ -179,7 +179,7 @@ def test_a_blank_required_field_is_reported_against_the_input_source(
         "source_url": "",
         "node_id": "",
         "schema_file": "event.json",
-        "field_id": "schema:startDate",
+        "field_id": "ccm:oeh_event_begin",
     }
 
     with TestClient(app) as client:

@@ -15,6 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src import main
+from src.api import deps
 from src.services import input_source_service as input_module
 from src.services.input_source_service import (
     InputData,
@@ -54,7 +55,7 @@ def _raising(exc):
         (httpx.RemoteProtocolError(""), "TEXT_EXTRACTION_FAILED", 502),
     ],
 )
-async def test_transport_failures_are_named(monkeypatch, exc, code, status):
+async def test_transport_failures_are_named(monkeypatch, caplog, exc, code, status):
     service = _service(monkeypatch, _raising(exc))
 
     with pytest.raises(TextExtractionError) as raised:
@@ -62,7 +63,10 @@ async def test_transport_failures_are_named(monkeypatch, exc, code, status):
 
     assert raised.value.code == code
     assert raised.value.http_status == status
-    assert "bildungs-api-services-full-text.b-api" in raised.value.message
+    # The message reaches the client: the internal host goes to the log only.
+    assert raised.value.message.startswith("Textextraktionsdienst")
+    assert "bildungs-api-services-full-text.b-api" not in raised.value.message
+    assert "bildungs-api-services-full-text.b-api" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -74,6 +78,7 @@ async def test_an_http_error_of_the_extractor_carries_its_status(monkeypatch):
 
     assert raised.value.code == "TEXT_EXTRACTION_HTTP_ERROR"
     assert "500" in raised.value.message
+    assert "bildungs-api-services-full-text.b-api" not in raised.value.message
 
 
 @pytest.mark.asyncio
@@ -121,7 +126,7 @@ class _FailingInput:
     ],
 )
 def test_every_endpoint_reports_the_named_cause(monkeypatch, path, body):
-    monkeypatch.setattr(main, "get_input_source_service", lambda: _FailingInput())
+    monkeypatch.setattr(deps, "get_input_source_service", lambda: _FailingInput())
 
     with TestClient(main.app) as client:
         response = client.post(path, json=body)
@@ -130,6 +135,38 @@ def test_every_endpoint_reports_the_named_cause(monkeypatch, path, body):
     data = response.json()
     assert data["error"]["code"] == "TEXT_EXTRACTION_CONNECT_TIMEOUT"
     assert "nicht erreichbar" in data["detail"]
+
+
+@pytest.mark.parametrize(
+    "path, body",
+    [
+        ("/generate", {"input_source": "url", "source_url": "https://example.org"}),
+        (
+            "/detect-content-type",
+            {"input_source": "url", "source_url": "https://example.org"},
+        ),
+        (
+            "/extract-field",
+            {
+                "input_source": "url",
+                "source_url": "https://example.org",
+                "schema_file": "core.json",
+                "field_id": "cclom:title",
+            },
+        ),
+    ],
+)
+def test_a_failed_extraction_names_no_internal_host(monkeypatch, path, body):
+    """Review #5: the real service's error reached the client with its host."""
+    service = _service(monkeypatch, _raising(httpx.ConnectError("")))
+    monkeypatch.setattr(deps, "get_input_source_service", lambda: service)
+
+    with TestClient(main.app) as client:
+        response = client.post(path, json=body)
+
+    assert response.status_code == 502, response.text
+    assert response.json()["error"]["code"] == "TEXT_EXTRACTION_UNREACHABLE"
+    assert "bildungs-api-services-full-text" not in response.text
 
 
 # ---------------------------------------------- node_url: fallback to the node
@@ -230,11 +267,11 @@ class _StubLLM:
 
 
 def test_every_endpoint_passes_the_fallback_on(monkeypatch):
-    monkeypatch.setattr(main, "get_input_source_service", lambda: _FallbackInput())
+    monkeypatch.setattr(deps, "get_input_source_service", lambda: _FallbackInput())
     monkeypatch.setattr(
-        main, "get_metadata_service", lambda **kw: _StubMetadataService()
+        deps, "get_metadata_service", lambda **kw: _StubMetadataService()
     )
-    monkeypatch.setattr(main, "get_llm_service", lambda **kw: _StubLLM())
+    monkeypatch.setattr(deps, "get_llm_service", lambda **kw: _StubLLM())
     node = {
         "input_source": "node_url",
         "node_id": "3039bdb2-f51f-4cc8-b1d9-3fb6b0ffc1d9",

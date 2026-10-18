@@ -18,7 +18,8 @@ import pytest
 from fastapi.testclient import TestClient
 from prometheus_client import REGISTRY
 
-from src import main
+from src import infra, main
+from src.api import deps
 from src.config import Settings
 from src.infra import (
     InternalPortUnavailable,
@@ -31,7 +32,15 @@ from src.services.llm_service import LLMService, reset_provider_gates
 
 
 def _settings(**overrides) -> Settings:
-    return Settings(_env_file=None, **{"b_api_key": "own-key", **overrides})
+    return Settings(
+        _env_file=None,
+        **{
+            "b_api_key": "own-key",
+            "wlo_guest_username": "agent",
+            "wlo_guest_password": "pw",
+            **overrides,
+        },
+    )
 
 
 def _sample(name, **labels) -> float:
@@ -42,7 +51,7 @@ def _sample(name, **labels) -> float:
 
 
 def test_ready_when_the_configuration_can_work(monkeypatch):
-    monkeypatch.setattr(main, "settings", _settings())
+    monkeypatch.setattr(deps, "settings", _settings())
 
     with TestClient(main.app) as client:
         response = client.get("/ready")
@@ -56,26 +65,65 @@ def test_ready_when_the_configuration_can_work(monkeypatch):
     [
         ({"b_api_auth_mode": "static", "b_api_key": ""}, "B_API_KEY"),
         ({"llm_provider": "openai", "openai_api_key": ""}, "OPENAI_API_KEY"),
+        # Audit OPS-12: a typo in secret.existingSecret left the pod ready
+        # without repository credentials - /upload and /nodes answered 503.
+        ({"wlo_guest_username": ""}, "WLO_GUEST_USERNAME"),
+        ({"wlo_guest_password": ""}, "WLO_GUEST_PASSWORD"),
     ],
 )
 def test_not_ready_when_no_llm_call_could_succeed(monkeypatch, overrides, reason):
-    monkeypatch.setattr(main, "settings", _settings(**overrides))
+    monkeypatch.setattr(deps, "settings", _settings(**overrides))
 
     with TestClient(main.app) as client:
-        response = client.get("/ready")
+        public = client.get("/ready")
+    with TestClient(infra.create_internal_app(lambda: deps.settings)) as client:
+        internal = client.get("/ready")
 
-    assert response.status_code == 503
-    assert any(reason in p for p in response.json()["problems"])
+    assert public.status_code == internal.status_code == 503
+    # The public port names no setting (review of the 2026-10-18 round, S-08).
+    assert public.json() == {"status": "not_ready"}
+    assert any(reason in p for p in internal.json()["problems"])
 
 
 def test_forward_mode_without_own_key_is_ready(monkeypatch):
     # The key arrives with each request through the B-API proxy.
     monkeypatch.setattr(
-        main, "settings", _settings(b_api_auth_mode="forward", b_api_key="")
+        deps, "settings", _settings(b_api_auth_mode="forward", b_api_key="")
     )
 
     with TestClient(main.app) as client:
         assert client.get("/ready").status_code == 200
+
+
+def test_auto_mode_without_own_key_stays_ready(monkeypatch):
+    """
+    Behind the B-API proxy with forwardApiKey every call carries the caller's
+    key; auto without B_API_KEY is a working setup (startup warning only).
+    """
+    monkeypatch.setattr(
+        deps, "settings", _settings(b_api_auth_mode="auto", b_api_key="")
+    )
+
+    with TestClient(main.app) as client:
+        assert client.get("/ready").status_code == 200
+
+
+def test_a_readiness_problem_is_logged_once(monkeypatch, caplog):
+    monkeypatch.setattr(infra, "_logged_problems", [])
+    monkeypatch.setattr(deps, "settings", _settings(wlo_guest_password=""))
+
+    with TestClient(main.app) as client:
+        for _ in range(3):
+            client.get("/ready")
+
+    # /ready's own lines; the start warning (src.main) names it once as well.
+    logged = [
+        r
+        for r in caplog.records
+        if r.name == "src.infra" and "WLO_GUEST_PASSWORD" in r.getMessage()
+    ]
+    assert len(logged) == 1
+    assert "pw" not in logged[0].getMessage()
 
 
 def test_infrastructure_paths_are_not_in_the_spec():
@@ -208,7 +256,7 @@ class _Generation:
 
 
 def test_generations_are_counted_by_status(monkeypatch):
-    monkeypatch.setattr(main, "get_metadata_service", lambda **kw: _Generation())
+    monkeypatch.setattr(deps, "get_metadata_service", lambda **kw: _Generation())
     before = _sample("metadata_agent_generations_total", status="partial")
 
     with TestClient(main.app) as client:
@@ -290,7 +338,7 @@ def test_the_api_keeps_running_when_the_internal_port_is_taken(monkeypatch, capl
         taken.bind(("0.0.0.0", 0))
         taken.listen()
         port = taken.getsockname()[1]
-        monkeypatch.setattr(main, "settings", _settings(internal_port=port))
+        monkeypatch.setattr(deps, "settings", _settings(internal_port=port))
 
         with TestClient(main.app) as client:
             assert client.get("/health").status_code == 200

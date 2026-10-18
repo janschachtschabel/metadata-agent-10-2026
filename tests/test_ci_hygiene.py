@@ -1,0 +1,337 @@
+"""
+What both CI systems check before an image is published (audits DEP-02, OPS-03).
+
+- GitHub Actions run by commit SHA: a moved tag would run someone else's code
+  next to the DockerHub password.
+- Known vulnerabilities in the locked dependencies (pip-audit) and in the image
+  (Trivy, critical and fixable) stop the pipeline.
+- The built image is started and must answer /health - a merge request that
+  breaks the image no longer reaches main unnoticed.
+"""
+
+import re
+from pathlib import Path
+
+import yaml
+
+ROOT = Path(__file__).resolve().parents[1]
+GITHUB = ROOT / ".github" / "workflows" / "docker-publish.yml"
+GITLAB = ROOT / ".gitlab-ci.yml"
+
+
+def _gitlab() -> dict:
+    return yaml.safe_load(GITLAB.read_text(encoding="utf-8"))
+
+
+def _script(job: dict) -> str:
+    """The job's script lines; nested lists (YAML anchors) are flattened as GitLab does."""
+    lines: list[str] = []
+    for entry in job.get("script", []):
+        lines.extend(entry if isinstance(entry, list) else [entry])
+    return "\n".join(lines)
+
+
+def test_every_github_action_is_pinned_to_a_commit():
+    uses = re.findall(r"uses:\s*(\S+)(.*)", GITHUB.read_text(encoding="utf-8"))
+
+    assert uses, "no actions found"
+    for action, rest in uses:
+        assert re.fullmatch(r"[\w.-]+/[\w.-]+@[0-9a-f]{40}", action), action
+        assert re.search(r"#\s*v\d", rest), f"{action}: name the version in a comment"
+
+
+def test_github_audits_the_locked_dependencies():
+    text = GITHUB.read_text(encoding="utf-8")
+
+    assert re.search(
+        r"pip-audit==[\d.]+ .*-r requirements\.txt .*--require-hashes", text
+    )
+
+
+SMOKE = "scripts/smoke-image.sh"
+
+
+def test_the_smoke_test_waits_for_health():
+    script = (ROOT / SMOKE).read_text(encoding="utf-8")
+
+    assert "/health" in script and "METADATA_AGENT_B_API_AUTH_MODE=forward" in script
+
+
+def test_github_smoke_tests_and_scans_the_image_before_publishing():
+    text = GITHUB.read_text(encoding="utf-8")
+    smoke, scan, push = (
+        text.find(SMOKE),
+        text.find("aquasec/trivy:"),
+        text.find("docker push"),
+    )
+
+    assert -1 not in (smoke, scan, push)
+    assert smoke < push and scan < push
+
+
+def test_gitlab_audits_the_locked_dependencies():
+    jobs = _gitlab()
+
+    assert any(
+        "pip-audit" in _script(job) and "--require-hashes" in _script(job)
+        for job in jobs.values()
+        if isinstance(job, dict)
+    )
+
+
+def test_gitlab_smoke_tests_and_scans_the_image_in_merge_requests():
+    jobs = {name: job for name, job in _gitlab().items() if isinstance(job, dict)}
+    mr_jobs = [
+        job
+        for job in jobs.values()
+        if any(
+            "merge_request_event" in str(rule.get("if", ""))
+            for rule in job.get("rules", [])
+        )
+    ]
+
+    assert any(
+        SMOKE in _script(job) and "aquasec/trivy" in _script(job) for job in mr_jobs
+    )
+
+
+def test_gitlab_has_no_install_job_without_artifacts():
+    assert "uv-install" not in _gitlab()
+
+
+def test_every_github_step_runs_once():
+    text = GITHUB.read_text(encoding="utf-8")
+
+    for step in ("Audit dependencies", "Smoke test the image", "Scan the image"):
+        assert text.count(f"name: {step}") == 1, step
+
+
+def test_github_logs_in_only_after_the_image_was_checked():
+    """Scanner and smoke test run with the Docker socket; the password must not be on disk yet."""
+    text = GITHUB.read_text(encoding="utf-8")
+
+    assert text.find("docker/login-action") > text.find("name: Scan the image")
+    assert text.find("docker/login-action") > text.find("name: Smoke test the image")
+
+
+def test_the_scanner_image_is_pinned_by_digest():
+    for ci in (GITHUB, GITLAB):
+        images = re.findall(r"aquasec/trivy:\S+", ci.read_text(encoding="utf-8"))
+        assert images, ci.name
+        for image in images:
+            assert re.fullmatch(r"aquasec/trivy:[\d.]+@sha256:[0-9a-f]{64}", image), (
+                image
+            )
+
+
+def test_the_smoke_test_starts_chromium_read_only():
+    """The one component that writes to disk: launched once in the read-only container."""
+    script = (ROOT / SMOKE).read_text(encoding="utf-8")
+
+    assert "docker exec" in script and "chromium.launch" in script
+
+
+def test_the_smoke_test_cleans_up_even_when_the_start_fails():
+    script = (ROOT / SMOKE).read_text(encoding="utf-8")
+
+    assert script.index("trap ") < script.index("docker run")
+
+
+# ------------------------------------------------- GitLab pipelines (OPS-05/09)
+
+
+def _resolved(jobs: dict, name: str) -> dict:
+    """A job with its `extends` merged in, as GitLab does (deep merge, job wins)."""
+    job = jobs[name]
+    parents = job.get("extends", [])
+    merged: dict = {}
+    for parent in [parents] if isinstance(parents, str) else parents:
+        merged = _deep_merge(merged, _resolved(jobs, parent))
+    return _deep_merge(merged, {k: v for k, v in job.items() if k != "extends"})
+
+
+def _deep_merge(base: dict, override: dict) -> dict:
+    result = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = _deep_merge(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+def _gitlab_jobs() -> dict[str, dict]:
+    """Every runnable job (not hidden, not a keyword), resolved."""
+    config = _gitlab()
+    keywords = {"stages", "default", "variables", "workflow", "include"}
+    return {
+        name: _resolved(config, name)
+        for name, job in config.items()
+        if isinstance(job, dict) and not name.startswith(".") and name not in keywords
+    }
+
+
+def _rule_ifs(job: dict) -> list[str]:
+    return [str(rule.get("if", "")) for rule in job.get("rules", [])]
+
+
+def _runs_in_merge_requests(job: dict) -> bool:
+    """A job without rules defaults to `only: [branches, tags]` - no MR pipeline."""
+    return any("merge_request_event" in cond for cond in _rule_ifs(job))
+
+
+def test_gitlab_runs_either_a_merge_request_or_a_branch_pipeline():
+    """
+    Audit OPS-05: without workflow:rules a push to an MR branch starts a branch
+    pipeline with the tests and a separate MR pipeline without them - and the MR
+    widget only looks at the latter.
+    """
+    rules = _gitlab()["workflow"]["rules"]
+    conditions = [str(rule.get("if", "")) for rule in rules]
+
+    assert "merge_request_event" in conditions[0]
+    never = [
+        rule
+        for rule in rules
+        if "$CI_OPEN_MERGE_REQUESTS" in str(rule.get("if", ""))
+        and rule.get("when") == "never"
+    ]
+    assert never, "a branch with an open MR must not start a second pipeline"
+    # main and develop publish from their branch pipeline, open MR or not.
+    publish_branches = next(
+        i for i, cond in enumerate(conditions) if '"develop"' in cond
+    )
+    assert publish_branches < rules.index(never[0])
+
+
+def test_every_gitlab_check_runs_in_merge_request_pipelines():
+    """Tests, ruff, mypy, pip-audit, chart and alert checks gate the merge (OPS-05)."""
+    checks = {
+        name: job for name, job in _gitlab_jobs().items() if job["stage"] != "deploy"
+    }
+
+    assert {"run tests", "pip audit", "helm lint", "alert rules"} <= set(checks)
+    assert any("ruff check" in _script(job) for job in checks.values())
+    assert any("ruff format" in _script(job) for job in checks.values())
+    assert any("mypy" in _script(job) for job in checks.values())
+    for name, job in checks.items():
+        assert _runs_in_merge_requests(job), name
+
+
+def test_gitlab_publishes_only_from_main_develop_and_tags():
+    publish = {
+        name: job
+        for name, job in _gitlab_jobs().items()
+        if "docker image push" in _script(job)
+    }
+
+    assert len(publish) == 2
+    for name, job in publish.items():
+        assert job["stage"] == "deploy", name
+        assert not _runs_in_merge_requests(job), name
+        conditions = " ".join(_rule_ifs(job))
+        assert "'main'" in conditions or "CI_COMMIT_TAG" in conditions, name
+
+
+def test_gitlab_logs_in_directly_before_the_push():
+    """
+    Audit OPS-09: build, smoke test and scanner run with the Docker socket; the
+    registry password must not be in the daemon's config while they run.
+    """
+    for name, job in _gitlab_jobs().items():
+        lines = _script(job).splitlines()
+        if not any("docker image push" in line for line in lines):
+            continue
+        login = next(i for i, line in enumerate(lines) if "docker login" in line)
+        push = next(i for i, line in enumerate(lines) if "docker image push" in line)
+        assert login == push - 1, name
+        assert all("docker login" not in line for line in lines[:login]), name
+
+
+def test_every_gitlab_job_names_its_image():
+    """Audit OPS-09: so the default image (and the empty .pre stage) can go."""
+    config = _gitlab()
+
+    assert "default" not in config
+    assert ".pre" not in config["stages"]
+    for name, job in _gitlab_jobs().items():
+        assert job.get("image"), name
+
+
+def _image(job: dict) -> str:
+    image = job["image"]
+    return image["name"] if isinstance(image, dict) else image
+
+
+def test_chart_tool_images_are_pinned_by_digest():
+    """helm, promtool and kubeconform see the chart; a moved tag must not change them."""
+    digest = r"[\w./-]+:[\w.-]+@sha256:[0-9a-f]{64}"
+    tool_images = [
+        _image(job)
+        for job in _gitlab_jobs().values()
+        if any(tool in _image(job) for tool in ("helm", "prometheus"))
+    ]
+
+    assert len(tool_images) >= 2
+    for image in tool_images:
+        assert re.fullmatch(digest, image), image
+    for image in re.findall(
+        r"(?:prom/prometheus|ghcr\.io/yannh/kubeconform):\S+",
+        GITHUB.read_text(encoding="utf-8"),
+    ):
+        assert re.fullmatch(digest, image), image
+
+
+def test_github_token_is_read_only():
+    """Audit OPS-09: the workflow only reads the repository."""
+    workflow = yaml.safe_load(GITHUB.read_text(encoding="utf-8"))
+
+    assert workflow["permissions"] == {"contents": "read"}
+
+
+def test_both_ci_validate_the_rendered_chart_with_kubeconform():
+    """Audit T-07: helm lint does not check the manifests against the Kubernetes schemas."""
+    jobs = _gitlab_jobs()
+    kubeconform = [job for job in jobs.values() if "kubeconform" in _script(job)]
+
+    assert kubeconform and all(_runs_in_merge_requests(j) for j in kubeconform)
+    rendered = " ".join(_script(job) for job in jobs.values())
+    assert "ingress.enabled=true" in rendered
+    assert "kubeconform" in GITHUB.read_text(encoding="utf-8")
+
+
+def test_both_ci_require_the_browser_tests():
+    """Audit T-03: a missing Chromium must fail CI, not skip the browser tests."""
+    run_tests = _gitlab_jobs()["run tests"]
+
+    assert str(run_tests["variables"]["REQUIRE_BROWSER"]) == "1"
+    workflow = yaml.safe_load(GITHUB.read_text(encoding="utf-8"))
+    assert str(workflow["jobs"]["test"]["env"]["REQUIRE_BROWSER"]) == "1"
+
+
+def test_both_ci_render_the_chart_in_the_tests():
+    """
+    Review 18.10. #21: the rendered-chart tests skip without helm, and the
+    GitLab test image has none - they skipped there on every run. GitLab copies
+    helm out of the pinned helm image in an earlier stage; REQUIRE_HELM=1 turns
+    a missing helm into a failure.
+    """
+    jobs = _gitlab_jobs()
+    run_tests = jobs["run tests"]
+    stages = _gitlab()["stages"]
+    providers = {
+        name: job
+        for name, job in jobs.items()
+        if "tools/helm" in _script(job) and "helm" in _image(job)
+    }
+
+    assert str(run_tests["variables"]["REQUIRE_HELM"]) == "1"
+    assert len(providers) == 1
+    ((name, provider),) = providers.items()
+    assert stages.index(provider["stage"]) < stages.index(run_tests["stage"])
+    assert "tools/helm" in provider["artifacts"]["paths"]
+    assert name in run_tests["dependencies"]
+    assert _runs_in_merge_requests(provider)
+    assert "$CI_PROJECT_DIR/tools" in _script(run_tests)
+    workflow = yaml.safe_load(GITHUB.read_text(encoding="utf-8"))
+    assert str(workflow["jobs"]["test"]["env"]["REQUIRE_HELM"]) == "1"

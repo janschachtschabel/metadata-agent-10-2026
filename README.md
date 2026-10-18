@@ -34,7 +34,7 @@ Generiert strukturierte Metadaten nach dem [WLO/OEH-Schema](https://wirlernenonl
 | Dokument | Inhalt |
 |---|---|
 | [ENV-PARAMETER.md](ENV-PARAMETER.md) | **Alle** Umgebungsvariablen mit Defaults und Betriebsbeispielen |
-| [DEPLOYMENT.md](DEPLOYMENT.md) | Docker / Kubernetes, **[Update von 2.0.x auf 2.1.0](DEPLOYMENT.md#update-von-20x-auf-210)** |
+| [DEPLOYMENT.md](DEPLOYMENT.md) | Docker / Kubernetes, **[Update von 2.1.x auf 3.0.0](DEPLOYMENT.md#update-von-21x-auf-300)** (davor [2.0.x auf 2.1.0](DEPLOYMENT.md#update-von-20x-auf-210)), Prüfliste für die erste Installation, Rollback |
 | [UEBERGABE.md](UEBERGABE.md) | Übergabe an den Betrieb: Ports, Header, Metriken, Alarmregeln, Skalierung, Kosten |
 | [helm/metadata-agent/](helm/metadata-agent/README.md) | Helm-Chart mit ServiceMonitor und Alarmregeln (`PrometheusRule`) |
 | [docs/steckbrief.md](docs/steckbrief.md) | Steckbrief für die IT-Übergabe: Status je Punkt, offene und kritische Punkte |
@@ -140,6 +140,13 @@ Request wird sofort mit `429` abgewiesen, und die Antwort enthält **kein
 `retry-after`**: ein Client kann die Wartezeit nicht ablesen, er muss unter der
 Grenze bleiben. Mehr Last hilft nicht, sie schadet — bei 3 req/s fällt der
 effektive Durchsatz unter den Wert bei 2 req/s.
+
+Dazu kommt das GWDG-Kontingent des B-API-Schlüssels: **~10 Aufrufe pro Minute**
+(~200 pro Stunde, gemessen 2026-10-15 über den Router mit Qwen-Modellen). Für
+eine ganze Erschließung (~50 Aufrufe) ist das die engere Grenze. Beide Grenzen
+gelten für den Schlüssel, die Drosselung des Agenten je Prozess – mehrere
+Instanzen teilen sie sich (Helm-Chart: `sharedLlmLimit`; siehe
+[DEPLOYMENT.md](DEPLOYMENT.md#llm-provider-spezifisch)).
 
 Für `b-api-openai` führt der Agent ein eigenes Budget (Default 20 gleichzeitig,
 keine Ratengrenze). Die Messung vom August hatte noch ein gemeinsames Budget je
@@ -300,7 +307,8 @@ docker run -d -p 8000:8000 --env-file .env metadata-agent-api
 
 ```bash
 curl http://localhost:8000/health
-# → {"status": "healthy", "version": "2.1.1", "llm_provider": "b-api-openai", "b_api_auth_mode": "auto"}
+# → {"status": "healthy", "version": "3.0.0"}
+# (Provider und Auth-Modus nennt /health nur auf dem internen Port)
 
 curl -X POST http://localhost:8000/generate \
   -H "Content-Type: application/json" \
@@ -339,16 +347,28 @@ Request → Input Source → LLM Extraction → Normalization → Response
 
 | Komponente | Beschreibung |
 |------------|--------------|
-| `main.py` | FastAPI-Endpunkte, Request-Routing, Input-Handling |
-| `llm_service.py` | LLM-API-Aufrufe, Prompt-Building, Prompt-Cache-Vorlauf, Retry-Logik, Wert-Normalisierung |
+| `main.py` | App-Aufbau: Middleware, Lifespan, Router in fester Reihenfolge |
+| `api/deps.py` | Gemeinsame Abhängigkeiten der Router (`settings`, Service-Zugriffe, Body-Hilfen) – zur Laufzeit nachgeschlagen, in Tests per `monkeypatch` ersetzbar |
+| `api/responses.py`, `api/openapi.py` | Fehlerantworten (`detail` + `error`) bzw. OpenAPI-Dokument |
+| `api/routers/*.py` | Ein Router je Bereich: `generate`, `extract`, `detect`, `validation`, `upload`, `save_node`, `nodes`, `verify`, `screenshot`, `schemata`, `widget`, `infra`, `docs` |
+| `llm_service.py` | Feld-Extraktion: parallele Aufrufe, Cache-Vorlauf; Einstieg `get_llm_service`. Werte normalisiert `llm_values` lokal (ohne weiteren KI-Aufruf) |
+| `llm_transport.py`, `llm_gate.py` | Ein LLM-Aufruf (Body, Auth-Header, Wiederholung, typisierte Fehler, Metriken) bzw. Durchsatz-Budget je Gateway |
+| `llm_prompts.py`, `llm_content_type.py` | Prompts bzw. Inhaltsart-Erkennung |
+| `llm_values.py`, `llm_dates_numbers.py` | Modellantworten auf Feldtypen bringen: JSON, Vokabular, URL, Koordinaten bzw. Zahlen, Datum, Zeit |
 | `llm_auth.py` | Welcher Schlüssel einen B-API-Aufruf trägt (weitergereicht oder `B_API_KEY`), je Anfrage |
 | `llm_errors.py` | Typisierte KI-Fehler mit Fehlercode und HTTP-Status (`LLM_AUTH_FORBIDDEN`, `LLM_RATE_LIMITED`, `LLM_ROUTE_*` …) |
-| `metadata_service.py` | Orchestrierung: Schema-Erkennung, Extraktion, Validierung, Export |
+| `metadata_service.py` | Ablauf einer Erschließung (Inhaltsart, Felder, KI, Normalisierung, Geocoding); Einstieg `get_metadata_service` |
+| `metadata_generation.py` | Schritte ohne Dienst: Feldauswahl, Zusammenführen mit vorhandenen Werten (Herkunft `user` bleibt), Reihenfolge, Status |
+| `metadata_validation.py`, `metadata_export.py` | `/validate` (Pflicht, Formate, Vokabular, Koordinaten) bzw. Markdown-Export |
+| `api/input_resolver.py` | Eingangsquelle für detect/extract/generate: Text, URL, Node; Kürzen, Korrekturanweisung |
 | `input_source_service.py` | Text-Beschaffung aus URL, Repository-Node, Crawler |
 | `field_normalizer.py` | Typ-basierte Normalisierung (Datum, Boolean, Vokabular, etc.) |
 | `output_normalizer.py` | Strukturanpassung für Canvas-Webkomponente |
 | `geocoding_service.py` | Adressen → Koordinaten via Photon/Komoot API |
-| `repository_service.py` | Upload ins WLO edu-sharing Repository: Node anlegen, Metadaten und Extended-Felder schreiben, Aspects, Zurücklesen |
+| `repository_service.py` | Abläufe ins WLO edu-sharing Repository: `create_node`, `upload_metadata`, `save_node`; Einstieg `get_repository_service` |
+| `repository_nodes.py`, `repository_metadata.py` | Node anlegen, laden, verwerfen, Dublettenprüfung bzw. Metadaten, Extended-Felder und Aspects schreiben |
+| `repository_review.py` | Zurücklesen und vergleichen (`/upload/verify`), Workflow-Status setzen |
+| `repository_preview.py`, `repository_support.py` | Vorschaubild sicher laden bzw. Konfiguration und gemeinsame Hilfen |
 | `repository_values.py` | Wert-Aufbereitung für die Repository-API: Feld-Filter, Flattening, Autor→VCARD, Koordinaten (rein, ohne HTTP) |
 | `repository_licenses.py` | Lizenz-Erkennung: CC-Deed-Links und Vokabular-URIs → `ccm:commonlicense_key` + Version, alles andere bleibt als Freitext erhalten (rein) |
 | `repository_diff.py` | SOLL/IST-Vergleich für `/upload/verify` — Vergleichsregeln für Arrays, Groß-/Kleinschreibung und Datumsformate (rein) |
@@ -422,8 +442,13 @@ Generiert vollständige Metadaten aus Text, URL oder Repository-Node.
 > http(s)-Ziel sein. Interne Ziele (`localhost`, `*.local`, `*.internal`, `*.lan`,
 > `*.home.arpa`, Loopback, private Netze, Link-Local inkl. `169.254.169.254`),
 > Zugangsdaten in der URL und andere Schemata werden abgelehnt: als `source_url`
-> mit `400` (bei `/detect-content-type` und `/extract-field` als
-> `400 Failed to fetch input: …`); ein Screenshot zu einem solchen Ziel entfällt.
+> mit `400` und dem Grund in `detail` (z.B. „Interne Hostnamen sind nicht
+> erlaubt.“) – bei `input_source=url` wie bei `node_url` mit eigener `source_url`
+> (dort nur ohne gespeicherten Volltext; mit Volltext wird die URL nicht abgerufen);
+> eine nicht öffentliche `ccm:wwwurl` des Nodes führt bei `node_url` zum
+> Ersatztext aus Titel und Beschreibung (mit Hinweis in `warnings`). `502 Failed
+> to fetch input: …` heißt dagegen: Die Quelle (Repository, Textextraktion) war
+> nicht lesbar. Ein Screenshot zu einem solchen Ziel entfällt.
 > Die Prüfung löst DNS im Container auf — ein Hostname, der dort auf eine private
 > Adresse zeigt, wird ebenfalls abgelehnt.
 
@@ -497,6 +522,13 @@ Die Metadaten-Felder liegen **direkt auf Top-Level** (nicht in einem `metadata`-
 | Teilergebnis | `200` | `processing.status: "partial"`, `fields_failed > 0`, Ursache in `processing.error` und `processing.errors` |
 | Kein Feld erschlossen | `502` (Drosselung `503`) | `detail` (lesbar), `error.code`, `error.request_id`, dazu `processing` |
 | Textextraktion gescheitert | `504` / `502` / `422` | `error.code` `TEXT_EXTRACTION_*` |
+| Zeitlimit (`METADATA_AGENT_GENERATE_TIMEOUT`) | `504` | `error.code` `GENERATION_TIMEOUT` |
+
+**Jede Fehlerantwort** aller Endpunkte hat dieselbe Form (`ErrorResponse` in der
+OpenAPI-Spec): `detail` für Menschen – bei `422` die Liste der Schema-Verstöße –
+und `error` mit `code` (z. B. `NOT_FOUND`, `VALIDATION_ERROR`, `UPSTREAM_ERROR`,
+`UPLOAD_TIMEOUT`, `LLM_*`), `message` und `request_id` (auch im Header
+`X-Request-ID`, im Log des Dienstes zu finden).
 
 `processing.content_type_detection.method` sagt, wie die Inhaltsart zustande
 kam: `llm`, `preselected` (per `schema_file` vorgegeben) oder `keywords`. Bei
@@ -617,7 +649,9 @@ Extrahiert oder regeneriert ein einzelnes Feld. Nützlich um einzelne Felder zu 
 
 Scheitert der KI-Aufruf, antwortet der Endpunkt mit dem Fehlercode wie
 `/generate` (`502`, bei Drosselung `503`), siehe
-[Fehler und Teilergebnisse](#fehler-und-teilergebnisse).
+[Fehler und Teilergebnisse](#fehler-und-teilergebnisse). Dauert der Lauf länger
+als `METADATA_AGENT_GENERATE_TIMEOUT`, kommt `504` mit `error.code`
+`GENERATION_TIMEOUT`; ein unbekanntes Feld ist `404`, noch vor dem Abruf der Quelle.
 
 ---
 
@@ -678,7 +712,9 @@ Erkennt den Inhaltstyp (Schema) eines Textes via LLM.
 Schlüsselwort-Erkennung ist eingesprungen (`confidence: "low"`, Grund in
 `warnings`). Lehnt die B-API den Schlüssel ab oder ist sie nicht erreichbar,
 kommt `502` (bzw. `503`) mit Fehlercode, nicht mehr stillschweigend
-`learning_material.json`.
+`learning_material.json`. Dauert der Lauf länger als
+`METADATA_AGENT_GENERATE_TIMEOUT`, kommt `504` mit `error.code`
+`GENERATION_TIMEOUT`.
 
 ---
 
@@ -833,6 +869,90 @@ Vorrang.
 `check_duplicates` steht standardmäßig auf `false`, weil die URL zu diesem
 Zeitpunkt oft noch nicht feststeht. Findet die Prüfung eine Dublette, kommt
 `success: false`, `duplicate: true` und die ID des bestehenden Nodes.
+
+| Status | Bedeutung |
+|---|---|
+| `200` | angelegt (`success: true`, `node`) oder Dublette (`success: false`, `duplicate: true`) |
+| `400` | kein Titel |
+| `422` | Body passt nicht zum Schema |
+| `502` | Repository-Fehler beim Anlegen |
+| `503` | Repository-Zugangsdaten nicht konfiguriert |
+| `504` | `METADATA_AGENT_UPLOAD_TIMEOUT` überschritten (`UPLOAD_TIMEOUT`); ein inzwischen gefundener Node steht in `node` – verworfen wird hier nie, der Node gehört dem Aufrufer |
+
+---
+
+### POST /nodes
+
+Speichert Metadaten im Repository: **legt einen Node an** (ohne `node_id`) oder
+**aktualisiert einen bestehenden** (mit `node_id`). Die Antwort enthält immer den
+vollständigen Node (`node_full`). Für Änderungen an einem Node, den der Agent
+angelegt hat, ist das der vorgesehene Weg – nicht ein Schreibaufruf direkt
+gegen edu-sharing.
+
+> Erfordert `WLO_GUEST_USERNAME` und `WLO_GUEST_PASSWORD` (sonst `503`).
+> Geschrieben wird mit diesem Dienstkonto; in der Historie des Nodes steht es.
+
+```bash
+# anlegen
+curl -X POST http://localhost:8000/nodes -H "Content-Type: application/json" -d '{
+  "metadataset": "learning_material.json",
+  "cclom:title": "Bruchrechnung Klasse 6",
+  "ccm:wwwurl": "https://example.com/bruchrechnung",
+  "write_extended_data": true
+}'
+
+# aktualisieren: nur die mitgeschickten Felder ändern sich
+curl -X POST http://localhost:8000/nodes -H "Content-Type: application/json" -d '{
+  "metadataset": "learning_material.json",
+  "node_id": "177fba93-3885-479e-bfba-933885c79e1c",
+  "cclom:general_keyword": ["Bruchrechnung", "Klasse 6"]
+}'
+```
+
+**Body:** wie bei `/upload` – die `/generate`-Antwort unverändert (flach) oder
+die Felder unter `metadata`. **`metadataset` immer mitschicken:** Es entscheidet,
+welches Typschema neben `core.json` gilt; ohne es fallen typspezifische Felder
+wie `ccm:oeh_event_begin` still weg.
+
+| Parameter | Default | Beschreibung |
+|---|---|---|
+| `node_id` | leer | Node, der aktualisiert wird. Leer: neuer Node im Eingangsordner |
+| `collection_id` | – | Liste von Sammlungs-IDs oder -URLs; der Inhalt wird dort referenziert |
+| `write_extended_data` | **`false`** | `ccm:oeh_extendedType`, `ccm:oeh_extendedData`, `ccm:oeh_extendedText` schreiben |
+| `extended_text` | – | Rohtext vor der Extraktion (nur mit `write_extended_data: true`) |
+| `preview` | – | Vorschaubild als URL, Data-URL oder Base64 |
+| `start_review_workflow` | `false` | zur Prüfung übergeben (`200_tocheck`) |
+| `start_quality_workflow` | `false` | Qualität bestätigen (`140_ELEMENT_LEGALLY_APPROVED`), nach der Übergabe |
+
+- **Aktualisieren schreibt nur, was im Body steht.** Leere Werte (`null`, `""`,
+  `[]`) gelten als nicht gesetzt und löschen nichts. Ausnahme:
+  `ccm:oeh_extendedData` ist ein JSON-Block und wird beim Schreiben ganz
+  ersetzt – deshalb ist `write_extended_data` hier standardmäßig aus. Für einen
+  vollständigen Datensatz einschalten.
+- **Zwei-Stunden-Fenster:** Ein Node lässt sich nur bis **2 Stunden nach dem
+  Anlegen** (`cm:created`) aktualisieren; Bearbeiten verlängert das Fenster
+  nicht. Danach hat der Inhalt in der Regel die Redaktion erreicht, spätere
+  Änderungen gehören in die Redaktionsoberfläche.
+- **Vorschaubild:** Ohne `preview` bleibt ein vorhandenes unverändert. Scheitert
+  das Bild, gilt das Schreiben trotzdem: `success: true`, der Grund steht in
+  `preview.error` und `error`.
+- **Workflows** sind standardmäßig aus; ohne Schalter landet der Node in keiner
+  Warteschlange.
+- **Anders als `/upload`:** keine Dublettenprüfung, kein Screenshot, der Node
+  wird immer zurückgelesen.
+
+| Status | Bedeutung |
+|---|---|
+| `200` | Ergebnis im Body: `success`, `node`, `node_full`, `node_created` (`true` beim Anlegen, `false` beim Update), `fields_written`, `fields_skipped`, `field_errors`; `preview`, `collections`, `workflow` nur, wenn angefordert. Scheitert ein Schritt, kommt `success: false` mit `step` und `error` |
+| `400` | Body ist kein JSON-Objekt |
+| `403` | Update außerhalb des Zwei-Stunden-Fensters, oder die Erstellungszeit ist nicht lesbar |
+| `404` | Node existiert nicht, oder das Dienstkonto hat keinen Zugriff |
+| `422` | Body passt nicht zum Schema (z.B. `collection_id` als String statt Liste) |
+| `502` | Update: der Node ließ sich wegen eines Repository-Fehlers nicht lesen (Fenster nicht prüfbar) – erneut versuchen |
+| `503` | Repository-Zugangsdaten nicht konfiguriert |
+| `504` | `METADATA_AGENT_UPLOAD_TIMEOUT` überschritten (`UPLOAD_TIMEOUT`); `discarded_node` nennt einen dabei angelegten, unvollständigen und verworfenen Node; `node` einen, der bleibt: schon im Workflow, vollständig geschrieben, nicht verwerfbar oder (mit `node_id`) der bestehende Node |
+
+Alle Felder und Beispiele: `/docs`, Abschnitt Repository.
 
 ---
 
@@ -1125,6 +1245,16 @@ Nach Node-Erstellung werden automatisch Aspects hinzugefügt, die für bestimmte
 }
 ```
 
+#### Fehler
+
+| Fall | HTTP | Kennzeichen |
+|---|---|---|
+| Body verstößt gegen das Schema | `422` | `error.code` `VALIDATION_ERROR` |
+| `node_id` außerhalb des Bearbeitungsfensters / unbekannt | `403` / `404` | wie `/nodes` |
+| `node_id` wegen eines Repository-Fehlers nicht lesbar | `502` | erneut versuchen |
+| ohne `WLO_GUEST_USERNAME`/`WLO_GUEST_PASSWORD` | `503` | |
+| länger als `METADATA_AGENT_UPLOAD_TIMEOUT` | `504` | `error.code` `UPLOAD_TIMEOUT`; `discarded_node` nennt einen dabei angelegten, unvollständigen und verworfenen Node; `node` einen, der bleibt: schon im Workflow, vollständig geschrieben, nicht verwerfbar oder (mit `node_id`) der bestehende Node |
+
 ---
 
 ### POST /workflow/{node_id}
@@ -1264,8 +1394,8 @@ ein Lizenzschlüssel in der falschen Schreibweise, eine Vokabular-URI, die es
 nicht gibt. Keiner war im Statuscode, in `fields_written` oder im SOLL/IST-Diff
 zu sehen.
 
-**Fehlerhafter Body** wird mit `400` abgelehnt — ungültiges JSON, kein JSON-Objekt oder
-ein Verstoß gegen das Schema. Wer einen Vergleich anfordert, bekommt entweder einen
+**Fehlerhafter Body** wird abgelehnt — ungültiges JSON oder kein JSON-Objekt mit `400`,
+ein Verstoß gegen das Schema mit `422`; ein unbekannter Node ist `404`. Wer einen Vergleich anfordert, bekommt entweder einen
 Vergleich oder einen Fehler; ein stillschweigender Rückfall auf „nur lesen" würde eine
 Prüfung als erfolgt melden, die nie stattgefunden hat.
 
@@ -1333,6 +1463,12 @@ Navigation (auch in Frames oder für Bilder) zu einem internen Ziel, wird die
 Aufnahme verworfen und ebenfalls mit `400` beantwortet. Höchstens zwei Aufnahmen
 laufen gleichzeitig, weitere warten (Gesamtfrist 90 s).
 
+Mit `node_id` setzt der Dienst das Vorschaubild nur in einen Node im
+Bearbeitungsfenster – geprüft vor der Aufnahme: außerhalb `403`, ein unbekannter
+Node `404` (wie `/upload`), ist das Repository nicht lesbar `502`. Aufnahme,
+Prüfung und Upload zusammen begrenzt `METADATA_AGENT_UPLOAD_TIMEOUT`; danach
+`504` mit `error.code` `UPLOAD_TIMEOUT` und dem Node unter `node`.
+
 Aufgenommen wird, sobald das HTML der Seite steht (`domcontentloaded`) und das
 Netz ruht — auf die Ruhe wartet der Dienst höchstens 10 s und nimmt sonst
 trotzdem auf, weil Seiten mit Analytics oder Long-Polling nie ganz ruhig werden.
@@ -1381,11 +1517,17 @@ curl -X POST http://localhost:8000/screenshot \
 #### GET /health, GET /ready
 
 ```json
-{ "status": "healthy", "version": "2.1.1", "llm_provider": "b-api-openai", "b_api_auth_mode": "auto" }
+{ "status": "healthy", "version": "3.0.0" }
 ```
 
-`/ready` antwortet `{"status": "ready"}` oder `503` mit den Gründen, wenn die
-Konfiguration nicht arbeiten kann. Beide stehen nicht in der OpenAPI-Spec.
+Auf dem internen Port nennt `/health` zusätzlich `llm_provider` und
+`b_api_auth_mode`; der öffentliche Port verrät keine Konfiguration.
+
+`/ready` antwortet `{"status": "ready"}` oder `503`, wenn die Konfiguration
+nicht arbeiten kann – etwa `B_API_KEY` fehlt im Modus `static`, oder
+`WLO_GUEST_USERNAME`/`WLO_GUEST_PASSWORD` fehlen. Die Gründe stehen im Log und
+auf dem internen Port. Abhängige Dienste ruft
+es nicht auf. Beide stehen nicht in der OpenAPI-Spec.
 
 - Mit `METADATA_AGENT_INTERNAL_PORT` gibt es sie zusätzlich auf einem internen
   Port, dort auch `GET /metrics` (Prometheus).
@@ -1820,7 +1962,7 @@ Jedes Layout ist eine eigenständige Angular-Komponente mit eigener Darstellung.
 | `prueftisch` | 1-spaltige Prüftabelle mit gruppierten Karten |
 | `prueftisch-org` | Organisatorischer Prüftisch — borderless, readonly, graue Gruppen-Header |
 
-> **Aliase:** `metadatenpruefdialog` → `clean`, `prueftisch-gross` → `prueftisch` (mit `columns=2`), `prueftisch-org-large` → `prueftisch-org` (mit `columns=2`)
+> **Aliase:** `metadatenpruefdialog` → `clean`, `prueftisch-gross` → `prueftisch`, `prueftisch-org-large` → `prueftisch-org`. Aliase lösen nur den Namen auf; für 2 Spalten zusätzlich `columns="2"` setzen.
 
 > **Hinweis:** `readonly` ist kein Layout, sondern ein universelles Attribut, kombinierbar mit jedem Layout via `readonly="true"`.
 
@@ -1954,8 +2096,13 @@ Unter `/widget/examples/` sind interaktive Beispiele verfügbar:
 
 ## Deployment
 
-> **Bestehendes Deployment auf 2.1.x aktualisieren:** Es muss nichts geändert
-> werden. Was man vorher prüfen sollte, steht unter
+> **Bestehendes Deployment auf 3.0.0 aktualisieren:** Vorher
+> [Update von 2.1.x auf 3.0.0](DEPLOYMENT.md#update-von-21x-auf-300) lesen. Mit
+> dem Helm-Chart müssen die Namespaces und Ports der NetworkPolicy zum Cluster
+> passen (sonst erreicht die B-API den Dienst nicht), und ein eigenes
+> `env.METADATA_AGENT_INTERNAL_PORT` muss aus den Values (sonst bricht
+> `helm upgrade` ab). Ohne `WLO_GUEST_USERNAME`/`WLO_GUEST_PASSWORD` meldet
+> `/ready` den Pod nicht bereit. Von 2.0.x kommend zusätzlich
 > [Update von 2.0.x auf 2.1.0](DEPLOYMENT.md#update-von-20x-auf-210).
 
 ### Docker (empfohlen)
@@ -2043,4 +2190,6 @@ helm install metadata-agent helm/metadata-agent \
 
 ## Lizenz
 
-MIT
+Apache License 2.0, siehe [LICENSE](LICENSE). Drittkomponenten im Image
+(Python-Pakete, Chromium, Schriften, Swagger UI, Webkomponente) und ihre
+Lizenzen: [NOTICE](NOTICE).

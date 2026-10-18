@@ -1,7 +1,9 @@
 [project]
 name = "metadata-agent-api"
-version = "2.1.1"
+version = "3.0.0"
 description = "AI-powered metadata extraction API for educational content"
+# SPDX (PEP 639); full text in LICENSE, third-party components in NOTICE.
+license = "Apache-2.0"
 requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.142.4",
@@ -25,10 +27,41 @@ testpaths = ["tests"]
 # lokal grün war.
 pythonpath = ["."]
 markers = [
-    # Talks to a network service. Skips itself when unreachable rather than
-    # failing, so the suite stays runnable offline — deselect with -m "not slow".
+    # Talks to a network service. Runs only with RUN_NETWORK_TESTS=1 and skips
+    # itself when unreachable, so the suite stays offline by default.
     "slow: reaches an external service",
 ]
+
+# Audit T-01: measured in CI (uv run pytest --cov). The floor sits just under
+# the measured value (80 % with branches, 2026-10-18, without the browser
+# tests; 73 % before the audit fixes); raise it with the tests.
+[tool.coverage.run]
+branch = true
+source = ["src"]
+
+[tool.coverage.report]
+fail_under = 79
+skip_covered = true
+show_missing = true
+
+# Audits M-01 (2026-10-17, 2026-10-18): every function is split to complexity
+# <= 15; ruff check in CI fails a function that grows past it.
+[tool.ruff.lint]
+extend-select = ["C901"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 15
+
+# Audit M-04: the mixins declare what they need from LLMService/RepositoryService
+# (attributes and methods of sibling mixins); mypy checks every use - since
+# audit T-07 (2026-10-18) in all of src.
+[tool.mypy]
+python_version = "3.13"
+files = ["src"]
+ignore_missing_imports = true
+follow_imports = "silent"
+# Also the bodies of functions without annotations (closures in the routers).
+check_untyped_defs = true
 
 [dependency-groups]
 dev = [
@@ -38,6 +71,8 @@ dev = [
     "httpx>=0.28.0",
     # starlette.testclient prefers it; with httpx alone it warns (deprecated).
     "httpx2>=2.13.1",
+    "pytest-cov>=6",
+    "mypy>=1.15",
 ]
 
 [tool.uv]

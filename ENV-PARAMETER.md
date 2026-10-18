@@ -19,8 +19,8 @@ bricht nichts, ein Tippfehler fällt aber auch nicht auf.
 |---|---|---|
 | `B_API_KEY` | — | `llm_provider=b-api-openai`, `b-api-academiccloud` oder `b-api-router`; im Modus `auto` nur noch als Rückfall, im Modus `forward` gar nicht (siehe [B-API: Authentifizierung](#b-api-authentifizierung)) |
 | `OPENAI_API_KEY` | — | `llm_provider=openai` |
-| `WLO_GUEST_USERNAME` | — | `/upload` |
-| `WLO_GUEST_PASSWORD` | — | `/upload` |
+| `WLO_GUEST_USERNAME` | — | `/upload`, `/nodes`; fehlt er, antwortet `/ready` mit `503` (Warnung beim Start) |
+| `WLO_GUEST_PASSWORD` | — | `/upload`, `/nodes`; fehlt es, antwortet `/ready` mit `503` (Warnung beim Start) |
 
 ---
 
@@ -103,7 +103,7 @@ die B-API den Schlüssel annimmt.
   einen Schlüssel.
 
 ```json
-{"version": "2.1.1", "llm_provider": "b-api-openai", "b_api_auth_mode": "auto",
+{"version": "3.0.0", "llm_provider": "b-api-openai", "b_api_auth_mode": "auto",
  "config_warnings": [],
  "checks": {
    "llm": {"url": "https://b-api.prod.openeduhub.net/api/v1/llm/openai/models",
@@ -143,6 +143,14 @@ sofort mit `429` abgewiesen, und zwar **ohne `retry-after`**: es gibt nichts,
 woran ein Client die Wartezeit ablesen könnte, er muss unter der Grenze bleiben.
 Mehr Last hilft nicht — bei 3 req/s fällt der effektive Durchsatz *unter* den
 Wert bei 2 req/s.
+
+Dazu kommt das Kontingent des B-API-Schlüssels bei GWDG: **~10 Aufrufe pro
+Minute, ~200 pro Stunde** (gemessen 2026-10-15 über den Router mit
+Qwen-Modellen). Für ein ganzes `/generate` (~50 Aufrufe) ist das die engere
+Grenze; ob sie auch für `deepseek-v4-flash` über `b-api-academiccloud` gilt,
+ist nicht nachgemessen. Beide Grenzen gelten für den Schlüssel, die Drosselung
+des Agenten je Prozess: Mehrere Instanzen teilen sie sich (Helm-Chart:
+`sharedLlmLimit`, DEPLOYMENT.md).
 
 `b-api-openai`: Die Messung vom August hatte noch ein gemeinsames Budget je Key
 für beide B-API-Provider ergeben. Ein echter `/generate`-Lauf am 2026-10-06 mit
@@ -306,6 +314,8 @@ also auch bei nativem OpenAI.
 |---|---|---|
 | `METADATA_AGENT_DEFAULT_MAX_WORKERS` | `20` | Breite des parallelen Feld-Fan-outs; gilt für `/generate` ohne `max_workers` (auf 1–20 begrenzt) |
 | `METADATA_AGENT_REQUEST_TIMEOUT` | `90` | Timeout je KI-Aufruf in Sekunden (Lesezeit; Verbindungsaufbau separat 10 s). Bleibt unter dem Ingress-Timeout von 120 s für ein ganzes `/generate` |
+| `METADATA_AGENT_GENERATE_TIMEOUT` | `110` | Obergrenze für ein ganzes `/generate` in Sekunden (Abruf der Quelle, alle Feldaufrufe, Wiederholungen, Geocoding). Danach `504` mit Code `GENERATION_TIMEOUT` und Request-ID; laufende Feldaufrufe werden abgebrochen. Unter dem Ingress-Timeout von 120 s, über `METADATA_AGENT_REQUEST_TIMEOUT`. Gilt ebenso für `/detect-content-type` und `/extract-field`. Über 110 (mit 10 s Puffer über 120 s) warnt der Agent beim Start |
+| `METADATA_AGENT_UPLOAD_TIMEOUT` | `100` | Obergrenze für `/upload` und `/nodes` in Sekunden (Screenshot und alle Repository-Aufrufe). Danach `504` mit Code `UPLOAD_TIMEOUT`; die Antwort sagt, was mit dem Node geschah: `discarded_node` (verworfen, Papierkorb), oder `node`, wenn er nicht verworfen werden konnte, schon im Workflow ist oder alle Schreibschritte gelaufen sind (dann wird nie verworfen). Ein aktualisierter bestehender Node kann teilweise geschrieben sein. Zeitlimit + 5 s Suche + 5 s Verwerfen + 5 s preStop bleiben unter den 120 s von Ingress und Grace Period; über 105 warnt der Agent beim Start |
 
 Ein `max_workers` im Request hat Vorrang. Beides wird auf die Grenze des
 Providers gedeckelt (gesetztes `LLM_MAX_CONCURRENT_REQUESTS`, sonst sein Default). Bei
@@ -364,7 +374,7 @@ mit privater Adresse (z.B. Split-Horizon-DNS im Cluster) wird abgelehnt.
 | Variable | Default | Beschreibung |
 |---|---|---|
 | `METADATA_AGENT_APP_NAME` | `Metadata Agent API` | |
-| `METADATA_AGENT_APP_VERSION` | `2.1.1` | |
+| `METADATA_AGENT_APP_VERSION` | `3.0.0` | |
 | `METADATA_AGENT_CORS_ORIGINS` | `*` | Komma-getrennt oder `*` |
 | `METADATA_AGENT_LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING` oder `ERROR` |
 | `METADATA_AGENT_LOG_FORMAT` | `text` | `text`: nur die Meldung, wie bisher. `json`: ein Objekt je Zeile mit `time`, `level`, `logger`, `message` und `trace_id`; auch für die Server- und Zugriffslogs von uvicorn |
@@ -377,6 +387,12 @@ Logs gehen immer nach stdout. Eingehende Tracing-Header – `x-client-trace-id`,
 die eigenen Dienste weiter (B-API, Textextraktion, Repository), nie an
 Fremddienste wie den Geocoder. Als `trace_id` und Anfrage-ID gilt
 `x-client-trace-id`, sonst `x-request-id`, sonst eine erzeugte ID.
+
+**Von uvicorn gelesen** (ohne Präfix, nicht in den Settings des Agenten):
+
+| Variable | Default | Beschreibung |
+|---|---|---|
+| `FORWARDED_ALLOW_IPS` | `127.0.0.1` | Adressen, deren `X-Forwarded-Proto`/`-For` uvicorn übernimmt (Komma-getrennt oder `*`). Hinter einem TLS-Ingress oder Proxy nötig, sonst liefert `/widget/info` `http://`-URLs (Mixed Content). Der Helm-Chart setzt sie aus `forwardedAllowIps` (Standard `*`, vertretbar nur mit der NetworkPolicy); mit Docker `-e FORWARDED_ALLOW_IPS=<Proxy-IP>`. Siehe DEPLOYMENT.md, „Hinter TLS“ |
 
 ---
 
@@ -402,10 +418,13 @@ In der B-API muss der Dienst mit gesetztem `forwardApiKey` eingetragen sein.
 METADATA_AGENT_LLM_PROVIDER=b-api-academiccloud
 B_API_KEY=...
 METADATA_AGENT_B_API_ACADEMICCLOUD_MODEL=deepseek-v4-flash
-# Die Defaults 2/2 passen bereits — hier nur zur Verdeutlichung.
-# Die Rate ist pro Sekunde, nicht pro Minute: 2 = 120 Aufrufe/Minute.
+# Die Defaults (2 gleichzeitig, 2/s) decken nur die Grenze von 2 parallelen
+# Requests ab. Das GWDG-Kontingent des Schlüssels liegt bei ~10 Aufrufen pro
+# Minute (15.10.2026); die Rate ist pro Sekunde: 0.16 = ~10 Aufrufe/Minute.
+# Beide Werte gelten je Instanz - bei mehreren durch ihre Zahl teilen
+# (Helm-Chart: sharedLlmLimit.enabled=true).
 METADATA_AGENT_LLM_MAX_CONCURRENT_REQUESTS=2
-METADATA_AGENT_LLM_MAX_REQUESTS_PER_SECOND=2
+METADATA_AGENT_LLM_MAX_REQUESTS_PER_SECOND=0.16
 ```
 
 Gemessen: eine Erschließung mit 50 Feldern schwankt damit zwischen **32 s und

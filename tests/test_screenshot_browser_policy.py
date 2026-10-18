@@ -15,6 +15,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 import pytest
+from browser_requirement import browser_missing
 from fastapi.testclient import TestClient
 
 from src import main
@@ -124,7 +125,7 @@ def chromium_available():
 
     with sync_playwright() as playwright:
         if not Path(playwright.chromium.executable_path).exists():
-            pytest.skip("Chromium missing: uv run playwright install chromium")
+            browser_missing("Chromium missing: uv run playwright install chromium")
 
 
 async def test_a_public_page_is_captured_locally(site, policy, chromium_available):

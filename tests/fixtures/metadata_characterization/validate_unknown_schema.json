@@ -1,0 +1,13 @@
+{
+ "coverage": 0.0,
+ "errors": [
+  {
+   "field_id": "_schema",
+   "message": "Schema fehlt.json not found",
+   "severity": "error"
+  }
+ ],
+ "schema_used": "fehlt.json",
+ "valid": false,
+ "warnings": []
+}

@@ -16,6 +16,7 @@ overwrites the precise one.
 """
 
 import json
+import os
 from pathlib import Path
 
 import httpx
@@ -30,6 +31,9 @@ VERSION = "2.0.0"
 VOCAB = "http://w3id.org/openeduhub/vocabs/new_lrt"
 ARBEITSBLATT = f"{VOCAB}/36e68792-6159-481d-a97b-2c00901f4f78"
 MATERIAL = f"{VOCAB}/1846d876-d8fd-476a-b540-b8ffd713fedb"
+
+# The comparison with the published vocabulary runs only on request.
+NETWORK_SWITCH = "RUN_NETWORK_TESTS"
 
 SNAPSHOT = Path(__file__).resolve().parents[1] / "src/schemata/vocabs/new_lrt.json"
 
@@ -262,9 +266,12 @@ def test_the_vocabulary_still_matches_the_published_one():
     """
     The single test that talks to the network. It is what makes the number above
     mean something — 220 is only correct as long as the published vocabulary says
-    so. Skipped when offline rather than failing, because a broken build on a
-    train is worse than a stale count.
+    so. Runs only with RUN_NETWORK_TESTS=1 (test runs stay offline and
+    deterministic), and skips when offline rather than failing, because a broken
+    build on a train is worse than a stale count.
     """
+    if os.environ.get(NETWORK_SWITCH) != "1":
+        pytest.skip(f"Netzwerktest: nur mit {NETWORK_SWITCH}=1")
 
     def flatten(concepts, out):
         for concept in concepts:
@@ -290,6 +297,19 @@ def test_the_vocabulary_still_matches_the_published_one():
     }
 
     assert ours == published
+
+
+def test_the_network_comparison_is_opt_in(monkeypatch):
+    """Review 18.10.: a default run reached vocabs.openeduhub.de."""
+
+    def no_network(*args, **kwargs):
+        raise AssertionError("network call in a default test run")
+
+    monkeypatch.setattr(httpx, "get", no_network)
+    monkeypatch.delenv(NETWORK_SWITCH, raising=False)
+
+    with pytest.raises(pytest.skip.Exception, match=NETWORK_SWITCH):
+        test_the_vocabulary_still_matches_the_published_one()
 
 
 def test_the_snapshot_used_by_the_schema_is_kept_in_the_repository():

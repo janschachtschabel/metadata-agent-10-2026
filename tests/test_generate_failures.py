@@ -12,6 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src import main
+from src.api import deps
 from src.config import Settings
 from src.services import llm_service as llm_module
 from src.services import metadata_service as metadata_module
@@ -53,15 +54,15 @@ def stack(monkeypatch):
             _env_file=None, b_api_key="own-key", llm_retry_delay=0, **settings_overrides
         )
         monkeypatch.setattr(llm_module, "get_settings", lambda: cfg)
-        monkeypatch.setattr(main, "settings", cfg)
+        monkeypatch.setattr(deps, "settings", cfg)
         llm = LLMService(llm_provider="b-api-openai", llm_model="gpt-6-luna")
         llm.http_client = httpx.AsyncClient(
             transport=httpx.MockTransport(gateway.handler)
         )
         monkeypatch.setattr(metadata_module, "get_llm_service", lambda **kw: llm)
         service = MetadataService()
-        monkeypatch.setattr(main, "get_metadata_service", lambda **kw: service)
-        monkeypatch.setattr(main, "get_llm_service", lambda **kw: llm)
+        monkeypatch.setattr(deps, "get_metadata_service", lambda **kw: service)
+        monkeypatch.setattr(deps, "get_llm_service", lambda **kw: llm)
         return service
 
     yield build

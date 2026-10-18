@@ -14,6 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src import main
+from src.api import deps
 from src.services.input_source_service import TextExtractionError
 from src.services.llm_errors import LLMAuthForbidden
 from src.utils.request_id import TRACE_EVENT_HOOKS, propagate_trace, traced
@@ -88,7 +89,7 @@ class _FailedGeneration:
 
 
 def test_a_text_extraction_failure_names_the_id_in_body_and_log(monkeypatch, capsys):
-    monkeypatch.setattr(main, "get_input_source_service", lambda: _FailingInput())
+    monkeypatch.setattr(deps, "get_input_source_service", lambda: _FailingInput())
 
     with TestClient(main.app) as client:
         response = client.post(
@@ -104,7 +105,7 @@ def test_a_text_extraction_failure_names_the_id_in_body_and_log(monkeypatch, cap
 
 
 def test_an_llm_failure_names_the_id(monkeypatch, capsys):
-    monkeypatch.setattr(main, "get_llm_service", lambda **kw: _RefusedLLM())
+    monkeypatch.setattr(deps, "get_llm_service", lambda **kw: _RefusedLLM())
 
     with TestClient(main.app) as client:
         response = client.post(
@@ -123,7 +124,7 @@ def test_an_llm_failure_names_the_id(monkeypatch, capsys):
 
 
 def test_a_failed_generation_names_the_id(monkeypatch):
-    monkeypatch.setattr(main, "get_metadata_service", lambda **kw: _FailedGeneration())
+    monkeypatch.setattr(deps, "get_metadata_service", lambda **kw: _FailedGeneration())
 
     with TestClient(main.app) as client:
         response = client.post("/generate", json={"text": "Ein Text"})

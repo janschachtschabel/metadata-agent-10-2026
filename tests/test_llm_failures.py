@@ -120,14 +120,16 @@ async def test_a_403_does_not_claim_to_know_which_right_is_missing(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_a_404_names_model_and_address(monkeypatch):
+async def test_a_404_names_the_model_and_logs_the_address(monkeypatch, caplog):
     service = _service(_Gateway(404, ""), monkeypatch)
 
     with pytest.raises(LLMModelNotFound) as raised:
         await service._call_llm(MESSAGES)
 
     assert "gpt-6-luna" in raised.value.message
-    assert service.api_base in raised.value.message
+    # The address is for the operator, not for clients (audit S-06).
+    assert service.api_base not in raised.value.message
+    assert service.api_base in caplog.text
 
 
 @pytest.mark.asyncio

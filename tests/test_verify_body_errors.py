@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src import main
+from src.api import deps
 
 NODE_ID = "5ab4b434-4832-45ca-b4b4-34483265ca5d"
 
@@ -36,7 +37,7 @@ class _StubRepositoryService:
 @pytest.fixture
 def client(monkeypatch):
     stub = _StubRepositoryService()
-    monkeypatch.setattr(main, "get_repository_service", lambda: stub)
+    monkeypatch.setattr(deps, "get_repository_service", lambda: stub)
     with TestClient(main.app) as test_client:
         test_client.stub = stub
         yield test_client
@@ -60,7 +61,8 @@ def test_body_violating_the_schema_is_rejected(client):
         headers={"Content-Type": "application/json"},
     )
 
-    assert response.status_code == 400
+    # 422 like /nodes and /upload: readable JSON, invalid content (audit API-01).
+    assert response.status_code == 422
     assert client.stub.calls == []
 
 

@@ -13,6 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src import main
+from src.api import deps
 from src.models.schemas import (
     DetectContentTypeRequest,
     ExtractFieldRequest,
@@ -117,7 +118,7 @@ class _StubRepositoryService:
 @pytest.fixture
 def client(monkeypatch):
     stub = _StubRepositoryService()
-    monkeypatch.setattr(main, "get_repository_service", lambda: stub)
+    monkeypatch.setattr(deps, "get_repository_service", lambda: stub)
     with TestClient(main.app) as test_client:
         test_client.stub = stub
         yield test_client

@@ -11,6 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src import main
+from src.api import deps
 from src.utils.body_limit import BodySizeLimitMiddleware
 
 
@@ -70,7 +71,7 @@ async def test_a_streamed_body_over_the_limit_is_refused():
 
 
 def test_the_api_refuses_an_oversized_generate_request(monkeypatch):
-    monkeypatch.setattr(main.settings, "max_request_bytes", 1024)
+    monkeypatch.setattr(deps.settings, "max_request_bytes", 1024)
 
     response = TestClient(main.app).post("/generate", content=b"{" + b" " * 2048 + b"}")
 
@@ -80,7 +81,7 @@ def test_the_api_refuses_an_oversized_generate_request(monkeypatch):
 def test_a_chunked_oversized_request_is_a_413_not_a_parse_error(monkeypatch):
     # Without Content-Length the limit trips while the endpoint reads the
     # body; /generate used to turn that into "400 Request parsing error".
-    monkeypatch.setattr(main.settings, "max_request_bytes", 1024)
+    monkeypatch.setattr(deps.settings, "max_request_bytes", 1024)
 
     def chunks():
         yield b"{"
@@ -95,7 +96,7 @@ def test_a_chunked_oversized_request_is_a_413_not_a_parse_error(monkeypatch):
 def test_a_413_carries_the_cors_headers_the_widget_needs(monkeypatch):
     # The widget runs on another origin; without the header the browser hides
     # the answer and reports a bare network error.
-    monkeypatch.setattr(main.settings, "max_request_bytes", 1024)
+    monkeypatch.setattr(deps.settings, "max_request_bytes", 1024)
 
     response = TestClient(main.app).post(
         "/generate",

@@ -18,12 +18,16 @@ and both are what most of this file is about:
    a duplicate of itself.
 """
 
+import asyncio
 import json
+from datetime import datetime, timezone
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from src import main
+from src.api import deps
 from src.services import repository_service as repo_module
 from src.services.repository_service import RepositoryService
 
@@ -344,7 +348,7 @@ def client(recorded, monkeypatch):
     from `recorded`, so nothing leaves the process either way.
     """
     monkeypatch.setattr(
-        main, "get_repository_service", lambda: RepositoryService("user", "password")
+        deps, "get_repository_service", lambda: RepositoryService("user", "password")
     )
     with TestClient(main.app) as test_client:
         yield test_client
@@ -465,3 +469,108 @@ def test_the_openapi_surface_documents_both_halves(client):
     assert "CreateNodeRequest" in schemas
     assert "node_id" in schemas["UploadRequest"]["properties"]
     assert "node_created" in schemas["UploadResponse"]["properties"]
+
+
+# -------- release review 2026-10-18 (#8): POST /node, lost answer and deadline
+
+
+def _inbox_child(node_id, created):
+    return {
+        "ref": {"id": node_id},
+        "createdAt": created.isoformat(),
+        "modifiedAt": created.isoformat(),
+        "properties": {"cclom:title": ["Ein Titel"]},
+    }
+
+
+class _CreateAnswerLost(_RecordingAsyncClient):
+    inbox: list[dict] = []
+
+    async def post(self, url, headers=None, json=None, files=None):
+        if "/children?" in url:
+            self._record("POST", url, json)
+            raise httpx.ReadTimeout("answer lost")
+        return await super().post(url, headers=headers, json=json, files=files)
+
+    async def get(self, url, headers=None):
+        if "/children?" in url:
+            self._record("GET", url, None)
+            return _Response(200, {"nodes": type(self).inbox})
+        return await super().get(url, headers=headers)
+
+
+class _CreateHangs(_CreateAnswerLost):
+    async def post(self, url, headers=None, json=None, files=None):
+        self._record("POST", url, json)
+        await asyncio.sleep(3600)
+
+
+class _CreateBroken(_CreateAnswerLost):
+    async def post(self, url, headers=None, json=None, files=None):
+        raise RuntimeError("connect 10.0.0.5:6379 from /srv/app")
+
+
+def _use(monkeypatch, client_class, inbox=()):
+    client_class.calls = []
+    client_class.inbox = list(inbox)
+    monkeypatch.setattr(repo_module.httpx, "AsyncClient", client_class)
+    monkeypatch.setattr(repo_module.httpx, "Timeout", lambda *a, **k: None)
+    return client_class.calls
+
+
+@pytest.mark.asyncio
+async def test_a_node_whose_create_answer_got_lost_is_handed_to_the_caller(
+    monkeypatch,
+):
+    now = datetime.now(timezone.utc)
+    calls = _use(monkeypatch, _CreateAnswerLost, inbox=[_inbox_child(NODE_ID, now)])
+
+    result = await RepositoryService("u", "p").create_node({"cclom:title": "Ein Titel"})
+
+    assert result["success"] is True, result
+    assert result["node"]["nodeId"] == NODE_ID
+    assert _deletes(calls) == [], "the caller asked for this node"
+
+
+@pytest.mark.asyncio
+async def test_without_the_lost_node_post_node_says_one_may_exist(monkeypatch):
+    _use(monkeypatch, _CreateAnswerLost)
+
+    result = await RepositoryService("u", "p").create_node({"cclom:title": "Ein Titel"})
+
+    assert result["success"] is False
+    assert "Eingangsordner" in result["error"]
+
+
+def test_post_node_answers_504_at_its_deadline(monkeypatch):
+    _use(monkeypatch, _CreateHangs)
+    monkeypatch.setattr(
+        deps, "get_repository_service", lambda: RepositoryService("u", "p")
+    )
+    monkeypatch.setattr(deps.settings, "upload_timeout", 0.2)
+
+    with TestClient(main.app) as test_client:
+        response = test_client.post(
+            "/node", json={"metadata": {"cclom:title": "Ein Titel"}}
+        )
+
+    assert response.status_code == 504, response.text
+    assert response.json()["error"]["code"] == "UPLOAD_TIMEOUT"
+    assert "möglicherweise" in response.json()["detail"]
+
+
+def test_an_unexpected_failure_of_post_node_does_not_reveal_its_details(monkeypatch):
+    _use(monkeypatch, _CreateBroken)
+    monkeypatch.setattr(
+        deps, "get_repository_service", lambda: RepositoryService("u", "p")
+    )
+
+    with TestClient(main.app) as test_client:
+        response = test_client.post(
+            "/node", json={"metadata": {"cclom:title": "Ein Titel"}}
+        )
+
+    assert response.status_code == 502, response.text
+    assert "RuntimeError" in response.json()["detail"]
+    assert "10.0.0.5" not in response.text
+    assert "/srv/app" not in response.text

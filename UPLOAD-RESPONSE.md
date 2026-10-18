@@ -172,7 +172,20 @@ mit einem entsprechenden Hinweis in `error` zurückgegeben — dann ist ein manu
 Eingriff nötig.
 
 Ein Fehler **vor** dem Anlegen verwirft nichts; ein erfolgreicher Upload ebenso
-wenig.
+wenig. Verworfen wird auch nie ein Node, der schon im Workflow ist (die Redaktion
+kann benachrichtigt sein), oder einer, dessen Schreibschritte alle gelaufen sind –
+er wird als `node` gemeldet, mit dem Hinweis „nicht verworfen“ in `error`. Mit
+`node_id` (bestehender Node) wird ebenfalls nichts verworfen; vor dem Schreiben
+prüft der Dienst dann das Bearbeitungsfenster: `403` außerhalb, `404` unbekannt,
+`502`, wenn der Node wegen eines Repository-Fehlers nicht lesbar ist.
+
+**Zeitlimit.** `/upload` und `/nodes` brechen nach `METADATA_AGENT_UPLOAD_TIMEOUT`
+(Default 100 s) mit `504` und `error.code: UPLOAD_TIMEOUT` ab; für den Node gelten
+dieselben Regeln (`discarded_node` oder `node`). Das Vorschaubild darf das
+Zeitlimit nur bis 15 s vor seinem Ende nutzen: Ist es bis dahin nicht da, geht
+der Upload ohne Bild weiter (Grund in `preview.error`), statt am Zeitlimit den
+fertigen Node zu verlieren. Das Zurücklesen eines fertigen Nodes (`node_full`)
+läuft mit eigener Grenze (10 s) außerhalb des Zeitlimits.
 
 ## Kosten
 
@@ -182,5 +195,6 @@ Metadaten, Aspects, Collections und Extended Data, nicht im leeren Zustand direk
 nach dem Anlegen.
 
 Deshalb Default `false`: `/upload` führt bereits mehrere sequentielle
-edu-sharing-Aufrufe innerhalb eines 45-Sekunden-Timeouts aus, und auf Serverless
+edu-sharing-Aufrufe aus (je bis 45 s, zusammen begrenzt durch
+`METADATA_AGENT_UPLOAD_TIMEOUT`), und auf Serverless
 zählt jeder weitere.

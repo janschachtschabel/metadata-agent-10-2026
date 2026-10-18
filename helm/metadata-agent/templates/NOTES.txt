@@ -12,7 +12,35 @@ WARNUNG: Ingress aktiv und B_API_AUTH_MODE={{ .Values.env.METADATA_AGENT_B_API_A
 Jeder, der den Ingress erreicht, kann Erschließungen auf B_API_KEY auslösen.
 Hinter der B-API gehört der Dienst nicht ins Internet (values.yaml, ingress).
 {{- end }}
+{{- if and .Values.ingress.enabled .Values.networkPolicy.enabled }}
+
+WARNUNG: Ingress aktiv und NetworkPolicy an. Port {{ .Values.service.port }} erreichen nur Pods aus
+networkPolicy.ingressNamespaces = {{ .Values.networkPolicy.ingressNamespaces | toJson | replace "\"" "" }}.
+Steht der Namespace des Ingress-Controllers (z. B. ingress-nginx) nicht darin,
+blockiert die Policy den Controller und das Ingress antwortet mit 502/504.
+{{- end }}
+{{- $provider := .Values.env.METADATA_AGENT_LLM_PROVIDER | default "b-api-openai" }}
+{{- if .Values.sharedLlmLimit.enabled }}
+
+Gemeinsames LLM-Limit (sharedLlmLimit): {{ .Values.sharedLlmLimit.concurrentRequests }} gleichzeitig, {{ .Values.sharedLlmLimit.requestsPerMinute }}/min für alle {{ .Values.replicaCount }} Replicas,
+je Pod also höchstens {{ max 1 (div (int .Values.sharedLlmLimit.concurrentRequests) (max 1 (int .Values.replicaCount))) }} gleichzeitig und {{ printf "%.4f" (divf .Values.sharedLlmLimit.requestsPerMinute (mulf 60 (max 1 (int .Values.replicaCount)))) }} Aufrufe/s.
+{{- if gt (int .Values.replicaCount) (int .Values.sharedLlmLimit.concurrentRequests) }}
+WARNUNG: mehr Replicas ({{ .Values.replicaCount }}) als gleichzeitige Aufrufe ({{ .Values.sharedLlmLimit.concurrentRequests }}) - jeder Pod
+darf mindestens 1, zusammen also mehr als das Limit. replicaCount senken.
+{{- end }}
+Skalieren mit kubectl scale oder einem HPA umgeht die Aufteilung.
+{{- else if and (or (eq $provider "b-api-academiccloud") (eq $provider "b-api-router")) (gt (int .Values.replicaCount) 1) }}
+
+WARNUNG: LLM_PROVIDER={{ $provider }} mit {{ .Values.replicaCount }} Replicas, sharedLlmLimit aus.
+Das GWDG-Limit der AcademicCloud-Modelle (~10 Aufrufe/min, 2 gleichzeitig) gilt für
+den Schlüssel, die Drosselung des Agenten je Pod: zusammen senden die Pods ein
+Vielfaches davon (429, Wiederholungen). Für AcademicCloud bzw. eine Route aus
+AcademicCloud-Modellen sharedLlmLimit.enabled=true setzen (values.yaml).
+{{- end }}
 {{- if not .Values.prometheusRule.enabled }}
 
 Hinweis: prometheusRule.enabled=false - die Alarmregeln sind nicht installiert.
 {{- end }}
+
+Secret geändert? Die Pods lesen es nur beim Start:
+  kubectl rollout restart deployment/{{ include "metadata-agent.fullname" . }}

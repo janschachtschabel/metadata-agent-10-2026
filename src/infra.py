@@ -11,6 +11,7 @@ the OpenAPI spec) so existing probes and the Docker HEALTHCHECK keep working.
 
 import asyncio
 import contextlib
+import logging
 import os
 import socket
 from typing import Awaitable, Callable
@@ -20,18 +21,24 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
 from .config import Settings
-from .metrics import metrics_response
+from .metrics import metrics_response, precreate_alert_series
 from .utils.schema_loader import get_available_contexts
 
+logger = logging.getLogger(__name__)
 
-def health_payload(settings: Settings) -> dict:
-    """Liveness: the process answers. Says nothing about the dependencies."""
-    return {
-        "status": "healthy",
-        "version": settings.app_version,
-        "llm_provider": settings.llm_provider,
-        "b_api_auth_mode": settings.b_api_auth_mode,
-    }
+
+def health_payload(settings: Settings, detailed: bool = True) -> dict:
+    """
+    Liveness: the process answers. Says nothing about the dependencies.
+
+    Provider and auth mode only on the internal port (detailed): the public
+    one answers anyone who reaches it (audit S-08).
+    """
+    payload = {"status": "healthy", "version": settings.app_version}
+    if detailed:
+        payload["llm_provider"] = settings.llm_provider
+        payload["b_api_auth_mode"] = settings.b_api_auth_mode
+    return payload
 
 
 def readiness_problems(settings: Settings) -> list[str]:
@@ -40,6 +47,9 @@ def readiness_problems(settings: Settings) -> list[str]:
 
     External services are deliberately not called: a B-API outage would make
     every pod unready at once, and the ingress would answer for them.
+
+    B_API_KEY missing in mode auto is no problem here: behind the B-API proxy
+    with forwardApiKey every call carries the caller's key (startup warning).
     """
     problems = []
     if not get_available_contexts():
@@ -49,21 +59,45 @@ def readiness_problems(settings: Settings) -> list[str]:
             problems.append("B_API_KEY fehlt (B_API_AUTH_MODE=static)")
     elif not settings.openai_api_key:
         problems.append("OPENAI_API_KEY fehlt (llm_provider=openai)")
+    # Audit OPS-12: the chart marks every secret key optional, so a typo in
+    # secret.existingSecret started a "ready" pod whose /upload and /nodes
+    # answer 503.
+    for name, value in (
+        ("WLO_GUEST_USERNAME", settings.wlo_guest_username),
+        ("WLO_GUEST_PASSWORD", settings.wlo_guest_password),
+    ):
+        if not value:
+            problems.append(f"{name} fehlt (Repository: /upload, /nodes)")
     return problems
 
 
-def readiness_response(settings: Settings) -> JSONResponse:
+# The problems last written to the log: the probe asks every few seconds.
+_logged_problems: list[str] = []
+
+
+def readiness_response(settings: Settings, detailed: bool = True) -> JSONResponse:
+    """
+    200 ready, or 503 - with the reasons only on the internal port (detailed):
+    the public one answers anyone who reaches it and names no setting (S-08).
+    """
     problems = readiness_problems(settings)
+    if problems != _logged_problems:
+        if problems:
+            logger.warning("Nicht bereit: %s", "; ".join(problems))
+        _logged_problems[:] = problems
     if problems:
-        return JSONResponse(
-            status_code=503, content={"status": "not_ready", "problems": problems}
-        )
+        content: dict = {"status": "not_ready"}
+        if detailed:
+            content["problems"] = problems
+        return JSONResponse(status_code=503, content=content)
     return JSONResponse(content={"status": "ready"})
 
 
 def create_internal_app(get_settings: Callable[[], Settings]) -> FastAPI:
     """The app of the internal port: health, ready, metrics - no API spec."""
     app = FastAPI(openapi_url=None, docs_url=None, redoc_url=None)
+    # Before the first scrape, so the critical alerts see the first failure.
+    precreate_alert_series(get_settings())
 
     @app.get("/health")
     async def health():

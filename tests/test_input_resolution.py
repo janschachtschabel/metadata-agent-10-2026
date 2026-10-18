@@ -1,0 +1,285 @@
+"""
+/detect-content-type, /extract-field and /generate read their input alike.
+
+The three endpoints accept the same input sources and resolved them in three
+copies that drifted (audit A-01): the same failed fetch was a 400 in two of them
+and a 502 in the third (API-01), and /generate dropped a correction instruction
+whenever the text was fetched, or cut it off with a long text (L-02).
+"""
+
+import pytest
+from fastapi.testclient import TestClient
+
+from src import main
+from src.api import deps
+from src.services.input_source_service import InputData, InputSourceService
+from src.utils.public_url import PublicUrlError
+
+NODE_ID = "11111111-2222-3333-4444-555555555555"
+URL = "https://example.org/kurs"
+INSTRUCTION = "Bitte das Datum auf den 3. Mai 2026 korrigieren."
+
+ENDPOINTS = {
+    "/detect-content-type": {},
+    "/extract-field": {"schema_file": "event.json", "field_id": "ccm:oeh_event_begin"},
+    "/generate": {},
+}
+
+
+class _Input:
+    """Input source service; `fail` makes every fetch raise it."""
+
+    def __init__(self, fail=None, text="Abgerufener Seitentext."):
+        self.fail, self.text = fail, text
+
+    async def _maybe_fail(self):
+        if self.fail:
+            raise self.fail
+
+    async def fetch_from_url(self, url, method=None, **kwargs):
+        await self._maybe_fail()
+        return self.text
+
+    async def fetch_from_node_id(self, node_id, **kwargs):
+        await self._maybe_fail()
+        return InputData(text=self.text, existing_metadata={}, node_id=node_id)
+
+    async def fetch_from_node_url(self, node_id, **kwargs):
+        await self._maybe_fail()
+        return InputData(text=self.text, existing_metadata={}, node_id=node_id)
+
+
+class _Generator:
+    """Metadata service that records the text /generate hands it."""
+
+    def __init__(self):
+        self.texts = []
+
+    async def generate_metadata(self, text, **kwargs):
+        self.texts.append(text)
+        return {
+            "contextName": "default",
+            "schemaVersion": "1.8.1",
+            "metadataset": "event.json",
+            "language": "de",
+            "exportedAt": "2026-10-17T00:00:00Z",
+            "metadata": {"cclom:title": "Kurs"},
+            "processing": {"status": "success", "success": True, "warnings": []},
+        }
+
+
+@pytest.fixture
+def generator(monkeypatch):
+    service = _Generator()
+    monkeypatch.setattr(deps, "get_metadata_service", lambda **kw: service)
+    return service
+
+
+# ------------------------------------------------------------------- API-01
+
+
+@pytest.mark.parametrize("path", ENDPOINTS)
+@pytest.mark.parametrize(
+    "source",
+    [
+        {"input_source": "url", "source_url": URL},
+        {"input_source": "node_id", "node_id": NODE_ID},
+        {"input_source": "node_url", "node_id": NODE_ID},
+    ],
+)
+def test_a_source_that_cannot_be_read_is_a_502_everywhere(monkeypatch, path, source):
+    monkeypatch.setattr(
+        deps, "get_input_source_service", lambda: _Input(RuntimeError("down"))
+    )
+
+    with TestClient(main.app) as client:
+        response = client.post(path, json={**ENDPOINTS[path], **source})
+
+    assert response.status_code == 502, response.text
+
+
+@pytest.mark.parametrize("path", ENDPOINTS)
+def test_a_url_that_is_not_public_is_the_callers_error(monkeypatch, path):
+    monkeypatch.setattr(
+        deps,
+        "get_input_source_service",
+        lambda: _Input(PublicUrlError("URL zeigt auf eine interne Adresse")),
+    )
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            path, json={**ENDPOINTS[path], "input_source": "url", "source_url": URL}
+        )
+
+    assert response.status_code == 400, response.text
+
+
+def _node_url_service(monkeypatch, wwwurl):
+    """The real service: node without fulltext, every URL fetch refused as internal."""
+    service = InputSourceService()
+
+    async def metadata(*args, **kwargs):
+        return {"properties": {"cclom:title": ["Kurs"], "ccm:wwwurl": [wwwurl]}}
+
+    async def no_fulltext(*args, **kwargs):
+        return None
+
+    async def internal(url, *args, **kwargs):
+        raise PublicUrlError("URL zeigt auf eine interne Adresse")
+
+    monkeypatch.setattr(service, "fetch_node_metadata", metadata)
+    monkeypatch.setattr(service, "fetch_node_text_content", no_fulltext)
+    monkeypatch.setattr(service, "fetch_from_url", internal)
+    monkeypatch.setattr(deps, "get_input_source_service", lambda: service)
+    return service
+
+
+@pytest.mark.parametrize("path", ENDPOINTS)
+def test_a_node_url_source_url_that_is_not_public_is_the_callers_error(
+    monkeypatch, path
+):
+    """Review #12: the CHANGELOG promised 400; the service fell back instead."""
+    _node_url_service(monkeypatch, URL)
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            path,
+            json={
+                **ENDPOINTS[path],
+                "input_source": "node_url",
+                "node_id": NODE_ID,
+                "source_url": "http://10.0.0.1/intern",
+            },
+        )
+
+    assert response.status_code == 400, response.text
+    assert "interne Adresse" in response.json()["detail"]
+
+
+def test_with_stored_fulltext_the_source_url_is_not_fetched(monkeypatch, generator):
+    # The CHANGELOG's 400 applies only without fulltext: the URL is a fallback.
+    service = _node_url_service(monkeypatch, URL)
+
+    async def fulltext(*args, **kwargs):
+        return "Gespeicherter Volltext."
+
+    monkeypatch.setattr(service, "fetch_node_text_content", fulltext)
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/generate",
+            json={
+                "input_source": "node_url",
+                "node_id": NODE_ID,
+                "source_url": "http://10.0.0.1/intern",
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert "Gespeicherter Volltext." in generator.texts[0]
+
+
+def test_a_non_public_url_stored_on_the_node_falls_back_to_the_node(
+    monkeypatch, generator
+):
+    # Not the caller's fault: the URL comes from the repository (ccm:wwwurl).
+    _node_url_service(monkeypatch, "http://10.0.0.1/intern")
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/generate",
+            json={"input_source": "node_url", "node_id": NODE_ID},
+        )
+
+    assert response.status_code == 200, response.text
+    assert generator.texts[0].endswith("Kurs")
+    warnings = response.json()["processing"]["warnings"]
+    assert any("Titel, Beschreibung und Schlagworten" in w for w in warnings)
+
+
+# ------------------------------------------------------------------- L-02
+
+
+def test_a_correction_survives_a_fetched_source(monkeypatch, generator):
+    monkeypatch.setattr(deps, "get_input_source_service", lambda: _Input())
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/generate",
+            json={
+                "input_source": "url",
+                "source_url": URL,
+                "text": INSTRUCTION,
+                "existing_metadata": {
+                    "_source_text": "Seitentext aus Runde 1.",
+                    "cclom:title": "Kurs",
+                },
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    sent = generator.texts[0]
+    assert "Abgerufener Seitentext." in sent
+    assert sent.rstrip().endswith(INSTRUCTION)
+
+
+def test_a_long_source_keeps_the_correction(generator):
+    source = "Langer Quelltext. " * 40_000  # 720,000 characters
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/generate",
+            json={
+                "text": INSTRUCTION,
+                "existing_metadata": {"_source_text": source, "cclom:title": "Kurs"},
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    sent = generator.texts[0]
+    assert len(sent) <= 500_000
+    assert sent.rstrip().endswith(INSTRUCTION)
+
+
+def test_the_returned_source_text_is_the_source_alone(generator):
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/generate",
+            json={
+                "text": INSTRUCTION,
+                "existing_metadata": {
+                    "_source_text": "Originaltext.",
+                    "cclom:title": "Kurs",
+                },
+            },
+        )
+
+    # The widget keeps it for the next round and uploads it as
+    # ccm:oeh_extendedText: no instruction, no copy of the values. The values
+    # already carry the correction; repeating "shorter" would apply it twice.
+    assert response.json()["_source_text"] == "Originaltext."
+
+
+# ------------------------------------------------- review 18.10.: cheap refusals
+
+
+@pytest.mark.parametrize("path", ["/detect-content-type", "/generate"])
+def test_a_refused_provider_is_refused_before_the_source_is_fetched(monkeypatch, path):
+    fetched = []
+
+    class _Recording(_Input):
+        async def fetch_from_url(self, url, method=None, **kwargs):
+            fetched.append(url)
+            return self.text
+
+    monkeypatch.setattr(deps.settings, "llm_provider", "b-api-openai")
+    monkeypatch.setattr(deps, "get_input_source_service", lambda: _Recording())
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            path,
+            json={"input_source": "url", "source_url": URL, "llm_provider": "openai"},
+        )
+
+    assert response.status_code == 422, response.text
+    assert fetched == []

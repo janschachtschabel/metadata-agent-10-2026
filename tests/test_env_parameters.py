@@ -61,3 +61,24 @@ def test_the_env_template_only_names_variables_that_exist():
     stale = sorted(named - _configured_variables())
 
     assert not stale, f"in .env.template, aber nicht in Settings: {stale}"
+
+
+def _template_values() -> dict[str, str]:
+    template = (DOCUMENT.parent / ".env.template").read_text(encoding="utf-8")
+    return dict(re.findall(r"^([A-Z][A-Z0-9_]*)=(.*)$", template, re.MULTILINE))
+
+
+def test_the_env_template_names_every_deadline():
+    """Review 18.10. #19: METADATA_AGENT_UPLOAD_TIMEOUT was missing."""
+    values = _template_values()
+
+    for name in ("REQUEST_TIMEOUT", "GENERATE_TIMEOUT", "UPLOAD_TIMEOUT"):
+        assert f"{PREFIX}{name}" in values, name
+
+
+def test_the_env_template_leaves_the_keys_empty():
+    """A placeholder key passes the readiness check and fails on the first call."""
+    values = _template_values()
+
+    assert values["OPENAI_API_KEY"] == ""
+    assert values["B_API_KEY"] == ""

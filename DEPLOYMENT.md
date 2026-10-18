@@ -2,7 +2,78 @@
 
 > Für die Übergabe an den Betrieb (Ports, Header, Metriken, Skalierung,
 > Alarmregeln, Kosten) siehe [UEBERGABE.md](UEBERGABE.md).
-> Bestehendes Deployment aktualisieren: [Update von 2.0.x auf 2.1.0](#update-von-20x-auf-210).
+> Bestehendes Deployment aktualisieren: [Update von 2.1.x auf 3.0.0](#update-von-21x-auf-300),
+> davor [Update von 2.0.x auf 2.1.0](#update-von-20x-auf-210).
+
+## Update von 2.1.x auf 3.0.0
+
+**Kurz:** Image tauschen genügt für Docker/Compose. Mit dem Helm-Chart (0.3.0)
+vor der Installation die Namespaces der NetworkPolicy anpassen. Clients, die auf
+Statuscodes verzweigen, prüfen die Tabelle „Breaking“ im CHANGELOG – die
+mitgelieferte Webkomponente und 2.1.1 sind nicht betroffen.
+
+- **Helm-Chart 0.3.0:**
+  - **NetworkPolicy** (Standard an): Port 8000 nur aus `networkPolicy.ingressNamespaces`
+    (Standard `b-api`), Port 9000 nur aus `prometheusNamespaces` (`monitoring`).
+    Ausgehend: DNS nur zum Cluster-DNS (`networkPolicy.dns`, Standard
+    `kube-system`/`k8s-app=kube-dns`), `egressNamespaces` nur auf `egressPorts`
+    (Standard 80, 443, 8000, 8080 – die Ports der Ziel-Pods) und das Internet
+    (IPv4) ohne private Netze. Namespaces und Ports vorher anpassen, sonst
+    erreicht die B-API den Dienst nicht oder der Dienst die Textextraktion nicht
+    (UEBERGABE §6, [Grenzen der NetworkPolicy](#grenzen-der-networkpolicy)).
+  - **Schreibgeschütztes Root-Dateisystem** (`readOnlyRootFilesystem: true`);
+    `/tmp` und `/home/appuser` sind `emptyDir` (Chromium). Kein
+    Service-Account-Token im Pod.
+  - **`METADATA_AGENT_INTERNAL_PORT`** kommt aus `service.internalPort` und steht
+    nicht mehr unter `env` – einen eigenen Wert dort entfernen.
+  - **`forwardedAllowIps`** (Standard `"*"`, siehe unten).
+  - **`/ready` verlangt die Repository-Zugangsdaten:** Fehlt `WLO_GUEST_USERNAME`
+    oder `WLO_GUEST_PASSWORD` – etwa durch einen Tippfehler in
+    `secret.existingSecret` –, bleibt der Pod nicht bereit (`503`, Grund einmal
+    im Log). Ohne sie antworten `/upload` und `/nodes` ohnehin mit `503`.
+  - **Secret-Änderungen starten die Pods nicht mehr neu.** Die Annotation
+    `checksum/secret` ist entfallen: Sie zeigte einen ungesalzenen Hash der
+    Secret-Werte jedem, der Deployments lesen darf. Nach einer Änderung:
+    `kubectl rollout restart deployment/<name>` (`<name>` nennt die Ausgabe
+    von `helm install`, beim Release `metadata-agent` ebenfalls `metadata-agent`).
+  - **`emptyDir` mit `sizeLimit`** (`scratchVolumes`: `/tmp` 1Gi, Home 512Mi)
+    und `topologySpreadConstraints` (weich, `ScheduleAnyway`; `topologySpread`).
+  - **AcademicCloud:** `sharedLlmLimit.enabled=true` teilt das gemeinsame
+    GWDG-Limit durch `replicaCount` (siehe
+    [Durchsatzgrenzen](#llm-provider-spezifisch)).
+- **Neue Einstellungen:** `METADATA_AGENT_GENERATE_TIMEOUT` (110 s) begrenzt ein
+  ganzes `/generate` (auch `/detect-content-type`, `/extract-field`); danach
+  `504 GENERATION_TIMEOUT`. `METADATA_AGENT_UPLOAD_TIMEOUT` (100 s) begrenzt
+  `/upload` und `/nodes`; danach `504 UPLOAD_TIMEOUT`. Beide samt Aufräumen und
+  preStop müssen unter den 120 s von Ingress und Grace-Period bleiben – sonst
+  warnt der Agent beim Start.
+- **Logger-Namen:** Fehlerzeilen kommen von `src.api.responses`, Endpunkte von
+  `src.api.routers.*`, KI-Aufrufe von `src.services.llm_transport`. Wer im
+  Logging-System auf `logger="src.main"` filtert, passt das an.
+- **Image:** Basis-Images per Digest, `/app` gehört root (nur lesbar für den
+  Dienst). Mit Docker selbst schreibgeschützt starten:
+  `docker run --read-only --tmpfs /tmp --tmpfs /home/appuser …`.
+- **pip-Installation:** `requirements.txt` ist der Export von `uv.lock` mit
+  Hashes (`pip install --require-hashes -r requirements.txt`).
+- **docker-compose.yml:** Port nur noch auf `127.0.0.1` (im Modus `auto`
+  könnte sonst jeder im Netz Erschließungen auf `B_API_KEY` auslösen),
+  schreibgeschützt mit tmpfs für `/tmp` und `/home/appuser` wie im Chart, und
+  `stop_grace_period: 120s` – Dockers Default von 10 s brach ein laufendes
+  `/generate` ab. Wer von anderen Rechnern zugreifen muss, setzt `"8000:8000"`,
+  nur hinter einer Zugriffsbeschränkung. Eine vorhandene `.env` reicht der
+  Container jetzt ganz durch (`env_file`, optional; braucht Docker Compose
+  2.24+) – bisher kamen nur die in `environment` gelisteten Variablen an.
+
+### Hinter TLS (Ingress, Proxy)
+
+uvicorn übernimmt `X-Forwarded-Proto` und `X-Forwarded-For` nur von den
+Adressen in `FORWARDED_ALLOW_IPS` (uvicorn-Variable, Standard `127.0.0.1`).
+Ohne sie liefert `/widget/info` hinter einem TLS-Ingress `http://`-URLs, die
+Browser auf einer `https`-Seite als Mixed Content blockieren. Der Helm-Chart
+setzt sie aus `forwardedAllowIps` (Standard `"*"` – vertretbar, weil die
+NetworkPolicy nur die B-API und Prometheus an den Pod lässt; ohne
+NetworkPolicy die Adressen der Proxys eintragen). Mit Docker:
+`-e FORWARDED_ALLOW_IPS=<Proxy-IP>`.
 
 ## Update von 2.0.x auf 2.1.0
 
@@ -122,7 +193,7 @@ $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api
 **Verfügbare Tags:**
 - `main` — aktueller Stand von `main`
 - `develop` — aktueller Stand von `develop`
-- `v2.0.0` — spezifische Version (bei Git-Tag `v2.0.0`)
+- `v3.0.0` — spezifische Version (bei Git-Tag `v3.0.0`)
 
 **Pull:**
 ```bash
@@ -152,14 +223,14 @@ docker run -d \
 | Variable | Beschreibung |
 |---|---|
 | `B_API_KEY` | API-Key für die B-API-LLM-Provider (OpenAI, AcademicCloud, Router). Pflicht im Modus `static`; im Default `auto` der Rückfall für Aufrufe ohne weitergereichten Schlüssel; im Modus `forward` nicht nötig (siehe `METADATA_AGENT_B_API_AUTH_MODE`) |
+| `WLO_GUEST_USERNAME` | edu-sharing-Konto für `/upload`, `/nodes`, `/node`, `/workflow`, `/screenshot` mit `node_id` und Node-Quellen. Ohne es antwortet `/ready` mit `503` |
+| `WLO_GUEST_PASSWORD` | Passwort dazu. Ohne es antwortet `/ready` mit `503` |
 
 ### Optional (Secrets)
 
 | Variable | Beschreibung | Benötigt für |
 |---|---|---|
 | `OPENAI_API_KEY` | API-Key für nativen OpenAI-Zugang | Nur wenn `llm_provider=openai` |
-| `WLO_GUEST_USERNAME` | edu-sharing Login für Upload | `/upload` Endpunkt |
-| `WLO_GUEST_PASSWORD` | edu-sharing Passwort für Upload | `/upload` Endpunkt |
 
 Das Ziel-Repository wird über `METADATA_AGENT_REPOSITORY_URL` gesetzt (siehe
 nächste Tabelle) — es gibt keinen zweiten Schalter dafür.
@@ -200,10 +271,25 @@ Alle Konfigurationsvariablen haben das Prefix `METADATA_AGENT_`:
 | `METADATA_AGENT_OPENAI_TEMPERATURE` | folgt `LLM_TEMPERATURE` | Nur nötig, wenn nativ OpenAI abweichen soll |
 
 **Durchsatzgrenzen** — jeder Provider hat ein eigenes Budget.
-`b-api-academiccloud` (gemessen am 12.08.2026): exakt 2 gleichzeitige Requests,
-~2 pro Sekunde. Ein dritter paralleler Request wird sofort mit `429` abgewiesen,
-ohne `retry-after`. Der Default bildet das ab; wer ihn hochsetzt, erzeugt nur
-Retries. `b-api-openai`: Default 20 gleichzeitig ohne Ratenbegrenzung — ein
+AcademicCloud (GWDG; `b-api-academiccloud` oder eine Router-Route aus
+AcademicCloud-Modellen) hat zwei gemessene Grenzen, beide für den
+B-API-Schlüssel, nicht je Pod:
+
+- **höchstens 2 gleichzeitig** (12.08.2026, Staging, `deepseek-v4-flash`): Ein
+  dritter paralleler Request wird sofort mit `429` abgewiesen, ohne
+  `retry-after`. Damals gingen kurzzeitig ~2 Requests pro Sekunde durch.
+- **~10 Aufrufe pro Minute, ~200 pro Stunde** (15.10.2026, Router mit
+  Qwen-Modellen; der Agent wurde dabei auf 9 pro Minute gedrosselt).
+
+Für eine ganze Erschließung (~50 Aufrufe) ist das Minutenlimit die engere
+Grenze: 5–6 Minuten je Lauf, weit über `METADATA_AGENT_GENERATE_TIMEOUT`.
+Der Default (2 gleichzeitig, 2 pro Sekunde je Prozess) bildet nur die erste
+Grenze ab. Ob das Minutenlimit auch für `deepseek-v4-flash` über
+`b-api-academiccloud` gilt, ist nicht nachgemessen; geplant wird mit ~10 pro
+Minute. Die Drosselung des Agenten gilt je Prozess: Mit dem Helm-Chart teilt
+`sharedLlmLimit.enabled=true` das Limit durch `replicaCount` (bei 2 Replicas je
+Pod 1 gleichzeitig und 0,0833 Aufrufe/s); ohne Chart die beiden Werte unten von
+Hand durch die Zahl der Instanzen teilen. `b-api-openai`: Default 20 gleichzeitig ohne Ratenbegrenzung — ein
 echter `/generate`-Lauf am 06.10.2026 mit `gpt-6-luna` und 20 parallelen
 Requests lief ohne `429`. Antwortet das Gateway doch mit `429`,
 `METADATA_AGENT_LLM_MAX_CONCURRENT_REQUESTS` senken. Gesetzte Grenzen gelten für
@@ -219,21 +305,26 @@ Was das für die Laufzeit hieß — Erschließung mit 50 Feldern, gemessen am
 | `b-api-academiccloud` / `deepseek-v4-flash` | 32–90 s (Warteschlange am Gateway) |
 | `b-api-openai` / `gpt-6-luna` (Standard, gemessen 16.10.2026) | 12–22 s |
 
-Der Container selbst setzt kein Zeitlimit, Proxy und Ingress davor aber schon:
-ingress-nginx bricht nach 60 s ab (`proxy-read-timeout`). Für `/generate` muss
+Der Agent selbst begrenzt `/generate`, `/detect-content-type` und
+`/extract-field` auf `METADATA_AGENT_GENERATE_TIMEOUT` (110 s) und `/upload`,
+`/nodes` auf `METADATA_AGENT_UPLOAD_TIMEOUT` (100 s); Proxy und Ingress davor
+haben eigene Grenzen: ingress-nginx bricht ohne Annotation nach 60 s ab
+(`proxy-read-timeout`). Für `/generate` muss
 dort mindestens **120 s** stehen (siehe oben und [UEBERGABE.md](UEBERGABE.md)),
 sonst antwortet der Ingress mit `504`, während der Agent noch arbeitet. Bei
 ingress-nginx außerdem `proxy-body-size` auf 20 MB setzen (Default 1 MB), sonst
 scheitert `/upload` mit Vorschaubild schon am Ingress. Beispiel-Annotationen:
 [UEBERGABE.md](UEBERGABE.md) §6.
 
-**Auf AcademicCloud umstellen:**
+**Auf AcademicCloud umstellen** (eine Instanz; bei mehreren die beiden
+Grenzen durch ihre Zahl teilen, im Helm-Chart `sharedLlmLimit.enabled=true`
+statt der beiden Variablen):
 
 ```
 METADATA_AGENT_LLM_PROVIDER=b-api-academiccloud
 METADATA_AGENT_B_API_ACADEMICCLOUD_MODEL=deepseek-v4-flash
 METADATA_AGENT_LLM_MAX_CONCURRENT_REQUESTS=2
-METADATA_AGENT_LLM_MAX_REQUESTS_PER_SECOND=2
+METADATA_AGENT_LLM_MAX_REQUESTS_PER_SECOND=0.16   # ~10 pro Minute
 ```
 
 ---
@@ -248,17 +339,24 @@ Response:
 ```json
 {
   "status": "healthy",
-  "version": "2.1.1",
-  "llm_provider": "b-api-openai",
-  "b_api_auth_mode": "auto"
+  "version": "3.0.0"
 }
 ```
+
+Provider und Auth-Modus (`llm_provider`, `b_api_auth_mode`) stehen nur in
+`/health` auf dem internen Port (`METADATA_AGENT_INTERNAL_PORT`).
 
 Im Container ist ein HEALTHCHECK konfiguriert (Interval: 30s, Timeout: 10s, Retries: 3).
 
 `GET /ready` antwortet `{"status": "ready"}`. Kann die Konfiguration nicht
-arbeiten, antwortet es mit `503` und den Gründen, z.B. `B_API_KEY` fehlt im Modus
-`static`. Beide Pfade stehen nicht in der OpenAPI-Spec. Mit
+arbeiten, antwortet es mit `503` (`{"status": "not_ready"}`), z.B. wenn `B_API_KEY`
+im Modus `static` oder `WLO_GUEST_USERNAME`/`WLO_GUEST_PASSWORD` fehlen. Die
+Gründe stehen im Log und in `/ready` auf dem internen Port, nicht auf dem
+öffentlichen. Abhängige
+Dienste ruft `/ready` bewusst nicht auf: Ein Ausfall der B-API soll nicht alle
+Pods auf einmal aus dem Service nehmen. Ohne `B_API_KEY` im Modus `auto` bleibt
+der Pod bereit (hinter dem Proxy mit `forwardApiKey` ein gültiger Betrieb); das
+meldet nur die Startwarnung. Beide Pfade stehen nicht in der OpenAPI-Spec. Mit
 `METADATA_AGENT_INTERNAL_PORT` gibt es sie zusätzlich auf dem internen Port,
 dort auch `/metrics`.
 
@@ -330,13 +428,13 @@ der Agent in der B-API eingetragen ist.
 [ENV-PARAMETER.md](ENV-PARAMETER.md#b-api-authentifizierung)). Danach wieder
 ausschalten.
 
-**Fehler melden:** Jede Antwort trägt eine Anfrage-ID (`X-Request-ID`).
-Fehlerantworten mit Fehlercode (`error.code`, z.B. `LLM_*`, `TEXT_EXTRACTION_*`)
-wiederholen sie als `error.request_id`. Im Log des Agenten steht dazu eine Zeile
-`❌ [<Anfrage-ID>] <Status> <Code>: …`, wo vorhanden mit Upstream-Status und
-Schlüsselquelle. Andere Fehler, etwa `400` bei fehlenden Angaben oder
-Validierungsfehler (`422`), haben die ID nur im Header und keine eigene
-Logzeile. Eine ID, die ein Proxy davor
+**Fehler melden:** Jede Antwort trägt eine Anfrage-ID (`X-Request-ID`). Jede
+Fehlerantwort wiederholt sie als `error.request_id` (neben `error.code`, z.B.
+`LLM_*`, `TEXT_EXTRACTION_*`, `BAD_REQUEST`, `VALIDATION_ERROR`), und zu jeder
+steht eine Logzeile mit derselben ID im Log des Agenten: Fehler mit eigenem
+Code als `❌ [<Anfrage-ID>] <Status> <Code>: …` (Level ERROR, wo vorhanden mit
+Upstream-Status und Schlüsselquelle), übrige Client-Fehler wie `400` oder `422`
+als `[<Anfrage-ID>] <Status> <Code>: …` auf Level INFO. Eine ID, die ein Proxy davor
 schon vergeben hat, wird übernommen, sofern sie nur aus Buchstaben, Ziffern,
 `.`, `_` und `-` besteht (höchstens 64 Zeichen).
 
@@ -391,7 +489,8 @@ abgelehnt — auch wenn er von außen öffentlich erreichbar ist.
 
 Für Kubernetes gibt es einen Helm-Chart unter
 [`helm/metadata-agent/`](helm/metadata-agent/README.md) (Deployment, Service,
-Secret, ServiceMonitor, Alarmregeln; kein Ingress hinter der B-API). Kurzform:
+NetworkPolicy, Secret, ServiceMonitor, Alarmregeln; kein Ingress hinter der
+B-API; schreibgeschütztes Root-Dateisystem). Kurzform:
 
 ```bash
 kubectl create secret generic metadata-agent \
@@ -402,6 +501,145 @@ helm install metadata-agent helm/metadata-agent \
   --set image.repository=$DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api \
   --set secret.existingSecret=metadata-agent
 ```
+
+Das Secret liest der Pod nur beim Start. Nach einer Änderung:
+`kubectl rollout restart deployment/metadata-agent`.
+
+### Grenzen der NetworkPolicy
+
+- **Ports nach der Adressumsetzung:** `networkPolicy.egressPorts` sind die
+  Ports der Ziel-Pods (`targetPort`), nicht die des Service; die Policy greift
+  nach der Umsetzung der Service-Adresse. Die richtigen Ports zeigt
+  `kubectl -n b-api get endpoints -o wide`.
+- **Öffentlicher Name, Ziel im selben Cluster (LoadBalancer/DNAT):** Läuft das
+  Repository oder die B-API hinter dem Ingress bzw. einem LoadBalancer-Service
+  desselben Clusters, löst ihr Name zwar auf eine öffentliche Adresse auf,
+  kube-proxy setzt sie aber auf eine Pod-Adresse im privaten Netz um – und die
+  sperrt `egressExceptCidrs`. Dann den Namespace des Ingress-Controllers (bzw.
+  des Dienstes) in `egressNamespaces` aufnehmen. Ob das auf Staging zutrifft,
+  klärt die Prüfliste unten.
+- **IPv6:** Die Policy erlaubt nach außen nur IPv4 (`0.0.0.0/0` ohne private
+  Netze). In einem Dual-Stack-Cluster scheitern Verbindungen über IPv6; Clients
+  fallen auf IPv4 zurück, solange das Ziel eine IPv4-Adresse hat. Eine
+  IPv6-Freigabe gehört bei Bedarf mit eigenen Ausnahmen (`fc00::/7`,
+  `fe80::/10`, `::1/128`) in die Policy.
+- **NodeLocal DNSCache:** Der DNS-Cache läuft auf einer Link-Local-Adresse des
+  Knotens, nicht als Pod in `kube-system`. Dann `networkPolicy.dns.namespace: ""`
+  setzen (Port 53 ist dann zu jeder Adresse offen).
+- Die Policy wirkt nur mit einem CNI, das NetworkPolicies durchsetzt (Calico,
+  Cilium …).
+
+---
+
+## Erste Installation auf Staging (Prüfliste vor der Übergabe)
+
+Der Chart ist bisher nur statisch geprüft: `helm lint`, kubeconform und die
+Tests. Diese Liste ist die erste Probe im Cluster. Die Ergebnisse gehören ins
+Übergabeprotokoll. `<ns>` ist der Ziel-Namespace, `<release>` der Release-Name, `<name>` der Name
+der Ressourcen: der Release-Name, wenn er „metadata-agent“ enthält, sonst
+`<release>-metadata-agent` (die Ausgabe von `helm install` nennt ihn).
+
+1. **Image `v3.0.0` bauen und pushen.** Git-Tag `v3.0.0` setzen; die
+   GitLab-Pipeline baut, startet den Smoke-Test (schreibgeschützt, Chromium),
+   scannt mit Trivy und pusht erst danach. Prüfen:
+   `docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v3.0.0`.
+   Ohne dieses Tag endet `helm install` mit den Defaults in `ImagePullBackOff`.
+2. **Namespaces und Ports ermitteln:**
+   - `kubectl get ns -L kubernetes.io/metadata.name` – Namespaces der B-API
+     (Aufrufer und Ziel) und von Prometheus.
+   - `kubectl -n <b-api-ns> get svc,endpoints -o wide` – Ports der Pods von
+     B-API und Textextraktion für `networkPolicy.egressPorts`.
+   - `kubectl -n kube-system get pods -l k8s-app=kube-dns` – findet das den
+     Cluster-DNS nicht, Label bzw. Namespace in `networkPolicy.dns` anpassen;
+     bei NodeLocal DNSCache `dns.namespace: ""`.
+   - `kubectl get ingress -A | grep -e repository -e redaktion -e b-api` –
+     liegen Repository oder B-API im selben Cluster, den Namespace des
+     Ingress-Controllers in `egressNamespaces` aufnehmen (siehe oben).
+3. **Secret anlegen** (`kubectl -n <ns> create secret generic …`, siehe
+   [Kubernetes](#kubernetes)): `B_API_KEY` (nicht nötig im Modus `forward`),
+   `WLO_GUEST_USERNAME`, `WLO_GUEST_PASSWORD`.
+4. **Values-Datei** für Staging, z.B. `staging-values.yaml`:
+   `image.repository`, `networkPolicy.*` aus Schritt 2, unter `env` die
+   Staging-Adressen (`METADATA_AGENT_B_API_BASE_URL`,
+   `METADATA_AGENT_REPOSITORY_URL`, `METADATA_AGENT_TEXT_EXTRACTION_API_URL`)
+   und `METADATA_AGENT_B_API_AUTH_MODE`. Aus einer 0.2.x-Datei
+   `env.METADATA_AGENT_INTERNAL_PORT` entfernen.
+5. **Prüfen und installieren:**
+   ```bash
+   helm lint helm/metadata-agent --strict -f staging-values.yaml
+   helm upgrade --install <release> helm/metadata-agent -n <ns> \
+     -f staging-values.yaml --set secret.existingSecret=metadata-agent \
+     --wait --timeout 5m
+   ```
+6. **Pods und Probes:** `kubectl -n <ns> get pods -o wide` – alle Pods
+   `Running` und bereit, möglichst auf verschiedenen Knoten.
+   `kubectl -n <ns> describe pod -l app.kubernetes.io/name=metadata-agent` –
+   keine fehlgeschlagenen Probes. `kubectl -n <ns> logs deploy/<name>`
+   – kein `Nicht bereit:`, die Startwarnungen (`⚠️`) lesen.
+   Interner Port:
+   ```bash
+   kubectl -n <ns> port-forward deploy/<name> 9000:9000
+   curl -s localhost:9000/ready     # {"status":"ready"}
+   curl -s localhost:9000/metrics | grep metadata_agent_llm_requests_total
+   ```
+   Die zweite Zeile zeigt die beim Start vorbelegten Serien mit `0`.
+7. **NetworkPolicy:**
+   - Aus dem B-API-Namespace muss der Dienst antworten, aus einem anderen nicht:
+     ```bash
+     kubectl -n <b-api-ns> run np-test --rm -it --restart=Never \
+       --image=curlimages/curl -- curl -s -m 5 http://<name>.<ns>:8000/health
+     kubectl -n default run np-test --rm -it --restart=Never \
+       --image=curlimages/curl -- curl -s -m 5 http://<name>.<ns>:8000/health
+     ```
+   - Ausgehend aus dem Pod (DNS, Textextraktion, Repository):
+     ```bash
+     kubectl -n <ns> exec deploy/<name> -- python -c \
+       "import urllib.request as u; print(u.urlopen('<REPOSITORY_URL>/_about', timeout=10).status)"
+     ```
+     dasselbe mit der Adresse der Textextraktion. Ein Timeout heißt: Namespace,
+     Port oder DNAT-Fall aus Schritt 2 prüfen.
+8. **Screenshot im schreibgeschützten Pod:**
+   ```bash
+   kubectl -n <ns> port-forward deploy/<name> 8000:8000
+   curl -s -o /dev/null -w "%{http_code} %{content_type}\n" -X POST localhost:8000/screenshot \
+     -H "Content-Type: application/json" -d '{"url": "https://example.org/"}'
+   ```
+   Erwartet: `200` mit einem Bild. Im Log kein `EPERM`, `EROFS` oder `ENOSPC`.
+9. **`/widget/info` liefert `https://`:** über den B-API-Proxy (Browserkonsole
+   einer Redaktionsseite) `…/proxy/metadata-agent-canvas/widget/info` aufrufen;
+   alle URLs in der Antwort beginnen mit `https://` (Audit OPS-01,
+   `forwardedAllowIps`).
+10. **Ende-zu-Ende über den B-API-Proxy:** die Tests 1 und 2 aus
+    [Nach dem Deployment prüfen](#nach-dem-deployment-prüfen-über-den-b-api-proxy).
+    Mit `forwardApiKey` zeigt Test 2 `schluessel: forwarded`.
+11. **Überwachung:** `kubectl -n <ns> get servicemonitor,prometheusrule`; in
+    Prometheus ist das Target `up` und die Regeln `metadata-agent` sind geladen.
+12. **Rollback einmal üben** (Abschnitt [Rollback](#rollback)), solange
+    Staging noch niemand nutzt.
+
+---
+
+## Rollback
+
+Der Dienst ist zustandslos: keine Datenbank, keine Migration. Ein Rollback
+tauscht nur Image und Manifeste.
+
+- **Helm:**
+  ```bash
+  helm history <release> -n <ns>
+  helm rollback <release> <REVISION> -n <ns> --wait
+  ```
+  Helm stellt die Manifeste und Values der gewählten Revision wieder her. Hatte
+  sie (Chart 0.2.x) keine NetworkPolicy, wird diese entfernt. Ein Secret aus
+  `secret.existingSecret` bleibt unverändert.
+- **Nur das Image zurück:** `helm upgrade <release> helm/metadata-agent -n <ns>
+  --reuse-values --set image.tag=<voriges Tag> --wait`.
+- **Docker/Compose:** den Image-Tag zurücksetzen und den Container neu starten.
+- **Was bleibt:** Nodes, die `/upload` oder `/nodes` schon ins Repository
+  geschrieben haben, bleiben dort. Die Webkomponente steckt im Image und geht
+  mit zurück; Clients, die auf die Statuscodes von 3.0.0 umgestellt wurden,
+  prüfen die Tabelle „Breaking“ im CHANGELOG.
+- Zurück auf 2.0.x: siehe [Zurück auf 2.0.x](#zurück-auf-20x).
 
 ---
 

@@ -15,6 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src import main
+from src.api import deps
 from src.config import Settings
 from src.services import llm_service as llm_module
 from src.services.llm_service import LLMService, reset_provider_gates
@@ -125,7 +126,7 @@ def test_generate_uses_the_env_worker_default_unless_the_request_overrides(
     monkeypatch, mode, configured, explicit, expected
 ):
     monkeypatch.setattr(
-        main, "settings", Settings(_env_file=None, default_max_workers=configured)
+        deps, "settings", Settings(_env_file=None, default_max_workers=configured)
     )
     generate = AsyncMock(
         return_value={
@@ -141,7 +142,7 @@ def test_generate_uses_the_env_worker_default_unless_the_request_overrides(
         generate_metadata=generate,
         llm_service=SimpleNamespace(close=AsyncMock()),
     )
-    monkeypatch.setattr(main, "get_metadata_service", lambda **kwargs: service)
+    monkeypatch.setattr(deps, "get_metadata_service", lambda **kwargs: service)
 
     body = {"text": "A resource", "schema_file": "core.json"}
     if explicit is not None:

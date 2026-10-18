@@ -4,49 +4,25 @@ Normalizes user input and extracted values based on field schema.
 Ported from metadata-agent-canvas-optimized FieldNormalizerService.
 """
 
+import logging
 import re
 from typing import Any, Optional
-from datetime import date
 
-from ..utils.text_utils import levenshtein_distance
+from ..utils.dates_numbers import (
+    ImpossibleDate,
+    read_date,
+    read_datetime,
+    read_time,
+    to_number,
+)
+from ..utils.text_utils import levenshtein_within
+from ..utils.vocabulary import is_closed_vocabulary
+
+logger = logging.getLogger(__name__)
 
 
 class FieldNormalizer:
     """Normalizes field values based on schema definitions."""
-
-    # German number words
-    GERMAN_NUMBERS = {
-        "null": 0,
-        "eins": 1,
-        "zwei": 2,
-        "drei": 3,
-        "vier": 4,
-        "fünf": 5,
-        "sechs": 6,
-        "sieben": 7,
-        "acht": 8,
-        "neun": 9,
-        "zehn": 10,
-        "elf": 11,
-        "zwölf": 12,
-        "dreizehn": 13,
-        "vierzehn": 14,
-        "fünfzehn": 15,
-        "sechzehn": 16,
-        "siebzehn": 17,
-        "achtzehn": 18,
-        "neunzehn": 19,
-        "zwanzig": 20,
-        "dreißig": 30,
-        "vierzig": 40,
-        "fünfzig": 50,
-        "sechzig": 60,
-        "siebzig": 70,
-        "achtzig": 80,
-        "neunzig": 90,
-        "hundert": 100,
-        "tausend": 1000,
-    }
 
     # Day of week mapping
     DAY_MAPPING = {
@@ -105,13 +81,16 @@ class FieldNormalizer:
         # Handle arrays
         if isinstance(value, list):
             if is_multiple:
-                return [
+                # An entry that normalises to None (no concept, no number) is
+                # no value: dropped rather than written as null.
+                normalized = (
                     self._normalize_single_value(
                         v, datatype, vocabulary, normalize_vocabularies
                     )
                     for v in value
                     if v is not None and v != ""
-                ]
+                )
+                return [v for v in normalized if v is not None]
             else:
                 # Field is not multiple but value is a list — unwrap first element
                 if len(value) == 0:
@@ -201,7 +180,8 @@ class FieldNormalizer:
         # Vocabulary normalization
         if vocabulary and normalize_vocabularies:
             normalized = self._normalize_vocabulary(value, vocabulary)
-            if normalized is not None:
+            # A closed vocabulary allows only its concepts (audit L-08).
+            if normalized is not None or is_closed_vocabulary(vocabulary):
                 return normalized
 
         # Type-specific normalization
@@ -240,98 +220,29 @@ class FieldNormalizer:
     def _normalize_number(
         self, value: Any, as_integer: bool = False
     ) -> Optional[float | int]:
-        """Normalize number values."""
-        if isinstance(value, (int, float)):
-            return int(value) if as_integer else value
-        if not isinstance(value, str):
-            return None
-
-        s = value.lower().strip().replace(",", ".")
-
-        # Try German number words
-        if s in self.GERMAN_NUMBERS:
-            return self.GERMAN_NUMBERS[s]
-
-        try:
-            num = float(s)
-            return int(num) if as_integer else num
-        except ValueError:
-            return None
+        """A finite number, also from German number words; else None."""
+        return to_number(value, integer=as_integer)
 
     def _normalize_date(self, value: Any) -> Optional[str]:
-        """Normalize date to ISO format (YYYY-MM-DD)."""
+        """YYYY-MM-DD; a value it cannot read (or an impossible date) stays as written."""
         if not isinstance(value, str):
             return None
-
-        s = value.strip()
-
-        # Already ISO format
-        if re.match(r"^\d{4}-\d{2}-\d{2}$", s):
-            return s
-
-        # German format DD.MM.YYYY
-        formats = [
-            (r"^(\d{1,2})\.(\d{1,2})\.(\d{4})$", True),  # DD.MM.YYYY
-            (r"^(\d{1,2})/(\d{1,2})/(\d{4})$", True),  # DD/MM/YYYY
-            (r"^(\d{1,2})-(\d{1,2})-(\d{4})$", True),  # DD-MM-YYYY
-        ]
-
-        for pattern, day_first in formats:
-            match = re.match(pattern, s)
-            if match:
-                day = int(match.group(1))
-                month = int(match.group(2))
-                year = int(match.group(3))
-
-                if 1900 <= year <= 2100 and 1 <= month <= 12 and 1 <= day <= 31:
-                    try:
-                        d = date(year, month, day)
-                        return d.isoformat()
-                    except ValueError:
-                        pass
-
-        # Try parsing ISO with time
-        match = re.match(r"^(\d{4}-\d{2}-\d{2})T", s)
-        if match:
-            return match.group(1)
-
-        return s  # Return original value instead of None to prevent data loss
+        try:
+            return read_date(value) or value.strip()
+        except ImpossibleDate:
+            return value.strip()
 
     def _normalize_datetime(self, value: Any) -> Optional[str]:
-        """Normalize datetime to ISO format."""
+        """YYYY-MM-DDTHH:MM; a value it cannot read stays as written."""
         if not isinstance(value, str):
             return None
-
-        s = value.strip()
-
-        # Already ISO format with time
-        if re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?", s):
-            # Remove seconds if present
-            match = re.match(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2})", s)
-            return match.group(1) if match else s
-
-        # Date only - add midnight
-        date_normalized = self._normalize_date(s)
-        if date_normalized and date_normalized != s:
-            return f"{date_normalized}T00:00"
-
-        return s  # Return original value instead of None to prevent data loss
+        return read_datetime(value) or value.strip()
 
     def _normalize_time(self, value: Any) -> Optional[str]:
-        """Normalize time to HH:MM format."""
+        """HH:MM; a value it cannot read stays as written."""
         if not isinstance(value, str):
             return None
-
-        s = value.strip()
-
-        match = re.match(r"^(\d{1,2}):(\d{2})(?::\d{2})?$", s)
-        if match:
-            hours = int(match.group(1))
-            minutes = int(match.group(2))
-            if 0 <= hours <= 23 and 0 <= minutes <= 59:
-                return f"{hours:02d}:{minutes:02d}"
-
-        return s  # Return original value instead of None to prevent data loss
+        return read_time(value) or value.strip()
 
     def _normalize_url(self, value: Any) -> Optional[str]:
         """Normalize URL - add https:// if missing."""
@@ -379,11 +290,12 @@ class FieldNormalizer:
 
     def _normalize_vocabulary(self, value: Any, vocabulary: dict) -> Optional[Any]:
         """Normalize value against vocabulary concepts."""
-        if not value:
+        # Not `not value`: 0 and False are concepts of the quality and AI scales.
+        if value is None or value == "" or value == []:
             return None
 
         concepts = vocabulary.get("concepts", [])
-        vocab_type = vocabulary.get("type", "open")
+        vocab_type = "closed" if is_closed_vocabulary(vocabulary) else "open"
 
         if not concepts:
             return value
@@ -406,91 +318,56 @@ class FieldNormalizer:
 
     def _match_concept(
         self,
-        value: str,
+        value: Any,
         concepts: list,
         has_uris: bool,
         has_values: bool,
         vocab_type: str,
-    ) -> Optional[str]:
+    ) -> Any:
         """Match a single value against vocabulary concepts."""
         if not isinstance(value, str):
-            return value
+            if vocab_type != "closed":
+                return value
+            if not isinstance(value, (bool, int, float)):
+                return None  # an object or a list is no concept
+            # JSON numbers and booleans by their string form, as in the LLM path
+            # (llm_values._validate_vocabulary): 0 -> "0", True -> "true".
+            value = str(value).lower()
 
         value_lower = value.lower().strip()
 
-        # Exact URI match
-        if has_uris:
-            for concept in concepts:
-                if concept.get("uri") == value:
-                    return value
+        # Already a concept: its URI or value (language codes like 'de', 'en')
+        if (has_uris and any(c.get("uri") == value for c in concepts)) or (
+            has_values and any(c.get("value") == value for c in concepts)
+        ):
+            return value
 
-        # Exact value match (e.g. language codes like 'de', 'en')
-        if has_values:
-            for concept in concepts:
-                if concept.get("value") == value:
-                    return value
-
-        # Exact label match
+        # Exact label or altLabel
         for concept in concepts:
-            label = concept.get("label", "")
-            if isinstance(label, dict):
-                label = label.get("de", label.get("en", ""))
+            label = _german_label(concept)
+            alt_labels = [alt.lower() for alt in concept.get("altLabels", [])]
+            if label.lower() == value_lower or value_lower in alt_labels:
+                return _concept_key(concept, has_uris, has_values, label)
 
-            if label.lower() == value_lower:
-                if has_uris and concept.get("uri"):
-                    return concept.get("uri")
-                if has_values and concept.get("value"):
-                    return concept.get("value")
-                return label
-
-            # Check altLabels
-            alt_labels = concept.get("altLabels", [])
-            for alt in alt_labels:
-                if alt.lower() == value_lower:
-                    if has_uris and concept.get("uri"):
-                        return concept.get("uri")
-                    if has_values and concept.get("value"):
-                        return concept.get("value")
-                    return label
-
-        # Fuzzy match for closed vocabularies
-        if vocab_type == "closed":
-            best_match = self._find_fuzzy_match(value_lower, concepts)
-            if best_match:
-                if has_uris and best_match.get("uri"):
-                    return best_match.get("uri")
-                if has_values and best_match.get("value"):
-                    return best_match.get("value")
-                return best_match.get("label")
+        if vocab_type != "closed":
+            return value
+        best_match = self._find_fuzzy_match(value_lower, concepts)
+        if best_match is None:
             return None
-
-        return value
+        return _concept_key(best_match, has_uris, has_values, best_match.get("label"))
 
     def _find_fuzzy_match(self, value: str, concepts: list) -> Optional[dict]:
-        """Find closest matching concept using Levenshtein distance."""
+        """The concept whose label is closest, within 30 % of the length and at most 3 edits."""
+        limit = min(3, int(len(value) * 0.3))
         best_match = None
-        best_distance = float("inf")
+        best_distance = limit + 1
 
         for concept in concepts:
-            label = concept.get("label", "")
-            if isinstance(label, dict):
-                label = label.get("de", label.get("en", ""))
-
-            distance = self._levenshtein_distance(value, label.lower())
-            if distance < best_distance:
+            distance = levenshtein_within(value, _german_label(concept).lower(), limit)
+            if distance is not None and distance < best_distance:
                 best_distance = distance
                 best_match = concept
-
-        # Only accept if distance is within 30% of string length or max 3
-        max_distance = min(3, len(value) * 0.3)
-        if best_match and best_distance <= max_distance:
-            return best_match
-
-        return None
-
-    def _levenshtein_distance(self, a: str, b: str) -> int:
-        """Calculate Levenshtein edit distance."""
-        return levenshtein_distance(a, b)
+        return best_match
 
     def normalize_day_of_week(self, value: str) -> str:
         """Convert day name to short code (MO, TU, etc.)."""
@@ -499,6 +376,22 @@ class FieldNormalizer:
 
         lower = value.lower().strip()
         return self.DAY_MAPPING.get(lower, value.upper() if len(value) == 2 else value)
+
+
+def _german_label(concept: dict) -> str:
+    label = concept.get("label", "")
+    if isinstance(label, dict):
+        label = label.get("de", label.get("en", ""))
+    return label
+
+
+def _concept_key(concept: dict, has_uris: bool, has_values: bool, fallback: Any) -> Any:
+    """What a matched concept is written as: its URI, else its value, else the fallback."""
+    if has_uris and concept.get("uri"):
+        return concept.get("uri")
+    if has_values and concept.get("value"):
+        return concept.get("value")
+    return fallback
 
 
 # Singleton instance
@@ -545,9 +438,13 @@ def find_object_shape_violations(
                 fields += [
                     f for f in (core.get("fields") or []) if f.get("id") not in known
                 ]
-            except Exception:
-                pass
-    except Exception:
+            except Exception as e:
+                logger.warning(
+                    f"⚠️ Shape check without core.json ({context}/{version}): {e}"
+                )
+    except Exception as e:
+        # No schema, no shape to check against; the write path decides on its own.
+        logger.warning(f"⚠️ Shape check skipped, {schema_file} not loaded: {e}")
         return []
 
     normalizer = get_field_normalizer()

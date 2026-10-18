@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from src import main
+from src.api import deps
 from src.models.schemas import UploadRequest, WorkflowRequest
 from src.services.repository_curation import (
     DEFAULT_WORKFLOW_RECEIVER,
@@ -301,7 +302,7 @@ class _StubRepositoryService:
 @pytest.fixture
 def client(monkeypatch):
     stub = _StubRepositoryService()
-    monkeypatch.setattr(main, "get_repository_service", lambda: stub)
+    monkeypatch.setattr(deps, "get_repository_service", lambda: stub)
     with TestClient(main.app) as test_client:
         test_client.stub = stub
         yield test_client

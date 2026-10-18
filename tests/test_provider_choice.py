@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from src import main
+from src.api import deps
 from src.config import Settings
 from src.models.schemas import (
     DetectContentTypeRequest,
@@ -45,7 +46,7 @@ def test_the_b_api_providers_can_be_picked(model, base, name):
 
 
 def test_openai_is_refused_when_the_service_runs_on_the_b_api(monkeypatch):
-    monkeypatch.setattr(main.settings, "llm_provider", "b-api-openai")
+    monkeypatch.setattr(deps.settings, "llm_provider", "b-api-openai")
 
     response = TestClient(main.app).post(
         "/generate", json={"text": "Ein Text", "llm_provider": "openai"}
@@ -56,9 +57,9 @@ def test_openai_is_refused_when_the_service_runs_on_the_b_api(monkeypatch):
 
 
 def test_openai_stays_available_where_it_is_the_configured_provider(monkeypatch):
-    monkeypatch.setattr(main.settings, "llm_provider", "openai")
+    monkeypatch.setattr(deps.settings, "llm_provider", "openai")
 
-    assert main.check_provider_override("openai") is None
+    assert deps.check_provider_override("openai") is None
 
 
 def test_a_typo_in_the_configured_provider_fails_at_startup():

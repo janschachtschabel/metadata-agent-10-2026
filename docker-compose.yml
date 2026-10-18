@@ -9,7 +9,26 @@ services:
     build: .
     container_name: metadata-agent-api
     ports:
-      - "8000:8000"
+      # Only on this machine: in mode auto anyone reaching the port runs
+      # extractions on B_API_KEY. To serve other hosts, use "8000:8000" behind
+      # an access restriction (DEPLOYMENT.md).
+      - "127.0.0.1:8000:8000"
+    # Read-only like the Helm chart (readOnlyRootFilesystem); Chromium writes
+    # its profile and caches to /tmp and the home directory.
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /home/appuser
+    # A running /generate takes up to 110 s (METADATA_AGENT_GENERATE_TIMEOUT);
+    # Docker's default of 10 s would cut it off on every restart.
+    stop_grace_period: 120s
+    # Every setting in .env reaches the container (.env.template offers more
+    # than the list below). The list keeps its defaults and wins over the file;
+    # without a .env the list alone applies. The long form with `required`
+    # needs Docker Compose 2.24 or newer.
+    env_file:
+      - path: .env
+        required: false
     environment:
       # LLM Provider: b-api-openai, b-api-academiccloud, b-api-router, or openai
       - METADATA_AGENT_LLM_PROVIDER=${METADATA_AGENT_LLM_PROVIDER:-b-api-openai}
@@ -25,7 +44,8 @@ services:
       # OpenAI Key (only needed if using provider=openai)
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
 
-      # Repository Upload (optional, for /upload endpoint)
+      # Repository account (/upload, /nodes, node sources); without it /ready
+      # answers 503 - the healthcheck uses /health and keeps the container up.
       - WLO_GUEST_USERNAME=${WLO_GUEST_USERNAME:-}
       - WLO_GUEST_PASSWORD=${WLO_GUEST_PASSWORD:-}
 
@@ -82,6 +102,9 @@ services:
       - METADATA_AGENT_DEFAULT_MAX_WORKERS=${METADATA_AGENT_DEFAULT_MAX_WORKERS:-20}
       # Timeout per LLM call; a buffer below the 120 s ingress timeout
       - METADATA_AGENT_REQUEST_TIMEOUT=${METADATA_AGENT_REQUEST_TIMEOUT:-90}
+      - METADATA_AGENT_GENERATE_TIMEOUT=${METADATA_AGENT_GENERATE_TIMEOUT:-110}
+      # Whole /upload or /nodes; then 504 UPLOAD_TIMEOUT
+      - METADATA_AGENT_UPLOAD_TIMEOUT=${METADATA_AGENT_UPLOAD_TIMEOUT:-100}
 
       # Default Schema Settings
       - METADATA_AGENT_DEFAULT_CONTEXT=${METADATA_AGENT_DEFAULT_CONTEXT:-default}
@@ -115,7 +138,10 @@ services:
   #   build: .
   #   container_name: metadata-agent-api-academiccloud
   #   ports:
-  #     - "8001:8000"
+  #     - "127.0.0.1:8001:8000"
+  #   read_only: true
+  #   tmpfs: [/tmp, /home/appuser]
+  #   stop_grace_period: 120s
   #   environment:
   #     - METADATA_AGENT_LLM_PROVIDER=b-api-academiccloud
   #     - B_API_KEY=${B_API_KEY:-}
@@ -128,7 +154,10 @@ services:
   #   build: .
   #   container_name: metadata-agent-api-openai
   #   ports:
-  #     - "8002:8000"
+  #     - "127.0.0.1:8002:8000"
+  #   read_only: true
+  #   tmpfs: [/tmp, /home/appuser]
+  #   stop_grace_period: 120s
   #   environment:
   #     - METADATA_AGENT_LLM_PROVIDER=openai
   #     - OPENAI_API_KEY=${OPENAI_API_KEY:-}

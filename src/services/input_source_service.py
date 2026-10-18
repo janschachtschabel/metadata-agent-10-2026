@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
 from ..config import get_settings
-from ..utils.public_url import require_public_http_url
+from ..utils.public_url import PublicUrlError, require_public_http_url
 from ..metrics import OWN_SERVICE_HOOKS
 from .repository_service import build_auth_header
 
@@ -118,7 +118,14 @@ class InputSourceService:
 
         logger.info(f"Fetching text from URL: {url} (method: {method})")
 
+        # The message reaches the client (detail, error.message): the service's
+        # host is internal and goes to the log only (audit S-06, review #5).
         service = urlsplit(api_url).netloc or self.settings.text_extraction_api_url
+
+        def failure(code: str, message: str, status: int) -> TextExtractionError:
+            logger.warning(f"{code}: {message} [{service}]")
+            return TextExtractionError(code, message, status)
+
         try:
             response = await self.http_client.post(
                 api_url,
@@ -130,38 +137,36 @@ class InputSourceService:
             )
             response.raise_for_status()
         except httpx.ConnectTimeout as e:
-            raise TextExtractionError(
+            raise failure(
                 "TEXT_EXTRACTION_CONNECT_TIMEOUT",
-                f"Textextraktionsdienst {service} nicht erreichbar: kein Verbindungsaufbau "
+                "Textextraktionsdienst nicht erreichbar: kein Verbindungsaufbau "
                 f"innerhalb von {self.timeout.connect:g} s.",
                 504,
             ) from e
         except httpx.TimeoutException as e:
-            raise TextExtractionError(
+            raise failure(
                 "TEXT_EXTRACTION_TIMEOUT",
-                f"Textextraktionsdienst {service} hat nicht innerhalb von "
+                "Textextraktionsdienst hat nicht innerhalb von "
                 f"{self.timeout.read:g} s geantwortet ({type(e).__name__}).",
                 504,
             ) from e
         except httpx.ConnectError as e:
-            raise TextExtractionError(
+            raise failure(
                 "TEXT_EXTRACTION_UNREACHABLE",
-                f"Textextraktionsdienst {service} nicht erreichbar "
+                "Textextraktionsdienst nicht erreichbar "
                 "(Verbindung abgelehnt oder Name nicht auflösbar).",
                 502,
             ) from e
         except httpx.HTTPStatusError as e:
-            raise TextExtractionError(
+            raise failure(
                 "TEXT_EXTRACTION_HTTP_ERROR",
-                f"Textextraktionsdienst {service} antwortete mit HTTP "
-                f"{e.response.status_code}.",
+                f"Textextraktionsdienst antwortete mit HTTP {e.response.status_code}.",
                 502,
             ) from e
         except httpx.HTTPError as e:
-            raise TextExtractionError(
+            raise failure(
                 "TEXT_EXTRACTION_FAILED",
-                f"Abruf über den Textextraktionsdienst {service} fehlgeschlagen "
-                f"({type(e).__name__}).",
+                f"Textextraktionsdienst: Abruf fehlgeschlagen ({type(e).__name__}).",
                 502,
             ) from e
 
@@ -367,6 +372,10 @@ class InputSourceService:
 
         Returns:
             InputData with text and existing metadata
+
+        Raises:
+            PublicUrlError: the caller's source_url is not public (a stored
+                ccm:wwwurl that is not public falls back to the node instead)
         """
         # Step 1: Fetch metadata
         node_data = await self.fetch_node_metadata(node_id, repository)
@@ -374,6 +383,7 @@ class InputSourceService:
         existing_metadata = self._convert_node_properties_to_metadata(properties)
 
         # Step 2: Get URL from metadata if not provided
+        caller_url = bool(source_url)
         if not source_url:
             wwwurl = properties.get("ccm:wwwurl", [])
             if wwwurl:
@@ -405,6 +415,11 @@ class InputSourceService:
                     output_format=output_format,
                 )
             except Exception as e:
+                # A non-public URL the caller sent is the caller's error (400), as
+                # with input_source=url. One stored on the node (ccm:wwwurl) is
+                # not: it falls back like any other failed fetch (review #12).
+                if caller_url and isinstance(e, PublicUrlError):
+                    raise
                 # Final fallback: build text from metadata - and say so. A result
                 # from title and description alone must not pass for one from
                 # the page.

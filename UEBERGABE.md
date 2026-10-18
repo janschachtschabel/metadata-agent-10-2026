@@ -1,6 +1,6 @@
 # Übergabe an den Betrieb (Team 6)
 
-Stand 2.1.1. Gegliedert nach der Checkliste „Übergabepaket“ aus den
+Stand 3.0.0. Gegliedert nach der Checkliste „Übergabepaket“ aus den
 Anforderungen von Team 6. Einzelheiten stehen in
 [ENV-PARAMETER.md](ENV-PARAMETER.md) und [DEPLOYMENT.md](DEPLOYMENT.md);
 dieses Dokument verweist dorthin, statt sie zu wiederholen. Felder in
@@ -13,11 +13,12 @@ Anforderungen erfüllt sind, steht in
 | | |
 |---|---|
 | Repo | API: <https://scm.edu-sharing.com/edu-sharing/projects/wlo/metaservices/metadata-agent>; Webkomponente: <https://scm.edu-sharing.com/edu-sharing/projects/wlo/metaservices/metadata-agent-webcomponent> (das gebaute Widget liegt im API-Repo unter `src/static/widget/`). Ob T6 Zugriff hat, ist noch zu bestätigen. |
-| CI | `.gitlab-ci.yml` baut bei jedem Push auf `main`/`develop` ein Image mit dem Branch als Tag und bei jedem Git-Tag ein Image mit der Version (z.B. `v2.1.1`). Produktion nur mit Versions-Tags. |
+| CI | `.gitlab-ci.yml` baut bei jedem Push auf `main`/`develop` ein Image mit dem Branch als Tag und bei jedem Git-Tag ein Image mit der Version (z.B. `v3.0.0`). Produktion nur mit Versions-Tags. |
 | GitLab-CI/CD-Variablen | Die Docker-Jobs in `.gitlab-ci.yml` brauchen: `DIND_IMAGE`, `DIND_HOST`, `DIND_DRIVER`, `DIND_TLS_CERTDIR` (Docker-in-Docker), `DOCKER_REGISTRY`, `DOCKER_USERNAME`, `DOCKER_PASSWORD` (maskiert). Test- und Ruff-Jobs brauchen keine. Die Webkomponente braucht keine eigenen Variablen. |
 | GitHub-Spiegel | `.github/workflows/docker-publish.yml`: Tests, Chart-Prüfung und Image-Bau bei jedem Push; nach DockerHub nur mit Secret `DOCKERHUB_PASSWORD` |
 | Helm-Chart | [`helm/metadata-agent/`](helm/metadata-agent/README.md); die CI prüft ihn mit `helm lint` und die Alarmregeln mit `promtool` (Jobs `helm lint`, `alert rules`) |
-| Image | Multi-Stage auf `python:3.13-slim`, läuft als Nutzer `appuser` (UID 1000), `.dockerignore` vorhanden, HEALTHCHECK auf `/health`. Enthält Chromium für Screenshots (~400 MB), daher größer als ein reiner API-Dienst. |
+| Prüfungen vor einem Image | Tests mit Coverage-Untergrenze, mypy, `pip-audit` (Job `pip audit`); das gebaute Image startet schreibgeschützt ohne Schlüssel und muss `/health` beantworten (`scripts/smoke-image.sh`), Trivy bricht bei kritischen, behebbaren Lücken ab. In Merge Requests baut und prüft der Job `check docker image in merge requests`, ohne zu veröffentlichen |
+| Image | Multi-Stage auf `python:3.13-slim` (per Digest gepinnt, Aktualisierung im Kopf des Dockerfiles), läuft als Nutzer `appuser` (UID 1000), Code gehört root, `.dockerignore` vorhanden, HEALTHCHECK auf `/health`. Enthält Chromium für Screenshots (~400 MB), daher größer als ein reiner API-Dienst. Läuft mit schreibgeschütztem Root-Dateisystem, wenn `/tmp` und `/home/appuser` beschreibbar sind; der CI-Smoke-Test startet das Image so und lässt darin Chromium starten (lokal nicht geprüft, weil das Bauen Downloads braucht). |
 | Daten im Image | nur die Schemata (wenige MB); keine Modelle oder Korpora |
 
 ## 2. API
@@ -65,7 +66,16 @@ Anforderungen erfüllt sind, steht in
     16.10.2026), mit AcademicCloud bis 90 s (Warteschlange am Gateway).
   - `/extract-field`, `/detect-content-type`: wenige Sekunden.
   - Screenshots: höchstens 90 s.
-  - **Proxy- und Ingress-Timeout für `/generate`: mindestens 120 s.**
+  - **Proxy- und Ingress-Timeout für `/generate`: mindestens 120 s.** Der
+    Agent bricht einen Lauf nach `METADATA_AGENT_GENERATE_TIMEOUT` (110 s) selbst
+    ab und antwortet `504` mit `error.code: GENERATION_TIMEOUT` und Request-ID.
+- **Statuscodes:** `4xx` = die Anfrage ist falsch (fehlender Parameter, Node
+  außerhalb des Bearbeitungsfensters `403`, Node unbekannt `404`, gültiges
+  JSON mit falschem Inhalt `422`); `502` = ein abhängiger Dienst (KI,
+  Textextraktion, Repository) hat versagt; `504` = Zeitlimit. Jeder Fehler hat
+  `error.code` und `error.request_id`, auch eine unerwartete Ausnahme (`500`,
+  `INTERNAL_ERROR`). `/upload` und `/workflow` melden Teilergebnisse mit `200`
+  und `success:false` im Body.
 - **Async-Jobs** (Job anlegen, Status abfragen) gibt es nicht. Das wäre der
   nächste Schritt, falls 120 s im Proxy nicht gehen.
 
@@ -159,6 +169,28 @@ das Modell.
 
 **Netzwerk:** In Variante A darf der Dienst nur über die B-API erreichbar sein.
 Sonst laufen Anfragen ohne Header im Modus `auto` auf den eigenen `B_API_KEY`.
+Der Helm-Chart erzwingt das mit einer NetworkPolicy (Standard an, siehe §6).
+
+**Offene Entscheidung, Lesezugriffe mit dem Service-Konto (Audit S-05):**
+`node_id`/`node_url` bei `/generate` (Volltext als `_source_text`),
+`/upload/verify` und `/upload` mit erkannter Dublette (`return_full_node`)
+lesen mit den Rechten von `WLO_GUEST_USERNAME` – auch nicht öffentliche Nodes,
+etwa aus der Inbox. Wer den Dienst erreicht, bekommt diese Inhalte. Solange nur
+die B-API den Dienst erreicht, gehört das zur akzeptierten Lücke „Auth für
+Aufrufer“. Alternativen: Lesezugriffe anonym oder mit dem Ticket des Aufrufers,
+`node_full` bei Dubletten weglassen.
+
+**Bewusst so belassen (Audit vom 18.10.):**
+
+| Befund | Entscheidung | Begründung |
+|---|---|---|
+| B-02 DNS-Rebinding im Screenshot-Browser | Schutz über die Egress-NetworkPolicy | Chromium löst Namen selbst auf; der Agent prüft jede Anfrage (`route`), jede Weiterleitung und jede WebSocket-Verbindung (S-09), aber gegen eine zweite DNS-Antwort hilft nur die Netzebene. Alle Seitenressourcen durch den Agenten zu leiten, würde Screenshots echter Seiten verlangsamen und brechen (Streaming, Encodings). Die Policy sperrt private Netze (Chart 0.3.0). Der Vorschau-Abruf des Agenten selbst ist an die geprüfte Adresse gebunden (S-04). |
+| S-11 Chromium ohne Sandbox | bleibt (Playwright-Standard im Container) | Die Chromium-Sandbox braucht im Container unprivilegierte User-Namespaces oder ein eigenes seccomp-Profil; beides ist im Cluster nicht zugesichert, die Sandbox würde Screenshots dort abbrechen. Ausgleich: nicht-root, `readOnlyRootFilesystem`, keine Service-Account-Tokens, Egress-Policy. Ein eigener Screenshot-Pod ohne Secrets wäre der nächste Schritt. |
+| P-04 HTTP-Client je Repository-Aufruf | bleibt | Ein Upload nutzt einen Client für alle seine Aufrufe; ein Client je Anfrage kostet einen TLS-Aufbau (~50 ms) gegenüber Abläufen von Sekunden, bindet Verbindungen an die Lebensdauer der Anfrage und ist die Naht, an der die Tests das Repository ersetzen. |
+| S-12 CORS-Default `*` | bleibt | `allow_credentials` ist aus und der Dienst nimmt keine Cookies an: Eine fremde Seite kann nichts im Namen eines Nutzers tun, was sie nicht auch direkt könnte. Das Widget wird in beliebige Seiten eingebettet und ruft den Agenten von dort auf; eine Liste der Ursprünge müsste jede Einbettung kennen. Hinter dem B-API-Proxy gilt dessen CORS; einschränken lässt es sich mit `METADATA_AGENT_CORS_ORIGINS`. Neu sind `X-Content-Type-Options: nosniff` und `Referrer-Policy: no-referrer`. |
+| OPS-11 Annotation `checksum/secret` | entfernt statt gesalzen | Ein Salz, das sich nicht aus dem Secret ableiten lässt, kann `helm template` nicht stabil erzeugen; ein zufälliges würde jeden Upgrade die Pods neu starten lassen; mit `existingSecret` änderte sich die Annotation ohnehin nie. Nach einer Änderung des Secrets: `kubectl rollout restart deployment/<name>` (DEPLOYMENT.md). |
+| OPS-09 `$DIND_IMAGE` ohne Digest | Projektvariable | Das Image kommt aus den GitLab-Gruppenvariablen, nicht aus dem Repo; dort per Digest setzen. |
+| S-08 Testseiten unter `/widget/examples` | bleiben | `test.html`, `uri-test.html`, `dual-instance-test.html` sind dokumentierte Werkzeuge für Integratoren (README, `/widget/info`) und rufen nur die öffentliche API auf. Das öffentliche `/health` nennt keine Konfiguration mehr. |
 
 ## 4. Monitoring und Logging
 
@@ -223,8 +255,11 @@ als Steckbrief: [docs/steckbrief.md](docs/steckbrief.md).
   Jeder Pod kann jede Anfrage beantworten, auch mehrere Pods nebeneinander.
 - **Grenzen je Pod:** gleichzeitige KI-Aufrufe (Default 20) und
   Screenshot-Plätze (2) gelten pro Prozess. Bei N Pods addieren sie sich.
-  Das gemeinsame GWDG-Limit (~10/min) teilen sich dagegen alle, deshalb dort
-  nicht über Replicas skalieren.
+  Das gemeinsame GWDG-Limit (~10 Aufrufe/min, höchstens 2 gleichzeitig) gilt
+  dagegen für den Schlüssel und damit für alle Pods zusammen, deshalb dort
+  nicht über Replicas skalieren. Im Helm-Chart teilt
+  `sharedLlmLimit.enabled=true` das Limit durch `replicaCount`
+  (DEPLOYMENT.md, Durchsatzgrenzen).
 - **Ein Worker je Container:** Der interne Port und die Metriken setzen das
   voraus. Skaliert wird über Replicas.
 
@@ -251,21 +286,49 @@ Browser ─ edu-sharing ─ B-API-Proxy ─┐
   `forward` nicht nötig), `OPENAI_API_KEY` (nur Variante B),
   `WLO_GUEST_USERNAME`, `WLO_GUEST_PASSWORD`. Referenz: `Dockerfile`,
   `docker-compose.yml`. `METADATA_AGENT_REQUEST_TIMEOUT` (Timeout je
-  KI-Aufruf) ist in Code, Compose und Template einheitlich 90 s, ein Puffer
-  unter dem Ingress-Timeout von 120 s.
+  KI-Aufruf, 90 s) und `METADATA_AGENT_GENERATE_TIMEOUT` (ganzes `/generate`,
+  110 s, samt Abruf der Quelle) sind in Code, Compose, Chart und Template
+  einheitlich, ein Puffer unter dem Ingress-Timeout von 120 s. Geocoding:
+  höchstens 10 Abfragen je Anfrage.
 
 Helm-Chart: [`helm/metadata-agent/`](helm/metadata-agent/README.md) mit
 Deployment (Probes auf dem internen Port, 120 s Grace-Period für laufende
-Erschließungen), Service, PodDisruptionBudget, Secret, `ServiceMonitor` und
-`PrometheusRule`. Ein Ingress (Annotationen `proxy-read-timeout 120`,
+Erschließungen), Service, PodDisruptionBudget, NetworkPolicy, Secret,
+`ServiceMonitor` und `PrometheusRule`. Ein Ingress (Annotationen `proxy-read-timeout 120`,
 `proxy-body-size 20m`) ist abschaltbar vorhanden, gehört aber nicht vor einen
 Dienst hinter der B-API: Der Proxy ruft den Service im Cluster auf; bei
 aktivem Ingress im Modus `auto` warnt `helm install`.
 Die Werte in `values.yaml` sind per Test mit dem Code abgeglichen. Geprüft mit
-`helm lint --strict` und kubeconform gegen Kubernetes 1.33 (16.10.2026), nicht
-in einem echten Cluster installiert. `/debug/*` ist per
+`helm lint --strict` und kubeconform gegen Kubernetes 1.33 (16.10.2026; seit
+18.10. läuft kubeconform in beiden CI), nicht in einem echten Cluster
+installiert – die Prüfliste für die erste Installation auf Staging steht in
+DEPLOYMENT.md, ebenso der Abschnitt Rollback. `/debug/*` ist per
 `METADATA_AGENT_DEBUG_ENDPOINTS=false` aus; der interne Port ist nicht im
 Ingress.
+
+**Schreibgeschütztes Root-Dateisystem** (`securityContext.readOnlyRootFilesystem`):
+`/tmp` und `/home/appuser` sind `emptyDir` (Chromium). **TLS:** Der Chart setzt
+`FORWARDED_ALLOW_IPS` aus `forwardedAllowIps` (Standard `"*"`, vertretbar nur
+mit der NetworkPolicy), damit uvicorn `X-Forwarded-Proto` übernimmt und
+`/widget/info` `https://` liefert (DEPLOYMENT.md, „Hinter TLS“).
+
+**NetworkPolicy (`networkPolicy.*`, Standard an):** Port 8000 nur aus den
+Namespaces in `ingressNamespaces` (Standard `b-api`), Port 9000 nur aus
+`prometheusNamespaces` (Standard `monitoring`). Ausgehend: DNS nur zum
+Cluster-DNS (`networkPolicy.dns`), die Namespaces in `egressNamespaces`
+(Standard `b-api`) nur auf `egressPorts` (Ports der Ziel-Pods, Standard 80,
+443, 8000, 8080) und das öffentliche Internet (IPv4) ohne private Netze
+(`egressExceptCidrs`), damit Vorschau- und Screenshot-URLs keine
+Cluster-Adressen erreichen. Grenzen (IPv6, öffentliche Namen mit Ziel im
+selben Cluster per LoadBalancer/DNAT, NodeLocal DNSCache): DEPLOYMENT.md,
+„Grenzen der NetworkPolicy“. Der Pod bekommt kein Service-Account-Token
+(`automountServiceAccountToken: false`). **Vor der Installation anpassen:** die
+Namespace-Namen des Clusters; läuft die Textextraktion oder edu-sharing im
+Cluster, deren Namespace in `egressNamespaces`; mit Ingress (Variante B) den
+Namespace des Ingress-Controllers in `ingressNamespaces`. Die Namespaces werden
+über das Label `kubernetes.io/metadata.name` gewählt, das Kubernetes selbst
+setzt. Die Policy wirkt nur mit einem CNI, das NetworkPolicies durchsetzt
+(Calico, Cilium u.a.).
 
 ## 7. Kosten
 

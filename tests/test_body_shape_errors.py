@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src import main
+from src.api import deps
 
 ENDPOINTS = ["/validate", "/export/markdown", "/upload"]
 BODIES = [b"[1, 2]", b"42", b'"text"', b"\xff\xfe{}"]
@@ -16,7 +17,7 @@ BODIES = [b"[1, 2]", b"42", b'"text"', b"\xff\xfe{}"]
 
 @pytest.fixture
 def client(monkeypatch):
-    monkeypatch.setattr(main, "get_repository_service", lambda: object())
+    monkeypatch.setattr(deps, "get_repository_service", lambda: object())
     return TestClient(main.app, raise_server_exceptions=False)
 
 

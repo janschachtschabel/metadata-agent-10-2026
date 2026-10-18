@@ -6,14 +6,14 @@
   "type": "architecture",
   "quality": "showcase",
   "specification": {
-    "path": "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent\\docs\\architektur\\metadata-agent-architektur.json",
-    "sha256": "b418a5b7f6bbddb904d27e369b9fae8932215926a4035e591c8b1e0bab2bb373",
-    "bytes": 37120
+    "path": "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent-3\\docs\\architektur\\metadata-agent-architektur.json",
+    "sha256": "de283605ea8f2e7667f2daaefa167f8263847d31c850fad51ba96c1cfe660f62",
+    "bytes": 37421
   },
   "artifact": {
-    "path": "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent\\docs\\architektur\\metadata-agent-architektur.html",
-    "sha256": "f296fbfe349cb4cae671a64bab358c914aa33baca538537d482d10e4c18c704b",
-    "bytes": 833488
+    "path": "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent-3\\docs\\architektur\\metadata-agent-architektur.html",
+    "sha256": "cc4d3fd0595110294160b7a4262fa49e33cabbe007732eda891ee20e56e5c027",
+    "bytes": 833803
   },
   "gates": {
     "validate": "pass",
@@ -74,22 +74,22 @@
     "truncated": false
   },
   "evidence": {
-    "receipt": "C:\\Users\\jan\\AppData\\Local\\Temp\\claude\\C--Users-jan-staging-Windsurf-metadata-agent-005\\d181bcd5-68cb-4345-a515-34f1bfd95a3f\\scratchpad\\review-map-4\\metadata-agent-architektur.finalize.json",
-    "summaryReceipt": "C:\\Users\\jan\\AppData\\Local\\Temp\\claude\\C--Users-jan-staging-Windsurf-metadata-agent-005\\d181bcd5-68cb-4345-a515-34f1bfd95a3f\\scratchpad\\review-map-4\\metadata-agent-architektur.finalize-summary.json",
-    "browserCheckReceipt": "C:\\Users\\jan\\AppData\\Local\\Temp\\claude\\C--Users-jan-staging-Windsurf-metadata-agent-005\\d181bcd5-68cb-4345-a515-34f1bfd95a3f\\scratchpad\\review-map-4\\metadata-agent-architektur.browser-check.json"
+    "receipt": "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent-3\\docs\\architektur\\metadata-agent-architektur.finalize.json",
+    "summaryReceipt": "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent-3\\docs\\architektur\\metadata-agent-architektur.finalize-summary.json",
+    "browserCheckReceipt": "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent-3\\docs\\architektur\\metadata-agent-architektur.browser-check.json"
   },
   "update": {
     "status": "current",
     "installedVersion": "3.1.0",
     "availableVersion": "3.1.0",
     "releaseNotes": null,
-    "checkedAt": "2026-10-16T09:35:48.769Z",
+    "checkedAt": "2026-10-18T11:26:29.875Z",
     "source": "cache",
     "noticeRequired": false,
     "noticeText": null
   },
   "visualReview": "not-requested",
-  "durationMs": 4193,
+  "durationMs": 4542,
   "visualReviewRecommendation": {
     "action": "inspect-route-readability",
     "signals": {

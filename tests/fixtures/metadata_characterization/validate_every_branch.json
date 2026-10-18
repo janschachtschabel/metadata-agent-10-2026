@@ -1,0 +1,114 @@
+{
+ "valid": false,
+ "schema_used": "event.json",
+ "errors": [
+  {
+   "field_id": "cclom:title",
+   "message": "Required field is empty",
+   "severity": "error"
+  },
+  {
+   "field_id": "cclom:general_description",
+   "message": "Required field is empty",
+   "severity": "error"
+  },
+  {
+   "field_id": "schema:contactPoint",
+   "message": "Expected an object, got str: 'Besucherservice'. Write it as an object, e.g. {\"contactType\": \"Besucherservice\"}",
+   "severity": "error"
+  },
+  {
+   "field_id": "geo:latitude",
+   "message": "Latitude 91.5 out of range (-90 to 90)",
+   "severity": "error"
+  },
+  {
+   "field_id": "geo:longitude",
+   "message": "Longitude -181 out of range (-180 to 180)",
+   "severity": "error"
+  },
+  {
+   "field_id": "ccm:oeh_publisher",
+   "message": "Required field is empty",
+   "severity": "error"
+  }
+ ],
+ "warnings": [
+  {
+   "field_id": "schema:maximumAttendeeCapacity",
+   "message": "Expected number, got str: 'dreihundert'",
+   "severity": "warning"
+  },
+  {
+   "field_id": "schema:isAccessibleForFree",
+   "message": "Expected boolean, got str: 'ja'",
+   "severity": "warning"
+  },
+  {
+   "field_id": "schema:startDate",
+   "message": "Date '15.03.2025' should be formatted as '2025-03-15'",
+   "severity": "warning"
+  },
+  {
+   "field_id": "schema:startDate",
+   "message": "Date '3. Mai 2026' should be formatted as '2026-05-03'",
+   "severity": "warning"
+  },
+  {
+   "field_id": "schema:startDate",
+   "message": "Invalid date format 'irgendwann' - expected YYYY-MM-DD",
+   "severity": "warning"
+  },
+  {
+   "field_id": "schema:startDate",
+   "message": "Invalid date values in '2026-13-40'",
+   "severity": "warning"
+  },
+  {
+   "field_id": "schema:doorTime",
+   "message": "Datetime '15.03.2025 14:30' should be formatted as '2025-03-15T14:30'",
+   "severity": "warning"
+  },
+  {
+   "field_id": "schema:doorTime",
+   "message": "Invalid datetime format 'morgen' - expected YYYY-MM-DDTHH:MM",
+   "severity": "warning"
+  },
+  {
+   "field_id": "schema:startTime",
+   "message": "Time '14 Uhr 30' should be formatted as '14:30'",
+   "severity": "warning"
+  },
+  {
+   "field_id": "schema:startTime",
+   "message": "Time '9:05' should be formatted as '09:05'",
+   "severity": "warning"
+  },
+  {
+   "field_id": "schema:startTime",
+   "message": "Invalid time format 'mittags' - expected HH:MM",
+   "severity": "warning"
+  },
+  {
+   "field_id": "ccm:wwwurl",
+   "message": "URL 'example.org/kurs' missing protocol - should be 'https://example.org/kurs'",
+   "severity": "warning"
+  },
+  {
+   "field_id": "ccm:wwwurl",
+   "message": "Invalid URL format 'kein link' - must start with http:// or https://",
+   "severity": "warning"
+  },
+  {
+   "field_id": "cclom:general_language",
+   "message": "Value 'deutsch' not in vocabulary. Did you mean 'http://w3id.org/vocab/de'?",
+   "severity": "warning"
+  },
+  {
+   "field_id": "cclom:general_language",
+   "message": "Value 'Klingonisch' not in closed vocabulary",
+   "severity": "warning"
+  }
+ ],
+ "coverage": 0.0
+}

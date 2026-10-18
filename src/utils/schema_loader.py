@@ -1,10 +1,13 @@
 """Schema loader utility for loading and caching schema definitions."""
 
+import logging
 import json
 import re
 from pathlib import Path
 from typing import Any, Optional
 from functools import lru_cache
+
+logger = logging.getLogger(__name__)
 
 
 SCHEMATA_PATH = Path(__file__).parent.parent / "schemata"
@@ -45,7 +48,13 @@ def resolve_version(context: str, version: str) -> str:
     return version.lstrip("v")
 
 
-@lru_cache(maxsize=100)
+def schema_file_of(metadata: dict[str, Any]) -> str:
+    """The schema a record names: `metadataset`, legacy `_schema.file`, else learning material."""
+    return metadata.get("metadataset") or metadata.get("_schema", {}).get(
+        "file", "learning_material.json"
+    )
+
+
 def load_schema(context: str, version: str, schema_file: str) -> dict[str, Any]:
     """Load a specific schema definition."""
     # Version and file name arrive from requests. They are identifiers, never
@@ -58,6 +67,15 @@ def load_schema(context: str, version: str, schema_file: str) -> dict[str, Any]:
     if not _SCHEMA_VERSION.fullmatch(resolved_version):
         raise ValueError(f"Invalid schema version: {version!r}")
 
+    # Cached per resolved version: "latest", "2.0.0" and "v2.0.0" are one file.
+    return _load_schema_file(context, resolved_version, schema_file)
+
+
+@lru_cache(maxsize=100)
+def _load_schema_file(
+    context: str, resolved_version: str, schema_file: str
+) -> dict[str, Any]:
+    """The schema file of a validated name and resolved version (load_schema)."""
     registry = load_context_registry()
     context_info = registry.get("contexts", {}).get(context)
     if not context_info:
@@ -167,10 +185,20 @@ def get_available_schemas(context: str, version: str) -> list[dict[str, Any]]:
                     "field_count": len(schema.get("fields", [])),
                 }
             )
-        except Exception:
+        except Exception as e:
+            logger.warning(f"⚠️ Schema {schema_file} not listed, not loadable: {e}")
             continue
 
     return schemas
+
+
+def _profile_id(context: str, version: str, schema_file: str) -> Optional[str]:
+    """The edu-sharing profile of a content type (its schema's profileId), or None."""
+    try:
+        return load_schema(context, version, schema_file).get("profileId") or None
+    except ValueError as e:
+        logger.warning(f"⚠️ No profile id for {schema_file}: {e}")
+        return None
 
 
 def get_content_types(context: str, version: str) -> list[dict[str, Any]]:
@@ -191,6 +219,9 @@ def get_content_types(context: str, version: str) -> list[dict[str, Any]]:
                             "uri": concept.get("uri", ""),
                             "label": concept.get("label", {}),
                             "schema_file": concept.get("schema_file"),
+                            "profile_id": _profile_id(
+                                context, version, concept["schema_file"]
+                            ),
                         }
                     )
 
@@ -357,7 +388,7 @@ def detect_schema_from_text(text: str, context: str, version: str) -> str:
 
     # Return schema with highest score, or default to learning_material
     if scores:
-        return max(scores, key=scores.get)
+        return max(scores, key=lambda name: scores[name])
 
     return "learning_material.json"
 
@@ -403,8 +434,9 @@ def get_repo_fields(
                 field_id = system.get("path") or field.get("id")
                 if field_id:
                     repo_field_ids.add(field_id)
-    except Exception:
-        pass
+    except Exception as e:
+        # Fewer (or no) writable fields follow; the log has to say why (L-04).
+        logger.warning(f"⚠️ Repo fields of core.json ({context}/{version}): {e}")
 
     # Load special schema if provided (and not core.json itself)
     if schema_file and schema_file != "core.json":
@@ -416,7 +448,7 @@ def get_repo_fields(
                     field_id = system.get("path") or field.get("id")
                     if field_id:
                         repo_field_ids.add(field_id)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"⚠️ Repo fields of {schema_file} ({context}/{version}): {e}")
 
     return repo_field_ids

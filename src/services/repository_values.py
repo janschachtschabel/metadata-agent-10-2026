@@ -26,7 +26,7 @@ def normalize_for_repo(metadata: dict, repo_field_ids: set[str] | None = None) -
     - Don't start with 'virtual:' (computed by edu-sharing, never stored)
     - Have non-empty values
     """
-    normalized = {}
+    normalized: dict[str, Any] = {}
 
     # If no repo fields could be loaded from schemas, refuse to write blindly
     if not repo_field_ids:

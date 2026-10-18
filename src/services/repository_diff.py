@@ -9,11 +9,15 @@ strict comparison would report those as mismatches.
 No HTTP, no state — the read lives in `repository_service`.
 """
 
+import logging
 import json
 from functools import lru_cache
 from typing import Any
 
 from ..utils.schema_loader import get_repo_fields, get_schema_fields
+from .repository_support import is_metadata_key
+
+logger = logging.getLogger(__name__)
 
 # ccm:commonlicense_key resolves like any vocabulary field, but edu-sharing never
 # gives it a DISPLAYNAME — not even when the value is right. What it does produce
@@ -43,22 +47,32 @@ NO_VALUE_SPACE = {
 
 
 @lru_cache(maxsize=64)
+def _vocabulary_fields_of(context: str, version: str, name: str) -> frozenset:
+    """The vocabulary fields of one schema file; raises when it cannot be read."""
+    fields: set[str] = set()
+    for field in get_schema_fields(context, version, name):
+        vocabulary = field.get("system", {}).get("vocabulary") or {}
+        if vocabulary.get("concepts"):
+            field_id = field["id"]
+            fields.add(WRITTEN_AS.get(field_id, field_id))
+    return frozenset(fields)
+
+
 def vocabulary_fields(context: str, version: str, schema_file: str | None) -> frozenset:
     """
     Repository properties whose values are expected to resolve to a label.
 
-    Named as they appear on the node, not as the schema calls them.
+    Named as they appear on the node, not as the schema calls them. Only a
+    schema that was read is cached (lru_cache keeps no exception): a transient
+    read failure must not leave the set incomplete for the process lifetime.
     """
     fields: set[str] = set()
-    for name in {"core.json", schema_file} - {None}:
+    names = {"core.json"} | ({schema_file} if schema_file is not None else set())
+    for name in names:
         try:
-            for field in get_schema_fields(context, version, name):
-                vocabulary = field.get("system", {}).get("vocabulary") or {}
-                if vocabulary.get("concepts"):
-                    field_id = field["id"]
-                    fields.add(WRITTEN_AS.get(field_id, field_id))
-        except Exception:
-            continue
+            fields |= _vocabulary_fields_of(context, version, name)
+        except Exception as e:
+            logger.warning(f"⚠️ Vocabulary fields of {name} not read: {e}")
     return frozenset(fields)
 
 
@@ -198,31 +212,24 @@ def compute_diff(
     Returns:
         Tuple of (diff_list, summary_counts)
     """
-    # Clean expected metadata (remove processing/header keys)
-    excluded = {
-        "contextName",
-        "schemaVersion",
-        "metadataset",
-        "metadataset_uri",
-        "language",
-        "exportedAt",
-        "processing",
-        "_origins",
-        "_source_text",
-        "repository",
-        "check_duplicates",
-        "start_workflow",
-        "preview_url",
-        "preview:url",
-        "preview_image_url",
+    # The fields that were sent: the same rule as the write path, minus the
+    # upload options a flat body carries next to them.
+    clean_expected = {
+        k: v
+        for k, v in expected.items()
+        if is_metadata_key(k) and k not in _UPLOAD_OPTION_KEYS
     }
-    clean_expected = {k: v for k, v in expected.items() if k not in excluded}
 
-    # Load repo fields to know which fields were eligible for writing
     schema_file = expected.get("metadataset")
-    repo_field_ids = get_repo_fields(context, version, schema_file)
-
-    diff = []
+    check = _DiffCheck(
+        actual=actual,
+        repo_field_ids=get_repo_fields(context, version, schema_file),
+        resolution_of=lambda field_id: (
+            None
+            if properties is None
+            else check_resolution(field_id, properties, context, version, schema_file)
+        ),
+    )
     summary = {
         "match": 0,
         "mismatch": 0,
@@ -233,130 +240,22 @@ def compute_diff(
         # into 'mismatch' would hide that the value arrived exactly as sent.
         "unresolved": 0,
     }
+    diff = []
 
-    def resolution_of(field_id: str) -> str | None:
-        if properties is None:
-            return None
-        return check_resolution(field_id, properties, context, version, schema_file)
-
-    # Check all expected fields
-    seen_keys = set()
     for field_id, expected_val in clean_expected.items():
-        seen_keys.add(field_id)
-
+        check.seen_keys.add(field_id)
         # Skip empty expected values
         if expected_val is None or expected_val == "" or expected_val == []:
             continue
-
-        # Fields that were never eligible for repo write. Only 'virtual:' is
-        # unconditional — it is computed by edu-sharing, never stored. A
-        # 'schema:' field falls through to the repo_field check below, which is
-        # what decides it on the write path too (see normalize_for_repo).
-        if field_id.startswith("virtual:"):
-            diff.append(
-                {
-                    "field_id": field_id,
-                    "status": "not_written",
-                    "expected": expected_val,
-                    "actual": None,
-                }
-            )
-            summary["not_written"] += 1
-            continue
-
-        # An empty set means the schemas could not be read — get_repo_fields()
-        # swallows that. The write path then refuses to write anything at all,
-        # so every field is absent by decision, not because the repository lost
-        # it. Reporting 'missing_in_repo' here would blame the wrong side.
-        if not repo_field_ids or field_id not in repo_field_ids:
-            diff.append(
-                {
-                    "field_id": field_id,
-                    "status": "not_written",
-                    "expected": expected_val,
-                    "actual": None,
-                }
-            )
-            summary["not_written"] += 1
-            continue
-
-        actual_val = actual.get(field_id)
-
-        # The write path renames some fields (oeh:new_lrt → ccm:oeh_lrt). Looking
-        # only under the schema name would report a field as missing that is
-        # sitting right there under its repository name — and then report the
-        # repository name again as 'extra_in_repo', so the same value shows up
-        # twice, once as a loss and once as a surprise.
-        if field_id in WRITTEN_AS:
-            written_as = WRITTEN_AS[field_id]
-            seen_keys.add(written_as)
-            if actual_val is None:
-                actual_val = actual.get(written_as)
-
-        if actual_val is None:
-            # Special case: cm:author is transformed to ccm:lifecyclecontributer_author
-            if field_id == "cm:author":
-                author_fn = actual.get("ccm:lifecyclecontributer_authorFN")
-                if author_fn:
-                    # Any name used to count — compare the names themselves.
-                    status = (
-                        "match"
-                        if authors_match(expected_val, author_fn)
-                        else "mismatch"
-                    )
-                    diff.append(
-                        {
-                            "field_id": field_id,
-                            "status": status,
-                            "expected": expected_val,
-                            "actual": f"(transformed → ccm:lifecyclecontributer_authorFN: {author_fn})",
-                        }
-                    )
-                    summary[status] += 1
-                    continue
-
-            diff.append(
-                {
-                    "field_id": field_id,
-                    "status": "missing_in_repo",
-                    "expected": expected_val,
-                    "actual": None,
-                    "resolution": None,
-                }
-            )
-            summary["missing_in_repo"] += 1
-        elif values_match(expected_val, actual_val):
-            resolution = resolution_of(field_id)
-            diff.append(
-                {
-                    "field_id": field_id,
-                    "status": "match",
-                    "expected": expected_val,
-                    "actual": actual_val,
-                    "resolution": resolution,
-                }
-            )
-            summary["match"] += 1
-            if resolution == "unresolved":
-                summary["unresolved"] += 1
-        else:
-            resolution = resolution_of(field_id)
-            diff.append(
-                {
-                    "field_id": field_id,
-                    "status": "mismatch",
-                    "expected": expected_val,
-                    "actual": actual_val,
-                    "resolution": resolution,
-                }
-            )
-            summary["mismatch"] += 1
-            if resolution == "unresolved":
-                summary["unresolved"] += 1
+        entry = check.entry(field_id, expected_val)
+        diff.append(entry)
+        summary[entry["status"]] += 1
+        if entry.get("resolution") == "unresolved":
+            summary["unresolved"] += 1
 
     # Check for extra fields in repo that weren't in expected
     for field_id, actual_val in actual.items():
-        if field_id in seen_keys:
+        if field_id in check.seen_keys:
             continue
         if actual_val is None or actual_val == "" or actual_val == []:
             continue
@@ -381,6 +280,100 @@ def compute_diff(
     diff.sort(key=lambda d: status_order.get(d["status"], 5))
 
     return diff, summary
+
+
+# Upload options a flat body may carry next to the fields (routers/upload.py).
+_UPLOAD_OPTION_KEYS = frozenset(
+    {"repository", "check_duplicates", "start_workflow", "preview_url", "preview:url"}
+)
+
+
+class _DiffCheck:
+    """The verdict for one expected field against the node (compute_diff)."""
+
+    def __init__(self, actual: dict, repo_field_ids, resolution_of):
+        self.actual = actual
+        self.repo_field_ids = repo_field_ids
+        self.resolution_of = resolution_of
+        # Repository keys accounted for; the rest is 'extra_in_repo'.
+        self.seen_keys: set[str] = set()
+
+    def entry(self, field_id: str, expected_val: Any) -> dict:
+        # Fields that were never eligible for repo write. Only 'virtual:' is
+        # unconditional — it is computed by edu-sharing, never stored. A
+        # 'schema:' field falls through to the repo_field check, which is what
+        # decides it on the write path too (see normalize_for_repo).
+        #
+        # An empty set means the schemas could not be read — get_repo_fields()
+        # swallows that. The write path then refuses to write anything at all,
+        # so every field is absent by decision, not because the repository lost
+        # it. Reporting 'missing_in_repo' here would blame the wrong side.
+        if (
+            field_id.startswith("virtual:")
+            or not self.repo_field_ids
+            or field_id not in self.repo_field_ids
+        ):
+            return {
+                "field_id": field_id,
+                "status": "not_written",
+                "expected": expected_val,
+                "actual": None,
+            }
+
+        actual_val = self._actual_value(field_id)
+        if actual_val is None:
+            return self._missing(field_id, expected_val)
+        status = "match" if values_match(expected_val, actual_val) else "mismatch"
+        return {
+            "field_id": field_id,
+            "status": status,
+            "expected": expected_val,
+            "actual": actual_val,
+            "resolution": self.resolution_of(field_id),
+        }
+
+    def _actual_value(self, field_id: str) -> Any:
+        """
+        The node's value for a field, also under the name the write path uses.
+
+        The write path renames some fields (oeh:new_lrt → ccm:oeh_lrt). Looking
+        only under the schema name would report a field as missing that is
+        sitting right there under its repository name — and then report the
+        repository name again as 'extra_in_repo', so the same value shows up
+        twice, once as a loss and once as a surprise.
+        """
+        actual_val = self.actual.get(field_id)
+        if field_id in WRITTEN_AS:
+            written_as = WRITTEN_AS[field_id]
+            self.seen_keys.add(written_as)
+            if actual_val is None:
+                actual_val = self.actual.get(written_as)
+        return actual_val
+
+    def _missing(self, field_id: str, expected_val: Any) -> dict:
+        # cm:author is transformed to ccm:lifecyclecontributer_author
+        author_fn = (
+            self.actual.get("ccm:lifecyclecontributer_authorFN")
+            if field_id == "cm:author"
+            else None
+        )
+        if author_fn:
+            # Any name used to count — compare the names themselves.
+            return {
+                "field_id": field_id,
+                "status": "match"
+                if authors_match(expected_val, author_fn)
+                else "mismatch",
+                "expected": expected_val,
+                "actual": f"(transformed → ccm:lifecyclecontributer_authorFN: {author_fn})",
+            }
+        return {
+            "field_id": field_id,
+            "status": "missing_in_repo",
+            "expected": expected_val,
+            "actual": None,
+            "resolution": None,
+        }
 
 
 def values_match(expected: Any, actual: Any) -> bool:
