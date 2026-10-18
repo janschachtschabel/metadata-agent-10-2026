@@ -156,6 +156,15 @@ Betrieb:
 - **Schema-Cache** je aufgelöster Version („latest“, „2.0.0“ und „v2.0.0“ sind
   ein Eintrag).
 
+- **Aufgeräumt:** `scripts/deploy-widget.ps1` entfernt – ein zweiter, veralteter
+  Deploy-Weg, der den Zielordner samt Lizenztexten löschte und keine
+  Versionsprüfung kannte; maßgeblich ist `npm run build:elements` im
+  Widget-Repository. Die Beispielseiten unter `/widget/examples` hörten auf
+  Events, die das Widget nicht kennt (`extractionComplete`,
+  `contentTypeDetected`), und setzten Attribute (`show-input`, `show-controls`,
+  `node-id`) und Layouts (`compact`, `minimal`), die es nicht gibt; sie nutzen
+  jetzt `uploadResult`, `show-input-area`, `controls` und die sieben Layouts.
+
 CI und Tests:
 
 - **GitLab rendert den Chart in den Tests:** `tests/test_helm_chart.py`

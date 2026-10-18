@@ -170,7 +170,7 @@
             Verfügbare Attribute (alle optional):
             ═══════════════════════════════════════════════════
             api-url             = URL bzw. Proxy-Basis der Metadata Agent API (Standard: Same-Origin)
-            layout              = "default" | "compact" | "minimal" | "detail" | "plugin" | "dialog" | "prueftisch" | "prueftisch-gross"
+            layout              = "default" | "plugin" | "dialog" | "detail" | "clean" | "prueftisch" | "prueftisch-org"
             context-name        = Schema-Kontext: "default" | "mds_oeh"
             schema-version      = Schema-Version: "2.0.0" | "latest"
             columns             = Spaltenanzahl: 1 | 2 | 3 | 4 (nur für Detail-Layout relevant)
@@ -207,8 +207,6 @@
             Events (JavaScript):
             metadataChange      = Metadaten wurden geändert (event.detail = aktuelle Felder)
             metadataSubmit      = Metadaten abgesendet (event.detail = alle Metadaten)
-            extractionComplete  = KI-Extraktion abgeschlossen
-            contentTypeDetected = Inhaltstyp erkannt
             uploadResult        = Upload-Ergebnis (event.detail = {success, nodeId, error})
             reloadFromPage      = Nutzer hat "Seite neu laden" geklickt
         -->
@@ -282,8 +280,8 @@
                 if (canvas.debug) console.log('Metadata submitted:', e.detail);
             });
 
-            canvas.addEventListener('extractionComplete', (e) => {
-                if (canvas.debug) console.log('Extraction complete:', e.detail);
+            canvas.addEventListener('uploadResult', (e) => {
+                if (canvas.debug) console.log('Upload result:', e.detail);
             });
         });
     </script>

@@ -224,8 +224,8 @@
                 if (canvas.debug) console.log('Metadata submitted:', e.detail);
             });
 
-            canvas.addEventListener('extractionComplete', (e) => {
-                if (canvas.debug) console.log('Extraction complete:', e.detail);
+            canvas.addEventListener('uploadResult', (e) => {
+                if (canvas.debug) console.log('Upload result:', e.detail);
             });
         });
     </script>

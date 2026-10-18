@@ -59,9 +59,12 @@
                 <label>Layout</label>
                 <select id="selLayout" onchange="setAttr('layout', this.value)">
                     <option value="default">Default</option>
-                    <option value="compact">Compact</option>
-                    <option value="minimal">Minimal</option>
+                    <option value="plugin">Plugin</option>
+                    <option value="dialog">Dialog</option>
                     <option value="detail">Detail</option>
+                    <option value="clean">Clean</option>
+                    <option value="prueftisch">Prüftisch</option>
+                    <option value="prueftisch-org">Prüftisch Org</option>
                 </select>
             </div>
 
@@ -86,9 +89,9 @@
             <div class="control-group">
                 <label>Toggles</label>
                 <div style="display: flex; gap: 6px;">
-                    <button id="btn-input" class="active" onclick="toggle('show-input', this)">Input</button>
+                    <button id="btn-input" class="active" onclick="toggle('show-input-area', this)">Input</button>
                     <button id="btn-status" class="active" onclick="toggle('show-status-bar', this)">Status</button>
-                    <button id="btn-controls" class="active" onclick="toggle('show-controls', this)">Controls</button>
+                    <button id="btn-controls" class="active" onclick="toggle('controls', this)">Controls</button>
                     <button id="btn-readonly" onclick="toggle('readonly', this)">Readonly</button>
                     <button id="btn-borderless" class="active" onclick="toggle('borderless', this)">Borderless</button>
                     <button id="btn-ai" class="active" onclick="toggle('highlight-ai', this)">AI Highlight</button>
@@ -101,9 +104,9 @@
                 id="canvas"
                 api-url=""
                 layout="default"
-                show-input="true"
+                show-input-area="true"
                 show-status-bar="true"
-                show-controls="true"
+                controls="true"
                 borderless="true"
                 highlight-ai="true">
             </metadata-agent-canvas>
@@ -137,7 +140,10 @@
         function loadNode() {
             const nodeId = document.getElementById('nodeInput').value.trim();
             if (!nodeId) return;
-            setAttr('node-id', nodeId);
+            // The widget has no node-id attribute: switch to the node input and
+            // let the editor start the extraction there.
+            setAttr('input-mode', 'nodeId');
+            log(`Node-ID ${nodeId} im Widget eingeben (Modus Node-ID ist gesetzt)`);
         }
 
         // URL params: ?layout=detail&nodeId=...
@@ -154,7 +160,7 @@
         // Event logging
         customElements.whenDefined('metadata-agent-canvas').then(() => {
             const canvas = document.getElementById('canvas');
-            ['metadataChange', 'metadataSubmit', 'extractionComplete', 'contentTypeDetected'].forEach(evt => {
+            ['metadataChange', 'metadataSubmit', 'uploadResult', 'reloadFromPage'].forEach(evt => {
                 canvas.addEventListener(evt, (e) => log(`Event: ${evt}`));
             });
             log('Web Component bereit');

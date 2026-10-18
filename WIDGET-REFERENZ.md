@@ -320,8 +320,10 @@ canvas.dispatchEvent(new CustomEvent('plugin-extract', {
 `GET /widget/info` (`src/api/routers/widget.py`) und die README stimmen seit 3.0.0
 mit dem Build überein: keine Attribute `node-id`, `source-url`, `show-input`,
 `show-controls` (`controls` gibt es), keine Layouts `compact`/`minimal`
-(`minimal` ist nur ein Einbettungsbeispiel mit `layout="clean"`), keine Events
-`extractionComplete`/`contentTypeDetected`. Was leicht anders erwartet wird:
+(`minimal.html` ist nur ein Einbettungsbeispiel mit `layout="default"`; ein
+unbekannter Layout-Name fällt still auf `default` zurück), keine Events
+`extractionComplete`/`contentTypeDetected`. Die Beispielseiten unter
+`/widget/examples` nutzen seit 3.0.0 nur noch diese Namen. Was leicht anders erwartet wird:
 
 | Erwartung | Realität im Build |
 |---|---|

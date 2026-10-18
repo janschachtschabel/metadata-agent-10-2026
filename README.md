@@ -1871,20 +1871,21 @@ Die API liefert eine einbettbare Angular-Webkomponente (`<metadata-agent-canvas>
 
 ### Widget bereitstellen
 
-```powershell
-# Angular-Projekt bauen und dist-Dateien in die API kopieren
-.\scripts\deploy-widget.ps1
+Im Widget-Repository:
 
-# Nur kopieren (ohne Neubau, z.B. wenn dist schon aktuell ist)
-.\scripts\deploy-widget.ps1 -SkipBuild
+```bash
+npm run build:elements
 ```
 
-Ohne PowerShell geht es im Widget-Repository mit `npm run build:elements`: Das
-baut die Komponente, bricht ab, wenn ein Bundle Google Fonts, einen Vercel-Host
-oder die PageShot-API referenziert oder eine Schrift fehlt, und kopiert Bundles
-samt `.gz`, Schriften und Übersetzungen nach `src/static/widget/` dieses
-Repositorys. Das Ziel lässt sich mit `--target=<pfad>` oder `WIDGET_TARGET`
-ändern; ohne Angabe müssen beide Repositorys nebeneinander liegen.
+Das baut die Komponente und kopiert Bundles samt `.gz`, Schriften,
+Übersetzungen und Lizenztexten (`3rdpartylicenses.txt`, `LICENSE`, `NOTICE`,
+`fonts/OFL.txt`) nach `src/static/widget/` dieses Repositorys. Vorher bricht es
+ab, wenn ein Bundle Google Fonts, einen Vercel-Host oder die PageShot-API
+referenziert, eine Schrift oder ein Lizenztext fehlt, oder wenn der Agent im
+Ziel eine andere Hauptversion hat (überschreibbar mit `--force`). Das Ziel lässt
+sich mit `--target=<pfad>` oder `WIDGET_TARGET` ändern; ohne Angabe müssen beide
+Repositorys nebeneinander liegen. Nur kopieren, ohne Neubau:
+`node scripts/build-elements.js`.
 
 ### Einbindung in eigene Anwendungen
 
