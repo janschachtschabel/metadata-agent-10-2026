@@ -209,10 +209,12 @@ curl -X POST http://localhost:8000/screenshot \
 
 ### 3.1 Übersicht
 
-Das Docker-Image ist ein Multi-Stage Build auf Basis von `python:3.13-slim` und enthält:
+Das Docker-Image ist ein Multi-Stage Build auf Basis von `python:3.13-slim`
+(Debian 13 „trixie“, per Digest gepinnt) und enthält:
 
 - Python 3.13 Runtime
-- Alle Python-Dependencies (FastAPI, OpenAI, Playwright, etc.)
+- Die Python-Pakete aus `uv.lock` (FastAPI, uvicorn, httpx, Playwright, prometheus-client
+  u. a.; kein OpenAI-SDK – alle KI-Aufrufe gehen per httpx)
 - Playwright + Chromium für datenschutzfreundliche Screenshots
 - System-Bibliotheken für headless Chromium
 - Non-Root User (`appuser`, UID 1000) für Sicherheit
@@ -381,16 +383,17 @@ Das Dockerfile nutzt einen Multi-Stage Build für optimale Image-Größe:
 │  2. .venv (COPY --from=builder)             │
 │     → Fertige virtuelle Umgebung            │
 │                                             │
-│  3. Playwright Chromium (playwright install) │
+│  3. Non-Root User (appuser, UID 1000) und   │
+│     Playwright Chromium in einer Ebene      │
 │     → Lädt Chromium-Browser herunter        │
 │                                             │
 │  4. App-Code (COPY src/ ./src/)             │
 │     → Inklusive static/widget/ falls        │
 │       vorhanden                             │
 │                                             │
-│  5. Non-Root User (appuser, UID 1000)       │
+│  5. USER appuser, Healthcheck, CMD          │
 │                                             │
-│  6. Healthcheck + CMD (uvicorn)             │
+│  6. OCI-Labels (Version, Commit)            │
 └─────────────────────────────────────────────┘
 ```
 
@@ -405,7 +408,7 @@ Im Docker-Image wird Playwright vollständig vorinstalliert:
 
 - **Python-Paket** — via `pyproject.toml` / `uv sync` im Builder-Stage
 - **Chromium-Browser** — via `playwright install chromium` im Dockerfile
-- **System-Dependencies** — via `apt-get install` (17 Pakete)
+- **System-Dependencies** — via `apt-get install` (20 Pakete)
 
 Wichtige System-Bibliotheken für Chromium:
 
@@ -534,32 +537,17 @@ services:
 
 ### 3.10 Docker-Image optimieren
 
-`.dockerignore` erstellen:
+Die `.dockerignore` liegt im Repository (u. a. `.git`, `.env*` außer
+`.env.template`, `*.md`, `.venv`, Caches).
 
-```
-.git
-.github
-.env
-.env.*
-*.md
-docs/
-tests/
-__pycache__
-*.pyc
-.pytest_cache
-venv/
-.venv/
-node_modules/
-```
+**Layer-Caching:** Die Reihenfolge im Dockerfile hält die großen Ebenen stabil:
 
-**Layer-Caching optimieren:**
-
-Die aktuelle Reihenfolge im Dockerfile ist bereits optimal:
-
-1. `pyproject.toml` + `uv.lock` → selten geändert → gecacht
-2. System-Dependencies → selten geändert → gecacht
-3. `playwright install chromium` → selten geändert → gecacht
-4. `COPY src/` → häufig geändert → schneller Rebuild
+1. `pyproject.toml` + `uv.lock` (Builder) → nur bei Abhängigkeitsänderungen neu
+2. System-Dependencies → nur bei Änderungen der Paketliste neu
+3. Benutzer `appuser` + `playwright install chromium` + Rechte in einer Ebene → nur
+   bei neuer Playwright-Version neu
+4. `COPY src/` → bei jeder Code-Änderung, klein
+5. OCI-Labels zuletzt → ein neuer Commit ändert nur Metadaten
 
 ### 3.11 Troubleshooting Docker
 
@@ -583,10 +571,12 @@ Der Workflow `.gitlab-ci.yml` führt folgende Stages aus:
 
 | Stage | Jobs | Beschreibung |
 |---|---|---|
-| `.pre` | `uv-install` | Dependencies installieren, Cache befüllen |
-| `build` | `Ruff Check`, `Ruff Format` | Code-Qualitätsprüfung |
-| `test` | `run tests` | Tests ausführen |
-| `deploy` | Docker build & push | Image in interne Registry pushen |
+| `build` | `Ruff Check`, `Ruff Format`, `helm binary` | Code-Qualität; `helm` für die Chart-Tests |
+| `test` | `run tests` | pytest mit Coverage-Untergrenze, Browser-Tests (`REQUIRE_BROWSER=1`), Chart-Tests (`REQUIRE_HELM=1`), Alter des Chromium (`scripts/check_browser_age.py`), mypy – auf dem Debian 13 des Images |
+| `test` | `pip audit`, `pip audit dev` | Bekannte Schwachstellen in `requirements.txt` (blockierend) und in den Entwicklungswerkzeugen (nur gemeldet) |
+| `test` | `helm lint`, `kubeconform`, `alert rules` | Chart, gerenderte Manifeste, Alarmregeln mit promtool |
+| `test` | `check docker image in merge requests` | Image bauen, read-only starten (`scripts/smoke-image.sh`), Trivy |
+| `deploy` | `build and push …` | Image bauen, prüfen, in die interne Registry pushen (`main`, `develop`, Tags `v*`) |
 
 ### 4.2 CI/CD-Variablen einrichten
 
@@ -608,7 +598,7 @@ Navigiere zu **GitLab → Repository → Settings → CI/CD → Variables** und 
 |---|---|---|
 | Push auf `main` | Branch-Slug (`main`) | Automatisch bei jedem Merge/Push |
 | Push auf `develop` | Branch-Slug (`develop`) | Automatisch |
-| Git-Tag `v*` | Tag-Name (z.B. `v3.0.0`) | Für Releases |
+| Git-Tag `v*` | Tag-Name (z.B. `v3.0.0`) | Für Releases; andere Tags veröffentlichen nichts |
 
 ### 4.4 Release erstellen (neuen Tag pushen)
 
@@ -645,10 +635,10 @@ Alle Variablen können in `.env`, als System-Umgebungsvariablen oder als Docker-
 
 | Variable | Default | Beschreibung |
 |---|---|---|
-| `METADATA_AGENT_LLM_PROVIDER` | `b-api-openai` | `b-api-openai`, `b-api-academiccloud`, `openai` |
+| `METADATA_AGENT_LLM_PROVIDER` | `b-api-openai` | `b-api-openai`, `b-api-academiccloud`, `b-api-router`, `openai` |
 | `METADATA_AGENT_LLM_TEMPERATURE` | `0.3` | Kreativität (0.0–1.0) |
 | `METADATA_AGENT_LLM_MAX_TOKENS` | `2000` | Max Tokens pro LLM-Aufruf |
-| `METADATA_AGENT_LLM_MAX_RETRIES` | `3` | Wiederholungsversuche bei Fehler |
+| `METADATA_AGENT_LLM_MAX_RETRIES` | `3` | Versuche je KI-Aufruf (`1` = keine Wiederholung) und zusätzliche Aufrufe bei ungültigem Feldwert; mindestens `1` |
 | `METADATA_AGENT_LLM_RETRY_DELAY` | `1.0` | Wartezeit zwischen Retries (Sek.) |
 
 ### Externe Dienste (B-API, Text-Extraction, Repository)
@@ -721,8 +711,8 @@ Vollständige Liste aller Umgebungsvariablen: [ENV-PARAMETER.md](ENV-PARAMETER.m
 
 ### Crawler & Text-Extraction
 
-| Variable | Default | Beschreibung |
-|---|---|---|
+Die Adresse der Textextraktion steht oben unter *Externe Dienste*
+(`METADATA_AGENT_TEXT_EXTRACTION_API_URL`); weitere Einstellungen gibt es nicht.
 
 ### Screenshot
 
@@ -748,14 +738,14 @@ Vollständige Liste aller Umgebungsvariablen: [ENV-PARAMETER.md](ENV-PARAMETER.m
 Das vorgefertigte Image aus der internen Registry verwenden:
 
 ```bash
-docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:main
+docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v3.0.0
 
 docker run -d \
   --name metadata-agent-api \
   -p 127.0.0.1:8000:8000 \
   --read-only --tmpfs /tmp --tmpfs /home/appuser --stop-timeout 120 \
   -e B_API_KEY=<key> \
-  $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:main
+  $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v3.0.0
 ```
 
 Vorteile: Playwright/Chromium vorinstalliert, Health Check, einfaches Update, reproduzierbar.
@@ -794,7 +784,7 @@ helm install metadata-agent helm/metadata-agent \
 | Problem | Lösung |
 |---|---|
 | `ModuleNotFoundError: No module named 'src'` | Aus dem richtigen Verzeichnis starten (`metadata-agent-api/`) |
-| `B_API_KEY not configured` | `.env` prüfen oder `B_API_KEY` setzen |
+| `502` mit `error.code` `LLM_AUTH_MISSING` | Kein Schlüssel für die B-API: `B_API_KEY` in `.env` setzen, oder im Modus `forward` den Schlüssel über den B-API-Proxy durchreichen (`METADATA_AGENT_B_API_AUTH_MODE`) |
 | CORS-Fehler im Browser | `METADATA_AGENT_CORS_ORIGINS` auf die Domain setzen oder `*` |
 | Timeout bei LLM-Aufrufen | `METADATA_AGENT_REQUEST_TIMEOUT` erhöhen |
 | Felder werden nicht extrahiert | Schema prüfen: `ai_fillable: true` im Schema? |
@@ -825,5 +815,5 @@ helm install metadata-agent helm/metadata-agent \
 | Problem | Lösung |
 |---|---|
 | Push zu Registry schlägt fehl | `DOCKER_REGISTRY`, `DOCKER_USERNAME`, `DOCKER_PASSWORD` in CI/CD-Variablen prüfen |
-| Build-Cache funktioniert nicht | `uv-install` Job-Log prüfen, `uv.lock` committed? |
+| Build-Cache funktioniert nicht | Log des Jobs `run tests` prüfen (Cache-Schlüssel ist `uv.lock` – committed?) |
 | DinD-Verbindungsfehler | `DIND_HOST`, `DIND_IMAGE` Variablen prüfen |

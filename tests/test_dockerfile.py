@@ -32,3 +32,39 @@ def test_the_smoke_test_runs_the_image_read_only_like_the_chart():
     assert "--read-only" in smoke
     for path in ("/tmp", "/home/appuser"):
         assert f"--tmpfs {path}" in smoke, path
+
+
+def test_the_browser_layer_is_finished_before_the_code_is_copied():
+    """
+    Audit 18.10. final: useradd and chmod -R on the browsers ran after
+    COPY src/ - a new layer with Chromium's files on every code change.
+    """
+    code = DOCKERFILE.index("\nCOPY src/")
+    for step in ("useradd", "chmod -R o+rx", "playwright install chromium"):
+        assert DOCKERFILE.index(step) < code, step
+    # One RUN instruction: from "RUN useradd" to the next blank line.
+    step = DOCKERFILE[DOCKERFILE.index("RUN useradd") :].split("\n\n", 1)[0]
+    assert "playwright install chromium" in step and "chmod -R o+rx" in step
+    assert step.count("RUN ") == 1
+
+
+def test_the_image_names_its_version_and_commit():
+    for label in (
+        "org.opencontainers.image.version",
+        "org.opencontainers.image.revision",
+    ):
+        assert label in DOCKERFILE, label
+    assert re.search(r"^ARG VERSION", DOCKERFILE, re.M)
+    assert re.search(r"^ARG REVISION", DOCKERFILE, re.M)
+
+
+def test_both_ci_pass_version_and_commit_to_the_build():
+    gitlab = (ROOT / ".gitlab-ci.yml").read_text(encoding="utf-8")
+    github = (ROOT / ".github" / "workflows" / "docker-publish.yml").read_text(
+        encoding="utf-8"
+    )
+    for ci in (gitlab, github):
+        for build in re.findall(r"docker (?:buildx )?build[^\n]*", ci):
+            assert (
+                "--build-arg REVISION=" in build and "--build-arg VERSION=" in build
+            ), build

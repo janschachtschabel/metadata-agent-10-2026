@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
 from ..config import get_settings
+from ..utils.loggable import loggable_url
 from ..utils.public_url import PublicUrlError, require_public_http_url
 from ..metrics import OWN_SERVICE_HOOKS
 from .repository_service import build_auth_header
@@ -116,7 +117,7 @@ class InputSourceService:
             "preference": "none",
         }
 
-        logger.info(f"Fetching text from URL: {url} (method: {method})")
+        logger.info(f"Fetching text from URL: {loggable_url(url)} (method: {method})")
 
         # The message reaches the client (detail, error.message): the service's
         # host is internal and goes to the log only (audit S-06, review #5).
@@ -176,7 +177,8 @@ class InputSourceService:
         if not text:
             raise TextExtractionError(
                 "TEXT_EXTRACTION_EMPTY",
-                f"Für {url} hat der Textextraktionsdienst keinen Text geliefert.",
+                f"Für {loggable_url(url)} hat der Textextraktionsdienst keinen Text "
+                "geliefert.",
                 422,
             )
 
@@ -388,7 +390,9 @@ class InputSourceService:
             wwwurl = properties.get("ccm:wwwurl", [])
             if wwwurl:
                 source_url = wwwurl[0] if isinstance(wwwurl, list) else wwwurl
-                logger.info(f"Using ccm:wwwurl from metadata: {source_url}")
+                logger.info(
+                    f"Using ccm:wwwurl from metadata: {loggable_url(source_url)}"
+                )
 
         # Step 3: Check for stored fulltext in repository
         stored_text = await self.fetch_node_text_content(node_id, repository)
@@ -406,7 +410,9 @@ class InputSourceService:
                 raise ValueError(
                     f"No stored fulltext and no URL available for node {node_id}"
                 )
-            logger.info(f"No stored fulltext, fetching from URL: {source_url}")
+            logger.info(
+                f"No stored fulltext, fetching from URL: {loggable_url(source_url)}"
+            )
             try:
                 text = await self.fetch_from_url(
                     source_url,

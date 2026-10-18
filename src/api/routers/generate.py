@@ -18,12 +18,16 @@ from ...metrics import GENERATIONS
 from ...services.screenshot_service import (
     LOCAL_METHODS,
 )
+from ...utils.loggable import loggable_url
 from ...utils.schema_loader import (
     get_latest_version,
+    load_schema,
     resolve_schema_file_or_uri,
     get_content_type_uri,
 )
 import logging
+
+from pydantic import ValidationError
 
 
 from fastapi import APIRouter
@@ -39,6 +43,7 @@ from ..input_resolver import (
     truncate,
     with_correction,
 )
+from .request_body import invalid_body
 from ..responses import (
     generation_failed_response,
     generation_timeout_response,
@@ -309,11 +314,15 @@ async def generate_metadata(request: Request):
     # Cheap refusals before the source is fetched (audit API-05).
     version, schema_file = _version_and_schema(req)
     deps.check_provider_override(req.llm_provider)
+    request_warnings: list[str] = []
     if original_source_text and req.text and len(req.text) > MAX_CORRECTION_LENGTH:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Korrekturanweisung zu lang: höchstens {MAX_CORRECTION_LENGTH} "
-            "Zeichen.",
+        # The 2.1.1 widget sends _source_text with every run: a text this long
+        # is a new source pasted over the old one, not a correction (final
+        # audit 18.10.) - extracted as such instead of refused.
+        original_source_text = None
+        request_warnings.append(
+            f"Text länger als {MAX_CORRECTION_LENGTH} Zeichen: als neue Quelle "
+            "extrahiert, nicht als Korrekturanweisung zur bisherigen."
         )
     try:
         async with asyncio.timeout_at(deadline):
@@ -380,9 +389,11 @@ async def generate_metadata(request: Request):
         await release()
         raise
 
-    if resolved.warnings:
+    if request_warnings or resolved.warnings:
         processing = result.setdefault("processing", {})
-        processing["warnings"] = resolved.warnings + processing.get("warnings", [])
+        processing["warnings"] = (
+            request_warnings + resolved.warnings + processing.get("warnings", [])
+        )
 
     GENERATIONS.labels((result.get("processing") or {}).get("status", "unknown")).inc()
 
@@ -446,8 +457,8 @@ async def _parse_request(request: Request) -> GenerateRequest:
 
         try:
             return GenerateRequest(**data)
-        except Exception as e:
-            raise HTTPException(status_code=422, detail=str(e))
+        except ValidationError as e:
+            raise invalid_body(e)
 
     except HTTPException:
         raise
@@ -484,7 +495,13 @@ def _texts(
 
 
 def _version_and_schema(req: GenerateRequest) -> tuple[str, str]:
-    """The concrete schema version ('latest' resolved) and schema file (URI resolved)."""
+    """
+    The concrete schema version ('latest' resolved) and schema file (URI resolved).
+
+    400 for an unknown schema URI, 404 for a context, version or schema file
+    that does not exist - like /extract-field, and before the source is fetched
+    (audit API-06). With schema_file 'auto' the context's core.json stands in.
+    """
     version = req.version
     if version == "latest" or not version:
         version = get_latest_version(req.context)
@@ -495,6 +512,14 @@ def _version_and_schema(req: GenerateRequest) -> tuple[str, str]:
             schema_file = resolve_schema_file_or_uri(schema_file, req.context, version)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
+    try:
+        load_schema(
+            req.context,
+            version,
+            schema_file if schema_file and schema_file != "auto" else "core.json",
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     return version, schema_file
 
 
@@ -525,7 +550,8 @@ def _start_screenshot(
     try:
         ss_service = deps.get_screenshot_service()
         logger.info(
-            f"📸 Starting async screenshot in /generate: {screenshot_url} (method: {method})"
+            f"📸 Starting async screenshot in /generate: {loggable_url(screenshot_url)} "
+            f"(method: {method})"
         )
         return asyncio.create_task(
             ss_service.capture(url=screenshot_url, method=method)

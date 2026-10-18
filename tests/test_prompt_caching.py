@@ -19,7 +19,10 @@ from src.services import llm_service as llm_module
 from src.services.llm_service import LLMService, reset_provider_gates
 from src.utils.schema_loader import get_ai_fillable_fields, get_latest_version
 
-TEXT = "Die Tage der Kammermusik bieten zwölf Konzerte in Weimar. " * 40
+# Above the primer's minimum length (_PRIMER_MIN_TEXT_CHARS): a shorter prefix
+# stays below the ~1,024-token cache minimum and a primer would only cost a call.
+TEXT = "Die Tage der Kammermusik bieten zwölf Konzerte in Weimar. " * 80
+TWO_FIELDS = ("cclom:title", "cclom:general_keyword")
 
 
 class _Gateway:
@@ -114,9 +117,9 @@ async def test_a_failing_primer_does_not_stop_the_extraction(monkeypatch):
     gateway = _Gateway(fail_primer=True)
     service = _service(gateway, monkeypatch)
 
-    result = await service.extract_fields_parallel(_fields("cclom:title"), TEXT)
+    result = await service.extract_fields_parallel(_fields(*TWO_FIELDS), TEXT)
 
-    assert [len(b["messages"]) for b in gateway.bodies] == [2, 3]
+    assert [len(b["messages"]) for b in gateway.bodies] == [2, 3, 3]
     assert not result.get("fatal")
 
 
@@ -144,9 +147,9 @@ async def test_a_failing_primer_is_not_retried(monkeypatch):
         transport=httpx.MockTransport(gateway.handler)
     )
 
-    await service.extract_fields_parallel(_fields("cclom:title"), TEXT)
+    await service.extract_fields_parallel(_fields(*TWO_FIELDS), TEXT)
 
-    assert [len(b["messages"]) for b in gateway.bodies] == [2, 3]
+    assert [len(b["messages"]) for b in gateway.bodies] == [2, 3, 3]
 
 
 @pytest.mark.asyncio
@@ -168,9 +171,36 @@ async def test_an_empty_primer_answer_counts_as_done(monkeypatch, caplog):
                 )
             return super().handler(request)
 
-    service = _service(_EmptyPrimer(), monkeypatch)
+    gateway = _EmptyPrimer()
+    service = _service(gateway, monkeypatch)
     caplog.set_level("INFO", logger="src.services.llm_service")
+
+    await service.extract_fields_parallel(_fields(*TWO_FIELDS), TEXT)
+
+    assert len(gateway.bodies[0]["messages"]) == 2  # the primer did run
+
+    assert not [r for r in caplog.records if "primer" in r.getMessage().lower()]
+
+
+# ------------------------------------- final audit 18.10.: when to prime
+
+
+@pytest.mark.asyncio
+async def test_no_primer_for_a_single_field(monkeypatch):
+    # regenerate_fields=[x]: the primer would double the calls for nothing.
+    gateway = _Gateway()
+    service = _service(gateway, monkeypatch)
 
     await service.extract_fields_parallel(_fields("cclom:title"), TEXT)
 
-    assert not [r for r in caplog.records if "primer" in r.getMessage().lower()]
+    assert [len(b["messages"]) for b in gateway.bodies] == [3]
+
+
+@pytest.mark.asyncio
+async def test_no_primer_for_a_text_below_the_cache_minimum(monkeypatch):
+    gateway = _Gateway()
+    service = _service(gateway, monkeypatch)
+
+    await service.extract_fields_parallel(_fields(*TWO_FIELDS), "Kurzer Text. " * 50)
+
+    assert [len(b["messages"]) for b in gateway.bodies] == [3, 3]

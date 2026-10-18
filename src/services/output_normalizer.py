@@ -145,18 +145,19 @@ class OutputNormalizer:
         """
         Short codes for one dayOfWeek entry, expanding a range into its days.
 
-        Matching substrings alone turned "Mo-Fr" into Monday only.
+        Matching substrings alone turned "Mo-Fr" into Monday only. A range
+        across the weekend ("Fr-Mo") wraps around Sunday. Anything but a string
+        stays as it is, for the validator to report.
         """
-        if isinstance(day, str):
-            match = self._DAY_RANGE.match(day)
-            if match:
-                first, last = (
-                    self._get_day_short_code(part) for part in match.groups()
-                )
-                if first in self.WEEK and last in self.WEEK:
-                    start, end = self.WEEK.index(first), self.WEEK.index(last)
-                    if start <= end:
-                        return self.WEEK[start : end + 1]
+        if not isinstance(day, str):
+            return [day]
+        match = self._DAY_RANGE.match(day)
+        if match:
+            first, last = (self._get_day_short_code(part) for part in match.groups())
+            if first in self.WEEK and last in self.WEEK:
+                start, end = self.WEEK.index(first), self.WEEK.index(last)
+                length = (end - start) % 7 + 1
+                return [self.WEEK[(start + i) % 7] for i in range(length)]
         return [self._get_day_short_code(day)]
 
     def _get_day_short_code(self, day: str) -> str:
@@ -170,9 +171,10 @@ class OutputNormalizer:
         if day_lower in self.DAY_MAPPING:
             return self.DAY_MAPPING[day_lower]
 
-        # Try to extract from various formats
+        # A day name as a whole word, also "Dienstags" or ".../Monday": as a
+        # substring "so" made "Sonderöffnung" a Sunday.
         for key, code in self.DAY_MAPPING.items():
-            if key in day_lower:
+            if re.search(rf"\b{re.escape(key)}s?\b", day_lower):
                 return code
 
         # Already a short code?

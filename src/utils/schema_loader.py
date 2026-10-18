@@ -133,7 +133,10 @@ def get_latest_version(context: str = "default") -> str:
             return sorted_versions[0]
 
         return "1.0.0"
-    except Exception:
+    except Exception as e:
+        logger.warning(
+            f"Latest schema version of {context!r} unreadable, using 1.8.1: {e}"
+        )
         return "1.8.1"  # Hardcoded fallback
 
 
@@ -204,33 +207,43 @@ def _profile_id(context: str, version: str, schema_file: str) -> Optional[str]:
 def get_content_types(context: str, version: str) -> list[dict[str, Any]]:
     """Get content types from core.json for schema detection."""
     try:
-        core_schema = load_schema(context, version, "core.json")
-
-        # Find the content type field (ccm:oeh_extendedType or similar)
-        for field in core_schema.get("fields", []):
-            vocab = field.get("system", {}).get("vocabulary", {})
-            concepts = vocab.get("concepts", [])
-
-            content_types = []
-            for concept in concepts:
-                if concept.get("schema_file"):
-                    content_types.append(
-                        {
-                            "uri": concept.get("uri", ""),
-                            "label": concept.get("label", {}),
-                            "schema_file": concept.get("schema_file"),
-                            "profile_id": _profile_id(
-                                context, version, concept["schema_file"]
-                            ),
-                        }
-                    )
-
-            if content_types:
-                return content_types
-
+        return read_content_types(context, version)
+    except Exception as e:
+        logger.warning(f"Content types of {context!r} {version} unreadable: {e}")
         return []
-    except Exception:
-        return []
+
+
+def read_content_types(context: str, version: str) -> list[dict[str, Any]]:
+    """
+    get_content_types without the fallback: raises when core.json cannot be read.
+
+    The content-type detection tells "none configured" from "unreadable".
+    """
+    core_schema = load_schema(context, version, "core.json")
+
+    # Find the content type field (ccm:oeh_extendedType or similar)
+    for field in core_schema.get("fields", []):
+        vocab = field.get("system", {}).get("vocabulary", {})
+        concepts = vocab.get("concepts", [])
+
+        content_types = []
+        for concept in concepts:
+            if concept.get("schema_file"):
+                content_types.append(
+                    {
+                        "uri": concept.get("uri", ""),
+                        "label": concept.get("label", {}),
+                        "schema_file": concept.get("schema_file"),
+                        "profile_id": _profile_id(
+                            context, version, concept["schema_file"]
+                        ),
+                    }
+                )
+
+        if content_types:
+            return content_types
+
+    return []
 
 
 def get_content_type_prompt(
@@ -247,7 +260,8 @@ def get_content_type_prompt(
                 prompt = field.get("prompt", {})
                 return prompt.get(language) or prompt.get("de") or prompt.get("en")
         return None
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Content type prompt of {context!r} {version} unreadable: {e}")
         return None
 
 

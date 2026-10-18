@@ -335,3 +335,72 @@ def test_both_ci_render_the_chart_in_the_tests():
     assert "$CI_PROJECT_DIR/tools" in _script(run_tests)
     workflow = yaml.safe_load(GITHUB.read_text(encoding="utf-8"))
     assert str(workflow["jobs"]["test"]["env"]["REQUIRE_HELM"]) == "1"
+
+
+# ------------------------------------------------- audit 18.10. final (CI)
+
+
+def _dockerfile_base() -> str:
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    return re.findall(r"^FROM (\S+)", dockerfile, re.M)[-1]
+
+
+def test_gitlab_tests_run_on_the_os_of_the_image():
+    """The image is Debian 13 (trixie); the tests ran on bookworm."""
+    jobs = _gitlab_jobs()
+    variables = _gitlab()["variables"]
+
+    for name in ("run tests", "pip audit", "pip audit dev"):
+        image = _image(jobs[name]).replace(
+            "$CI_PYTHON_IMAGE", variables["CI_PYTHON_IMAGE"]
+        )
+        assert image == _dockerfile_base(), name
+        assert "pip install uv==$UV_VERSION" in _script(jobs[name]), name
+
+
+def test_both_ci_report_the_age_of_the_bundled_browser():
+    assert "scripts/check_browser_age.py" in _script(_gitlab_jobs()["run tests"])
+    assert "scripts/check_browser_age.py" in GITHUB.read_text(encoding="utf-8")
+
+
+def test_both_ci_audit_the_dev_dependencies_without_blocking():
+    job = _gitlab_jobs()["pip audit dev"]
+
+    assert job.get("allow_failure") is True
+    assert "--only-dev" in _script(job) and "pip-audit" in _script(job)
+    steps = yaml.safe_load(GITHUB.read_text(encoding="utf-8"))["jobs"]["test"]["steps"]
+    dev = [s for s in steps if "--only-dev" in s.get("run", "")]
+    assert dev and dev[0].get("continue-on-error") is True
+
+
+def test_the_crd_catalog_is_pinned_to_a_commit():
+    for text in (
+        GITLAB.read_text(encoding="utf-8"),
+        GITHUB.read_text(encoding="utf-8"),
+    ):
+        urls = re.findall(
+            r"https://raw\.githubusercontent\.com/datreeio/CRDs-catalog/([^/]+)/", text
+        )
+        assert urls, "no CRD catalog"
+        for ref in urls:
+            assert re.fullmatch(r"[0-9a-f]{40}", ref), ref
+
+
+def test_gitlab_publishes_only_version_tags():
+    job = _gitlab_jobs()["build and push docker image on tag creation"]
+
+    assert any("$CI_COMMIT_TAG =~ /^v" in condition for condition in _rule_ifs(job))
+
+
+def test_dependency_updates_are_proposed_automatically():
+    """
+    Audit 18.10. final: nothing proposed updates - the bundled Chromium aged
+    unseen. Dependabot covers the lock (playwright, i.e. Chromium), the base
+    images by digest and the pinned actions.
+    """
+    config = yaml.safe_load(
+        (ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8")
+    )
+    ecosystems = {entry["package-ecosystem"] for entry in config["updates"]}
+
+    assert {"uv", "docker", "github-actions"} <= ecosystems

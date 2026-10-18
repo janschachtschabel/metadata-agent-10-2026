@@ -55,10 +55,9 @@ Thumbs.db
 # NOTE: dist/ is NOT excluded — src/static/widget/dist/, src/schemata/,
 # and src/static/widget/assets/i18n/ are part of the deployed application.
 #
-# Widget neu bauen und hierher legen — es gibt zwei Wege:
-#   npm run build:elements   im Widget-Repo, plattformunabhängig, auch in der CI
-#   scripts/deploy-widget.ps1  von hier aus, nur Windows; erwartet das Widget
-#                              unter ../metadata-agent-webcomponent
+# Widget neu bauen und hierher legen: im Widget-Repo
+#   npm run build:elements   (plattformunabhängig, auch in der CI; Ziel mit
+#                            node scripts/build-elements.js --target=<pfad>)
 
 # pytest basetemp when TEMP points at the working directory (Git Bash)
 pytest-of-*/

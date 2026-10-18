@@ -80,7 +80,9 @@ def test_no_settings_field_promises_a_repository_override_it_cannot_deliver():
     repository_settings = {
         name
         for name in Settings.model_fields
-        if "repositor" in name and name != "repository_url"
+        if "repositor" in name
+        # require_repository is a readiness switch, not an address.
+        and name not in ("repository_url", "require_repository")
     }
 
     assert not repository_settings, (

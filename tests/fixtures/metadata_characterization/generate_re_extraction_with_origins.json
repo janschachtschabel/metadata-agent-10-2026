@@ -61,7 +61,7 @@
    "schema_file": "event.json"
   },
   "errors": [],
-  "fields_extracted": 2,
+  "fields_extracted": 1,
   "fields_failed": 0,
   "fields_total": 15,
   "llm_model": "test-model",

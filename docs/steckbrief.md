@@ -1,7 +1,7 @@
 # Steckbrief: Metadata Agent API
 
 Entstanden aus der ausführlichen Beschreibung unter [UEBERGABE.md](../UEBERGABE.md)
-(Stand 17.10.2026, Version 3.0.0).
+(Stand 18.10.2026, Version 3.0.0).
 
 | | |
 |---|---|
@@ -74,7 +74,7 @@ Entstanden aus der ausführlichen Beschreibung unter [UEBERGABE.md](../UEBERGABE
 |---|---|---|
 | Ansprechperson in T4 | **[Name, Kontakt]**; wer Updates anstößt, ist offen | offen |
 | Bekannte Einschränkungen und offene Punkte | siehe unten | erfüllt |
-| Links zu Betriebsdokumentation und Nachweisen | [UEBERGABE.md](../UEBERGABE.md), [DEPLOYMENT.md](../DEPLOYMENT.md), [ENV-PARAMETER.md](../ENV-PARAMETER.md), [Helm-Chart](../helm/metadata-agent/README.md), [team6-anforderungen.md](team6-anforderungen.md), [Audit 15.10.2026](audits/2026-10-15-audit.md), [Audit 17.10.2026](audits/2026-10-17-audit-3.0.0.md), [CHANGELOG](../CHANGELOG.md) | erfüllt |
+| Links zu Betriebsdokumentation und Nachweisen | [UEBERGABE.md](../UEBERGABE.md), [DEPLOYMENT.md](../DEPLOYMENT.md), [ENV-PARAMETER.md](../ENV-PARAMETER.md), [Helm-Chart](../helm/metadata-agent/README.md), [team6-anforderungen.md](team6-anforderungen.md), [Audit 15.10.2026](audits/2026-10-15-audit.md), [Audit 17.10.2026](audits/2026-10-17-audit-3.0.0.md), [Audit 18.10.2026 nach Korrektur](audits/2026-10-18-audit-3.0.0-nachkorrektur.md), [Finaler Audit 18.10.2026](audits/2026-10-18-audit-3.0.0-final.md), [CHANGELOG](../CHANGELOG.md) | erfüllt |
 
 ## Offene Punkte
 
@@ -84,7 +84,7 @@ Entstanden aus der ausführlichen Beschreibung unter [UEBERGABE.md](../UEBERGABE
 
 **Offen**
 3. Technischer Owner, Ansprechperson T4 und Jira-Ticket eintragen.
-4. Festlegen, wer Updates anstößt (Abhängigkeiten, Patches, Modellwechsel).
+4. Festlegen, wer Updates anstößt (Abhängigkeiten, Patches, Modellwechsel); auf GitHub schlägt Dependabot sie vor, auf GitLab ist keine Automatik eingerichtet, das Alter des Chromium meldet die CI (UEBERGABE §8).
 5. Repo-Zugriff für T6 bestätigen.
 6. Content-Types der Widget-Dateien mit Wolli abstimmen.
 7. Entscheiden, ob Async-Jobs nötig sind.

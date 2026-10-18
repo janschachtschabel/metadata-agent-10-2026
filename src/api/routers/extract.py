@@ -311,9 +311,10 @@ def _field_definition(req: ExtractFieldRequest) -> tuple[str, str, dict]:
             field_def = _find_field(
                 load_schema(req.context, version, "core.json"), req.field_id
             )
-        except ValueError as e:
-            # The field is then reported as unknown; why core.json is missing
-            # belongs in the log (audit L-04).
+        except Exception as e:
+            # The field is then reported as unknown, whatever broke core.json
+            # (2.1.1 caught every fault here too); the why belongs in the log
+            # (audit L-04).
             logger.warning(f"⚠️ core.json of {req.context}/{version} not loaded: {e}")
     if not field_def:
         raise HTTPException(

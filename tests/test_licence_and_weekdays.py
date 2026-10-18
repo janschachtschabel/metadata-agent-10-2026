@@ -49,3 +49,39 @@ def test_an_array_field_stays_a_list_even_without_multiple():
     schema = {"datatype": "array", "multiple": False, "items": {"datatype": "uri"}}
 
     assert FieldNormalizer().normalize_field_value([uri], schema) == [uri]
+
+
+# ------------------------------------------- final audit 18.10.: weekdays
+
+
+@pytest.mark.parametrize(
+    "day, expected",
+    [
+        ("Fr-Mo", ["FR", "SA", "SU", "MO"]),
+        ("Samstag bis Montag", ["SA", "SU", "MO"]),
+        ("Sonderöffnung", ["Sonderöffnung"]),
+        ("Dienstags", ["TU"]),
+        ("https://schema.org/Monday", ["MO"]),
+        ("Mo.", ["MO"]),
+    ],
+)
+def test_wrapping_ranges_and_whole_words(day, expected):
+    (hours,) = OutputNormalizer()._normalize_opening_hours([{"dayOfWeek": day}])
+
+    assert hours["dayOfWeek"] == expected
+
+
+def test_a_non_string_day_is_kept_and_the_rest_still_normalised():
+    metadata = {
+        "schema:openingHoursSpecification": [{"dayOfWeek": [5, "Mo", None]}],
+        "schema:eventSchedule": [{"startDate": "2026-05-03T10:00"}],
+    }
+
+    result = OutputNormalizer().normalize_output(metadata)
+
+    assert result["schema:openingHoursSpecification"][0]["dayOfWeek"] == [
+        5,
+        "MO",
+        None,
+    ]
+    assert result["schema:eventSchedule"][0] != {"startDate": "2026-05-03T10:00"}

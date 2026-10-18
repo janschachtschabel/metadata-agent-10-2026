@@ -35,6 +35,8 @@ logger = logging.getLogger(__name__)
 PROMPT_CACHE_PROVIDERS = ("b-api-openai", "openai")
 # The primer's answer is thrown away; keep it as short as the API allows.
 _PRIMER_MAX_TOKENS = 16
+# Roughly the 1,024 tokens below which the OpenAI prompt cache stores nothing.
+_PRIMER_MIN_TEXT_CHARS = 4000
 
 
 class LLMService(
@@ -318,7 +320,9 @@ class LLMService(
                 elif value is not None:
                     results[field_id] = value
 
-        if fields:
+        # One field cannot read back what the primer wrote, and a short text
+        # stays below the provider's ~1,024-token cache minimum.
+        if len(fields) > 1 and len(text) > _PRIMER_MIN_TEXT_CHARS:
             await self._prime_text_cache(text, language)
 
         tasks = [asyncio.ensure_future(extract_with_semaphore(f)) for f in fields]

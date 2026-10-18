@@ -260,9 +260,9 @@ tests:
 - interval: 1m
   input_series:
   - series: metadata_agent_upstream_requests_total{namespace="wlo",service="repository"}
-    values: 0+1x10
+    values: 0+1x20
   alert_rule_test:
-  - eval_time: 10m
+  - eval_time: 15m
     alertname: MetadataAgentUpstreamUnanswered
     exp_alerts:
     - exp_labels:
@@ -272,6 +272,21 @@ tests:
       exp_annotations:
         summary: Ein abhängiger Dienst antwortet nicht
         description: Mehr als 3 Aufrufe in 10 Minuten an den Dienst im Label service blieben ohne Antwort (Timeout, Verbindung abgelehnt).
+# Calls in flight are not yet answered: a burst answered within minutes
+# does not alert (for: 5m, audit 18.10. final).
+- interval: 1m
+  input_series:
+  - series: metadata_agent_upstream_requests_total{namespace="wlo",service="repository"}
+    values: 0 0 6x10
+  - series: metadata_agent_upstream_responses_total{namespace="wlo",service="repository",status="200"}
+    values: 0 0 0 0 0 6x7
+  alert_rule_test:
+  - eval_time: 4m
+    alertname: MetadataAgentUpstreamUnanswered
+    exp_alerts: []
+  - eval_time: 9m
+    alertname: MetadataAgentUpstreamUnanswered
+    exp_alerts: []
 - interval: 1m
   input_series:
   - series: metadata_agent_upstream_requests_total{namespace="wlo",service="repository"}
@@ -355,4 +370,50 @@ tests:
   alert_rule_test:
   - eval_time: 35m
     alertname: MetadataAgentGenerateSlow
+    exp_alerts: []
+# The agent's own 5xx per route; probe paths stay out (audit 18.10. final).
+- interval: 1m
+  input_series:
+  - series: metadata_agent_http_requests_total{namespace="wlo",method="POST",route="/generate",status="502"}
+    values: 0+1x10
+  - series: metadata_agent_http_requests_total{namespace="wlo",method="GET",route="/ready",status="503"}
+    values: 0+5x10
+  alert_rule_test:
+  - eval_time: 10m
+    alertname: MetadataAgentServerErrors
+    exp_alerts:
+    - exp_labels:
+        severity: warning
+        namespace: wlo
+        route: /generate
+      exp_annotations:
+        summary: Der Agent antwortet mit Serverfehlern
+        description: Mehr als 5 Antworten mit Status 5xx in 10 Minuten auf der Route im Label route. Ursache steht im Log unter error.code (UPSTREAM_ERROR, GENERATION_TIMEOUT, LLM_* …).
+# INTERNAL_ERROR pages on the first one - also when its series starts at 1 ...
+- interval: 1m
+  input_series:
+  - series: metadata_agent_http_requests_total{namespace="wlo",method="POST",route="/upload",status="500"}
+    values: _x3 1x7
+  alert_rule_test:
+  - eval_time: 5m
+    alertname: MetadataAgentInternalError
+    exp_alerts:
+    - exp_labels:
+        severity: critical
+        namespace: wlo
+        route: /upload
+      exp_annotations:
+        summary: Unerwarteter Fehler im Agent (INTERNAL_ERROR)
+        description: Eine Anfrage auf der Route im Label route endete mit 500 INTERNAL_ERROR - ein Fehler im Agent selbst. Log-Zeile mit derselben request_id enthält den Stacktrace.
+  - eval_time: 5m
+    alertname: MetadataAgentServerErrors
+    exp_alerts: []
+# ... and stops once that error is older than the window.
+- interval: 1m
+  input_series:
+  - series: metadata_agent_http_requests_total{namespace="wlo",method="POST",route="/upload",status="500"}
+    values: 1x90
+  alert_rule_test:
+  - eval_time: 80m
+    alertname: MetadataAgentInternalError
     exp_alerts: []

@@ -104,6 +104,9 @@ groups:
               or sum by (namespace, service) (increase(metadata_agent_upstream_requests_total{service!~"llm|other"}[10m])) * 0
             )
           ) > 3
+        # Calls still in flight count as unanswered at first (audit 18.10.
+        # final); only a gap that lasts is one.
+        for: 5m
         labels:
           severity: warning
         annotations:
@@ -129,3 +132,30 @@ groups:
         annotations:
           summary: /generate nähert sich dem Ingress-Timeout
           description: 95 % der Erschließungen brauchen bis zu über 100 s; ab 120 s bricht das Ingress ab. Modell, Kontingent und METADATA_AGENT_REQUEST_TIMEOUT prüfen.
+
+      # The service's own errors (audit 18.10. final). Probe paths answer 503
+      # while a pod is not ready - that is the readiness probe's business.
+      - alert: MetadataAgentServerErrors
+        expr: sum by (namespace, route) (increase(metadata_agent_http_requests_total{status=~"5..",route!~"/health|/ready"}[10m])) > 5
+        labels:
+          severity: warning
+        annotations:
+          summary: Der Agent antwortet mit Serverfehlern
+          description: Mehr als 5 Antworten mit Status 5xx in 10 Minuten auf der Route im Label route. Ursache steht im Log unter error.code (UPSTREAM_ERROR, GENERATION_TIMEOUT, LLM_* …).
+
+      - alert: MetadataAgentInternalError
+        # An unexpected exception (INTERNAL_ERROR) is a bug: page on the first.
+        # A status-500 series appears with its first error, which increase()
+        # ignores - the second part counts series younger than the window.
+        expr: |
+          sum by (namespace, route) (increase(metadata_agent_http_requests_total{status="500"}[10m])) > 0
+          or
+          sum by (namespace, route) (
+            metadata_agent_http_requests_total{status="500"}
+            unless last_over_time(metadata_agent_http_requests_total{status="500"}[1h] offset 10m)
+          ) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: Unerwarteter Fehler im Agent (INTERNAL_ERROR)
+          description: Eine Anfrage auf der Route im Label route endete mit 500 INTERNAL_ERROR - ein Fehler im Agent selbst. Log-Zeile mit derselben request_id enthält den Stacktrace.

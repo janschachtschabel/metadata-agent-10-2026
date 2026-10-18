@@ -99,8 +99,54 @@ async def test_a_public_international_hostname_is_accepted(monkeypatch):
     monkeypatch.setattr(socket, "getaddrinfo", resolve)
 
     url = "https://Bücher.example/titel.png"
-    assert await require_public_http_url(url) == url
+    # Handed on as checked: every later parser sees the same host (S-14).
+    assert (
+        await require_public_http_url(url) == "https://xn--bcher-kva.example/titel.png"
+    )
     assert looked_up == ["xn--bcher-kva.example"]
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        # Python/httpx read one hostname, WHATWG parsers (Chromium, Node) the
+        # host 127.0.0.1 (audit 18.10. final, S-14).
+        "http://127.0.0.1\\x.attacker.example/",
+        "http://127.0.0.1%2f.attacker.example/",
+        "http://exa%41mple.org/",
+        "http://exa mple.org/",
+        "http://exa\x00mple.org/",
+        "http://exa\x7fmple.org/",
+        "http://exa<mple.org/",
+    ],
+)
+async def test_a_hostname_is_letters_digits_and_hyphens_or_an_ip(url, monkeypatch):
+    monkeypatch.setattr(
+        socket, "getaddrinfo", lambda *a, **kw: _address("93.184.216.34")
+    )
+
+    with pytest.raises(PublicUrlError):
+        await require_public_http_url(url)
+
+
+@pytest.mark.parametrize(
+    "url, expected",
+    [
+        # Chromium and urlsplit both drop tabs and line breaks.
+        ("http://exam\tple.org/a\nb", "http://example.org/ab"),
+        ("HTTP://EXAMPLE.org/Pfad?q=1", "http://example.org/Pfad?q=1"),
+        # Unicode host as punycode; the path is not the host check's business.
+        ("http://Bücher.example/ä b", "http://xn--bcher-kva.example/ä b"),
+        ("http://my_host.example.org:8080/x", "http://my_host.example.org:8080/x"),
+        ("http://[2606:2800:220:1::248]/", "http://[2606:2800:220:1::248]/"),
+    ],
+)
+async def test_the_checked_url_is_handed_on_normalized(url, expected, monkeypatch):
+    monkeypatch.setattr(
+        socket, "getaddrinfo", lambda *a, **kw: _address("93.184.216.34")
+    )
+
+    assert await require_public_http_url(url) == expected
 
 
 async def test_a_hostname_resolving_to_a_private_address_is_rejected(monkeypatch):
@@ -282,3 +328,22 @@ async def test_url_text_extraction_refuses_internal_targets_before_any_request(
 
     with pytest.raises(PublicUrlError):
         await InputSourceService().fetch_from_url("http://169.254.169.254/latest/")
+
+
+async def test_url_text_extraction_receives_the_normalized_url(monkeypatch):
+    monkeypatch.setattr(
+        socket, "getaddrinfo", lambda *a, **kw: _address("93.184.216.34")
+    )
+    sent: list[dict] = []
+
+    async def post(self, url, json=None, **kwargs):
+        sent.append(json)
+        return httpx.Response(
+            200, json={"text": "Inhalt"}, request=httpx.Request("POST", url)
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", post)
+
+    await InputSourceService().fetch_from_url("https://Bücher.example/titel")
+
+    assert sent[0]["url"] == "https://xn--bcher-kva.example/titel"

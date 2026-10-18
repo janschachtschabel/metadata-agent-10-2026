@@ -2,27 +2,20 @@
 
 import asyncio
 
-from fastapi import HTTPException, Request
+from fastapi import Request
 from pydantic import ValidationError
 
-from ...models.schemas import (
-    SaveNodeRequest,
-    SaveNodeResponse,
-    UploadedNodeInfo,
-    FieldUploadError,
-    CollectionResult,
-    WorkflowStepResult,
-)
+from ...models.schemas import SaveNodeRequest, SaveNodeResponse
 from ...services.repository_curation import (
     DEFAULT_WORKFLOW_STATUS,
     QUALITY_WORKFLOW_STATUS,
 )
+from ...services.repository_result import WriteResult
 
 
 from fastapi import APIRouter
 
 from .. import deps
-from ..responses import SAVE_NODE_ERROR_STATUS, upload_timeout_response
 
 from ..deps import (
     carry_schema_markers,
@@ -31,6 +24,7 @@ from ..deps import (
 )
 from ..openapi import documented_body_schema
 from .request_body import invalid_body
+from .upload import refused_write
 
 
 router = APIRouter()
@@ -79,6 +73,16 @@ ersetzen. Für spätere Änderungen ist die Redaktionsoberfläche zuständig.
 Abgelehnt wird ebenfalls mit `403`, wenn die Erstellungszeit nicht lesbar ist,
 mit `404`, wenn der Node nicht existiert oder der Dienst keinen Zugriff hat, und
 mit `502`, wenn das Repository ihn wegen eines Fehlers nicht liefern konnte.
+
+## Fehlschlag
+
+Wurde nichts geschrieben, kommt kein `200`, sondern das Fehlerformat wie bei
+`/upload`: `422` `VALIDATION_ERROR` (Objektform eines Felds verletzt),
+`422` `SCHEMA_UNAVAILABLE` (Kontext/Version unbekannt), `502` `UPSTREAM_ERROR`
+(Repository lehnte Anlegen oder alle Metadaten ab oder war nicht erreichbar;
+`discarded_node`/`node` nennen einen dabei angelegten Node, `field_errors` die
+abgelehnten Felder). `200` mit `success: false` bleibt für Teilergebnisse, bei
+denen der Node existiert.
 
 ## Body-Format
 
@@ -259,7 +263,7 @@ async def save_node(request: Request):
     if req.start_quality_workflow:
         workflow_steps.append(QUALITY_WORKFLOW_STATUS)
 
-    result = await repo_service.save_node(
+    raw = await repo_service.save_node(
         metadata=req.metadata,
         node_id=req.node_id,
         context=context,
@@ -273,46 +277,8 @@ async def save_node(request: Request):
         # happened to the node when it hits (audit D-04).
         deadline=asyncio.get_running_loop().time() + deps.settings.upload_timeout,
     )
-    if result.get("error_code") == "upload_timeout":
-        return upload_timeout_response(deps.settings.upload_timeout, result)
-
-    error_code = result.get("error_code")
-    if error_code in SAVE_NODE_ERROR_STATUS:
-        raise HTTPException(
-            status_code=SAVE_NODE_ERROR_STATUS[error_code],
-            detail=result.get("error", "Node kann nicht bearbeitet werden"),
-        )
-
-    node_info = None
-    if result.get("node"):
-        node_info = UploadedNodeInfo(**result["node"])
-
-    field_errors = None
-    if result.get("field_errors"):
-        field_errors = [FieldUploadError(**e) for e in result["field_errors"]]
-
-    collections = None
-    if result.get("collections") is not None:
-        collections = [CollectionResult(**c) for c in result["collections"]]
-
-    workflow = None
-    if result.get("workflow") is not None:
-        workflow = [WorkflowStepResult(**s) for s in result["workflow"]]
-
-    return SaveNodeResponse(
-        success=result.get("success", False),
-        node=node_info,
-        node_full=result.get("node_full"),
-        node_created=result.get("node_created"),
-        error=result.get("error"),
-        step=result.get("step"),
-        fields_written=result.get("fields_written"),
-        fields_skipped=result.get("fields_skipped"),
-        schema_used=result.get("schema_used"),
-        repo_fields_available=result.get("repo_fields_available"),
-        field_errors=field_errors,
-        preview=result.get("preview"),
-        collections=collections,
-        workflow=workflow,
-        discarded_node=result.get("discarded_node"),
-    )
+    result = WriteResult.from_service(raw)
+    refusal = refused_write(result)
+    if refusal is not None:
+        return refusal
+    return result.response(SaveNodeResponse, result.preview)

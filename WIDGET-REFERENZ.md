@@ -2,6 +2,11 @@
 
 Stand: verifiziert gegen das aktuelle `src/static/widget/dist/main.js` und `src/api/routers/widget.py`.
 
+> **Versionen:** Die Webkomponente 3.x braucht den Agent 3.x. Gegen einen
+> 2.1.1-Agent zeigt sie rohe Übersetzungsschlüssel (die 3.x-Texte fehlen dort);
+> Widget und Agent daher gemeinsam aktualisieren. Das 2.1.1-Widget läuft gegen
+> den Agent 3.x.
+
 ---
 
 ## 1. Einbindung
@@ -127,9 +132,15 @@ Zwei Coercion-Klassen — das ist der häufigste Stolperstein:
 |---|---|---|
 | `text` | String | Füllt das Textfeld |
 | `url` | String | Füllt das URL-Feld |
-| `content-type` | Schema-Datei (`event.json`) **oder** Vokabular-URI | wird gepuffert, bis Content-Types geladen sind |
+| `content-type` | Schema-Datei (`event.json`) **oder** Vokabular-URI | wird gepuffert, bis Content-Types geladen sind; `core.json` heißt „keine Inhaltsart“ (nur Kernfelder) |
 | `metadata-input` | Objekt | **Nur per JS** (`el.metadataInput = {...}`), löst Import via `ngOnChanges` aus |
 | `preview-image` | Data-URL oder URL | Vorschaubild |
+
+`content-type` und `metadata-input` zusammen beim Seitenstart: Der Import wird angewendet, die Start-Inhaltsart
+verwirft ihn nicht. Ein Import **ohne** `metadataset` behält die Inhaltsart, die
+der Host gesetzt hat (Attribut oder Property, in beliebiger Reihenfolge), wie in
+2.1.1, und füllt deren Felder aus den Metadaten; nur eine Inhaltsart aus einer
+früheren Seite oder einem früheren Lauf wird geleert.
 
 ---
 
@@ -165,7 +176,13 @@ canvas.addEventListener('reloadFromPage', () => {/* "Seite neu laden", Plugin-Mo
 }
 ```
 
-Dieselbe Struktur wird von `metadata-input` und vom JSON-Import akzeptiert (ein nacktes `{ "cclom:title": … }` geht auch).
+Dieselbe Struktur wird von `metadata-input` und vom JSON-Import akzeptiert (ein nacktes `{ "cclom:title": … }` geht auch; ohne `metadataset` gilt die vom Host gesetzte Inhaltsart, siehe §3).
+
+Version des geladenen Bundles: `customElements.get('metadata-agent-canvas').widgetVersion`.
+Die gewählte Sprache speichert das Widget unter dem localStorage-Schlüssel
+`metadata-agent-canvas.language` (ein alter Wert unter `app_language` wird einmal
+übernommen). Die Standalone-Seite nimmt `?apiUrl` und `?dataUrl` nur auf
+`localhost`, `127.0.0.1` und `[::1]` an.
 
 ### Payload `uploadResult`
 
@@ -240,7 +257,7 @@ Gleiche `instance-id` → geteilter State. Events feuern nur von der **ersten re
 
 Antwort: `field_id`, `field_label`, `value`, `raw_value` (vor Normalisierung), `previous_value`, `changed`, `normalized`, `context`, `version`, `schema_file`, `processing`.
 
-> ⚠️ Die Widget-`ApiService` hat `extractField()` implementiert, aber **kein UI-Element ruft sie auf**. Einzelfeld-Regeneration ist aktuell nur per API nutzbar — z. B. aus der Host-Anwendung heraus, das Ergebnis dann per `el.metadataInput = {...}` zurückspielen.
+> ⚠️ Das Widget ruft `/extract-field` nicht auf. Einzelfeld-Regeneration ist aktuell nur per API nutzbar — z. B. aus der Host-Anwendung heraus, das Ergebnis dann per `el.metadataInput = {...}` zurückspielen.
 
 ### b) `POST /generate` mit `regenerate_fields` — Teilmenge
 

@@ -4,8 +4,12 @@
 
 > **Update:** Einstellungen und Metriken bleiben; neu sind
 > `METADATA_AGENT_GENERATE_TIMEOUT` (Default 110 s, auch für `/detect-content-type`
-> und `/extract-field`) und `METADATA_AGENT_UPLOAD_TIMEOUT` (Default 100 s).
-> Fehlerantworten tragen jetzt überall `detail` **und** `error` (siehe unten). **Breaking für Clients:**
+> und `/extract-field`, auch ohne Ingress), `METADATA_AGENT_UPLOAD_TIMEOUT` (Default
+> 100 s), `METADATA_AGENT_REQUIRE_REPOSITORY` (Default `true`) und
+> `METADATA_AGENT_ALLOWED_LLM_MODELS` (Default leer = alle);
+> `METADATA_AGENT_LLM_MAX_RETRIES` muss mindestens 1 sein.
+> Jede Fehlerantwort der API trägt jetzt `detail` **und** `error`, auch `413` und das
+> `503` von `/ready` (siehe unten). **Breaking für Clients:**
 > einige Statuscodes (siehe „Breaking“). **Betrieb:** Der Helm-Chart 0.3.0
 > legt eine NetworkPolicy an (Standard an) – die Namespaces in
 > `networkPolicy.*` vor der Installation an den Cluster anpassen, sonst
@@ -15,6 +19,201 @@
 > – wer im Logging-System auf `logger="src.main"` filtert, muss das anpassen.
 > Helm-Chart 0.3.0 deployt `v3.0.0`. Schritt für Schritt: DEPLOYMENT.md,
 > „Update von 2.1.x auf 3.0.0“.
+
+### Korrekturen aus dem finalen Audit vom 18.10. (`docs/audits/2026-10-18-audit-3.0.0-final.md`)
+
+Verhalten, das Clients sehen:
+
+- **Screenshot-Browser und die eigene API (S-15):** Eine gescreenshotete Seite
+  konnte über Weiterleitungen Anfragen samt `text/plain`-Body an die API auf
+  Loopback schicken (`route()` sieht nur den ersten Aufruf einer Kette). Jetzt
+  trägt jede Anfrage des eigenen Chromium – Weiterleitungs-Hops eingeschlossen
+  – den Header `X-Metadata-Agent-Screenshot`, und die API beantwortet sie mit
+  `403` `SCREENSHOT_BROWSER_REFUSED`, bevor ein Endpunkt läuft. Anfragen mit
+  Body (Formular-POST u. a.) gehen Hop für Hop hinaus: Jedes Weiterleitungsziel
+  wird vor dem Senden geprüft, ein weitergeleitetes Formular öffnet das Ziel als
+  neue (wieder geprüfte) GET-Navigation, jede andere Anfrage mit Body wird nicht
+  weitergeleitet – sie würde den Body an das neue Ziel mitnehmen. GET- und
+  HEAD-Navigationen lädt Chromium selbst wie in 2.1.1 (ein direkter Link auf ein
+  großes Video, PDF oder ZIP wird gestreamt statt im Treiber ganz geladen); ihre
+  Weiterleitungen werden wie bisher nachträglich geprüft und verwerfen die
+  Aufnahme – der Hop selbst ist dann schon gesendet, an die eigene API markiert
+  und mit `403` abgelehnt. Der Header löst keinen CORS-Preflight aus (im echten
+  Chromium geprüft). Clients ohne den Header
+  (2.x-Widget, edu-sharing-Proxy, `text/plain`-Bodies, Docker-HEALTHCHECK,
+  lokale Entwicklung auf 127.0.0.1) sind nicht betroffen.
+- **URL-Prüfung (S-14):** Ein Hostname besteht nur noch aus Buchstaben, Ziffern,
+  Bindestrich und Unterstrich (nach IDNA) oder ist eine IP-Adresse;
+  `http://127.0.0.1\x.example/` (für Python ein Hostname, für Browser
+  127.0.0.1), `%`, Leerzeichen oder Steuerzeichen im Host ergeben `400`.
+  Weitergegeben wird die URL mit dem geprüften Host (Punycode, ohne Tabs und
+  Zeilenumbrüche) – an die Textextraktion, den Screenshot und in `url` der
+  `/screenshot`-Antwort.
+- **Ungültiges JSON über 1 MB (S-16)** wird nicht mehr zeichenweise auf der
+  Event-Loop repariert (20 MB blockierten den Worker 2,4 s), sondern mit `400`
+  abgelehnt. Kleinere Bodies mit rohen Zeilenumbrüchen werden weiter repariert;
+  gültiges JSON bis `METADATA_AGENT_MAX_REQUEST_BYTES` bleibt unverändert.
+- **`/ready` auf dem öffentlichen Port:** `503` mit `detail` und `error`
+  (`NOT_READY`) wie jeder Fehler, weiterhin ohne Einstellungsnamen;
+  `status: "not_ready"` bleibt.
+- **`METADATA_AGENT_ALLOWED_LLM_MODELS` (S-19, optional):** Ein per `llm_model`
+  gewähltes Modell läuft auf dem Schlüssel des Servers, wo kein Schlüssel
+  durchgereicht wird. Mit der Liste antwortet ein anderes Modell `422`, bevor
+  ein KI-Aufruf startet; das Default-Modell des Providers ist immer erlaubt.
+  Leer (Default): wie 2.1.1.
+- **OpenAPI-Rechtehinweise (S-18)** auch an `/generate`, `/detect-content-type`
+  und `/extract-field` (lesen mit `node_id`/`node_url` nicht öffentliche Nodes),
+  `/workflow/{node_id}` (Antwort mit Workflow-Historie samt Benutzernamen,
+  `receiver` nimmt jede Authority an) und `/upload` (`workflow_receiver` ebenso).
+- **`/detect-content-type` füllt `profile_id`** aus dem Schema (2.1.1: immer
+  `null`).
+- **Widget:** Import-Kompatibilität mit 2.1.1 wiederhergestellt
+  (`metadata-input` zusammen mit `content-type` beim Seitenstart;
+  `metadataInput` ohne `metadataset` behält die vom Host gesetzte Inhaltsart);
+  der Export enthält nur die Felder des Datensatzes (Kern + gewählte
+  Inhaltsart, keine Unterfeld- oder Fremdschlüssel); Datum, Uhrzeit und Zahlen
+  werden streng geprüft; mehrwertige URL- und Datumsfelder zeigen ihre Werte;
+  Upload-Fehler nennen den Node; Extraktion wird für Screenreader angesagt;
+  Standalone-`?apiUrl`/`?dataUrl` nur auf localhost.
+- **`/upload`, `/nodes`, `/workflow`, `/upload/verify`:** neue Statuscodes für
+  Schreiben ohne Ergebnis, unbekannte Nodes und Zeitlimit (siehe „Breaking“).
+  Wird ein bestehender Node (`node_id`) beim Schreiben unterbrochen, nachdem die
+  Anfrage das Repository erreicht haben kann, nennt die Antwort den Node und den
+  Hinweis „kann teilweise geschrieben sein“ wie beim Zeitlimit.
+- Ließen sich die vorhandenen Aspekte eines Nodes nicht lesen, werden sie nicht
+  mehr überschrieben (vorher konnte das PUT sie entfernen); Koordinaten bzw.
+  Autor werden dann als verloren gemeldet.
+- `/upload/verify` meldet einen ungültigen Body wie `/upload` mit Feld und Grund,
+  ohne Eingabewerte (API-10).
+- `/validate`: Vokabular-Vorschläge („Did you mean …“) mit derselben Toleranz wie
+  die übrige Unschärfesuche und für höchstens 5 ungültige Werte je Feld; die
+  Prüfung läuft außerhalb der Event-Loop (200 ungültige Berufsfelder blockierten
+  den Dienst 12,6 s).
+- `/validate`: Koordinatenprüfung nur noch für Felder, deren ID auf
+  `latitude`/`lat` bzw. `longitude`/`lon`/`lng` endet – eine Kapazität von 200
+  war ein „Latitude out of range“-Fehler.
+- `/validate`: ISO-Datumswerte müssen existieren (`2026-02-30` wird gemeldet),
+  ebenso Datum und Uhrzeit von ISO-Datum-Uhrzeit-Werten (`2026-02-30T10:00`,
+  `2026-03-01T25:00`); die Normalisierung lässt solche Werte wie geschrieben
+  stehen, statt sie als gültig umzuformen. Offset, `Z` und Sekundenbruchteile
+  bleiben wie bisher.
+- `/validate` und `/export/markdown`: `contextName`, `schemaVersion`,
+  `metadataset`, `language` und `_schema` mit falschem Typ ergeben 422 statt 500
+  bzw. 200 mit Python-Fehlertext.
+- `/generate`, `/validate`, `/export/markdown`: abgelehnte Request-Bodies im
+  einheitlichen 422-Format ohne Eingabewerte und pydantic-Links.
+- `/generate`: unbekannter Kontext, unbekannte Version oder Schema-Datei → 404
+  vor Abruf der Quelle, Screenshot und KI-Aufruf (statt 502 `GENERATION_FAILED`).
+- `/generate`: ein Text über 10.000 Zeichen zusammen mit `_source_text` gilt als
+  neue Quelle (mit Hinweis) statt als zu lange Korrekturanweisung (400) – wie
+  mit dem 2.1.1-Widget gewohnt.
+- `/generate`: Vokabularwerte aus `existing_metadata` und vom Node werden wie in
+  2.1.1 exakt zugeordnet (URI, Wert, Label oder Alternativlabel in jeder Sprache
+  → Begriff), aber nicht mehr unscharf; was keinem Begriff entspricht (z. B.
+  Altbegriffe), bleibt unverändert erhalten statt still zu verschwinden. Nur die
+  in diesem Lauf extrahierten Werte durchlaufen die volle Zuordnung samt
+  Unschärfesuche.
+- KI-Extraktion: eine teilweise passende Vokabular-Antwort behält ihre Treffer,
+  statt erneut gefragt und am Ende ganz verworfen zu werden.
+- Zahlen: deutsche Tausenderpunkte werden erkannt, wenn sie eindeutig sind –
+  mindestens zwei Punktgruppen (`12.345.678`) oder ein Komma-Teil (`1.234,5`);
+  die erste Gruppe beginnt mit 1–9. Eine einzelne Punktgruppe ohne Komma
+  (`1.500`, `52.520`, `0.950`) bleibt wie in 2.1.1 eine Dezimalzahl (1,5;
+  52,52; 0,95) – KI-Modelle schreiben englische Dezimalzahlen weit häufiger.
+  Ganzzahlfelder runden statt abzuschneiden.
+- Datum/Uhrzeit: „15. März 2025 14:00“ und „01.05.2026, 18:00“ werden gelesen.
+- Öffnungszeiten: Bereiche über das Wochenende („Fr-Mo“), Wochentage nur als
+  ganzes Wort („Sonderöffnung“ ist kein Sonntag), Nicht-Text-Einträge brechen die
+  Ausgabe-Normalisierung nicht mehr ab.
+- `processing.fields_extracted` zählt leere Antworten (`[]`) nicht mehr mit.
+- Schema-Fallbacks (Version, Inhaltsarten, Inhaltsart-Prompt) werden
+  protokolliert; die Inhaltsart-Erkennung nennt ein unlesbares Schema als Grund
+  statt „keine KI-Erkennung konfiguriert“.
+- Prompt-Cache-Primer nur noch bei mehr als einem Feld und Texten über 4.000
+  Zeichen.
+- `/extract-field`: jeder Fehler beim Lesen von core.json führt wie in 2.1.1 zu
+  „Feld nicht gefunden“ (404) statt 500.
+- OpenAPI: `/generate`-Antwort als flacher Umschlag mit `_origins`,
+  `_source_text`, `preview_image_url`, `processing.status` und
+  `processing.error` dokumentiert; die Antwort selbst ist unverändert.
+
+Betrieb:
+
+- **`METADATA_AGENT_REQUIRE_REPOSITORY`** (Default `true`): `false` macht ein
+  Deployment, das nur erschließt, ohne `WLO_GUEST_*` bereit – wie mit 2.1.1;
+  `/upload` und `/nodes` antworten dann `503`, die Startwarnung sagt es. Im
+  Helm-Chart unter `env`.
+- **`METADATA_AGENT_LLM_MAX_RETRIES` mindestens 1:** `0` ließ jedem KI-Aufruf
+  keinen Versuch („HTTP None“); jetzt bricht der Start mit einer klaren Meldung
+  ab. Der Wert zählt die Versuche je Aufruf und die zusätzlichen Aufrufe bei
+  ungültigem Feldwert.
+- **Chromium 153** (Chrome for Testing 153.0.8010.12, playwright 1.63.0; vorher
+  145 mit 1.58.0, von keinem Image-Scanner gesehen). NOTICE nachgezogen; Debian
+  13 „trixie“ statt 12 als Basis genannt (so war das Image schon).
+- **Alarme:** `MetadataAgentServerErrors` (warning: mehr als 5 eigene 5xx in
+  10 min je Route, ohne `/health` und `/ready`), `MetadataAgentInternalError`
+  (critical: jedes `500 INTERNAL_ERROR`, auch das erste nach dem Pod-Start).
+  `MetadataAgentUpstreamUnanswered` wartet 5 min (`for: 5m`), bevor laufende
+  Aufrufe als unbeantwortet gelten. promtool-Fälle für alle drei.
+- **Dockerfile:** Benutzer, Chromium und dessen Rechte in einer Ebene vor
+  `COPY src/` – eine Code-Änderung baut die Browser-Ebene nicht mehr neu. OCI-Labels
+  `org.opencontainers.image.version`/`revision` (beide CI übergeben Tag bzw.
+  Branch und Commit).
+- **`starlette`** ist direkte Abhängigkeit (wird direkt importiert); die
+  Sicherheitsuntergrenze 1.3.1 steht jetzt dort statt in den Constraints.
+- **Logs (S-17):** Screenshot- und Textextraktions-URLs – auch innerhalb von
+  Browser-Fehlermeldungen – ohne Query und Zugangsdaten; ebenso die
+  Vorschau-URL in `/upload` und die Screenshot-URL in `/generate`.
+- `/upload` und `/nodes` bilden das Schreibergebnis an einer Stelle ab
+  (typisiertes `WriteResult`).
+
+CI und Tests:
+
+- **Tests auf dem Betriebssystem des Images:** GitLab-Jobs `run tests`,
+  `pip audit` und `pip audit dev` laufen auf `python:3.13-slim` per Digest (Debian
+  13, wie das Image) mit uv 0.7.13 statt auf bookworm.
+- **Alter des Chromium:** `scripts/check_browser_age.py` in beiden CI meldet die
+  Version und bricht ab, wenn sie mehr als zwei Hauptversionen hinter dem
+  stabilen Chrome liegt.
+- **Update-Vorschläge:** `.github/dependabot.yml` für `uv.lock`, Basis-Images und
+  Actions; auf GitLab keine Automatik (UEBERGABE §8).
+- **pip-audit der Entwicklungsabhängigkeiten** in beiden CI, nicht blockierend.
+- **kubeconform:** CRD-Katalog auf einen Commit gepinnt.
+- **GitLab veröffentlicht nur Tags `v*`.** Das Release-Image wird weiter aus dem
+  Tag gebaut statt befördert: `main` wird nur unter dem beweglichen Tag `main`
+  veröffentlicht, es gibt also kein unveränderliches Image dieses Commits zum
+  Befördern. Basis-Images per Digest und `uv.lock` halten den Neubau gleich.
+- **Kein Netz im Testlauf:** `tests/conftest.py` lässt nur Verbindungen zu
+  Loopback zu (`RUN_NETWORK_TESTS=1` gibt das Netz für alle Tests frei) und
+  lässt einen Test auch dann scheitern, wenn der Code die Ablehnung schluckt.
+  Eine Ablehnung zählt für den Test, der den Thread gestartet hat; die eines
+  Threads, der seinen Test überlebt, lässt den Lauf am Ende scheitern statt
+  den gerade laufenden Test. Er fand einen Test, der
+  wirklich die B-API aufrief; der läuft jetzt offline.
+- **Coverage-Untergrenze** 79 → 87 % (gemessen 90,1 % mit Zweigen und Browser-Tests).
+- **Layer-Test:** `config`, `metrics` und `infra` importieren weder API noch
+  Services; `src.main` importiert niemand.
+- **Neue Tests:** Weiterleitungen zur eigenen API und ein weitergeleiteter
+  Formular-POST in einem echten Chromium (die API läuft dafür auf Loopback),
+  eine 50-MB-Datei als Seite (wird nicht ganz übertragen), ein
+  `fetch()` zu einem fremden Ursprung ohne CORS-Preflight, der WebSocket-Filter im echten Browser statt per Quelltextsuche,
+  `input_source=node_id` (Volltext, Ersatztext, kein Text → `502`).
+
+Doku: `docker run`-Beispiele (README, DEPLOYMENT, INSTALL, Dockerfile) mit
+`-p 127.0.0.1:8000:8000 --read-only --tmpfs /tmp --tmpfs /home/appuser
+--stop-timeout 120` und `:v3.0.0`; INSTALL: CI-Jobs, Docker-Ebenen,
+Paketzahl (20), kein OpenAI-SDK, `b-api-router`, leere Tabelle,
+`LLM_AUTH_MISSING` statt „B_API_KEY not configured“; NOTICE Debian 13; toter
+Link in ENTWICKLER-UEBERSICHT; UEBERGABE Statuscodes (`404`, `413`, `503`,
+`SCHEMA_UNAVAILABLE`), GitHub-Trigger, Update-Automatik in §8 (verantwortlich für
+Updates: Team 4); README: `POST /nodes` im Inhaltsverzeichnis, `b-api-router`,
+Render mit Chromium, Abschnitt „Entwicklung: Tests, Lint, Typen“, Statuscodes
+von `/upload`, `/nodes`, `/workflow` und `/generate`; DEPLOYMENT: `/ready`-Schalter,
+110 s auch ohne Ingress, langer Text = neue Quelle; UPLOAD-RESPONSE:
+`WorkflowStepResult.skipped`, Schreiben ohne Ergebnis; WIDGET-REFERENZ:
+Widget 3.x braucht Agent 3.x; Steckbrief: Stand und Link zum finalen Audit;
+`.gitignore` ohne das gelöschte `deploy-widget.ps1`; in diesem CHANGELOG die
+Überschriften ohne Version (August 2026) datiert und eingeordnet.
 
 ### Korrekturen aus dem Release-Review vom 18.10.
 
@@ -197,11 +396,17 @@ Vereinheitlicht nach „wer ist schuld“ (Audit API-01). Antwortformen bleiben.
 | `POST /node` | Repository-Fehler beim Anlegen | 400 | **502** (fehlender Titel bleibt 400) |
 | `/screenshot` mit `node_id` | Node außerhalb des Bearbeitungsfensters | 200, Vorschau gesetzt | **403** (`404` unbekannt), wie `/upload` |
 | alle | unerwartete Ausnahme | 500 als Klartext ohne Request-ID/CORS | **500** JSON mit `error.code: INTERNAL_ERROR`, Request-ID und CORS |
-| `/generate` | Lauf länger als `METADATA_AGENT_GENERATE_TIMEOUT` | 504 vom Ingress nach 120 s | **504** vom Agenten mit `error.code: GENERATION_TIMEOUT` |
+| `/generate` | Lauf länger als `METADATA_AGENT_GENERATE_TIMEOUT` | 504 vom Ingress nach 120 s; ohne Ingress (Docker, Compose) unbegrenzt | **504** vom Agenten mit `error.code: GENERATION_TIMEOUT` nach 110 s – auch ohne Ingress. Wer dort längere Läufe braucht, erhöht `METADATA_AGENT_GENERATE_TIMEOUT` |
+| `/generate` (API-06) | unbekannter Kontext, unbekannte Version oder Schema-Datei | 502 `GENERATION_FAILED` nach Abruf und KI-Aufruf | **404** vor Abruf der Quelle, Screenshot und KI-Aufruf |
+| `/upload`, `/nodes` (API-08) | Schreiben ohne Ergebnis (nichts angelegt, nichts geändert) | 200 `success:false` | **422** `VALIDATION_ERROR` (Objektform verletzt), **422** `SCHEMA_UNAVAILABLE` (Kontext/Version unbekannt), **502** `UPSTREAM_ERROR` (Repository lehnte ab/nicht erreichbar); `detail` = bisheriger `error`-Text, dazu `discarded_node`/`node`/`step`/`field_errors`. Dubletten und Teilergebnisse bleiben 200 |
+| `/workflow/{node_id}` (API-12) | unbekannter Node / kein Zeitlimit | 200 `success:false` / unbegrenzt | **404**, kein Status gesetzt / **504** `UPLOAD_TIMEOUT` nach `METADATA_AGENT_UPLOAD_TIMEOUT` mit `node` |
+| `/upload/verify` (API-11) | Repository antwortet 403 (kein Zugriff) | 502 | **404** wie bei 404 |
+| alle | Anfrage des eigenen Screenshot-Browsers (Header `X-Metadata-Agent-Screenshot`) | wie jede Anfrage | **403** `SCREENSHOT_BROWSER_REFUSED` (S-15; andere Clients senden den Header nicht) |
+| alle mit JSON-Body | ungültiges JSON über 1 MB (S-16) | repariert, wenn möglich | **400** ohne Reparaturversuch (darunter wie bisher) |
 
-`/upload` und `/workflow` antworten bei `success:false` weiter mit 200: Die
-Antwort ist ein Teilergebnis (Node angelegt, Schritte einzeln bewertet), das
-die Webkomponente auswertet.
+`/upload`, `/nodes` und `/workflow` antworten mit 200 und `success:false` nur
+noch bei Teilergebnissen (Node existiert) und Dubletten; ein Schreiben ohne
+Ergebnis ist 422/502, ein unbekannter Node bei `/workflow` 404.
 
 ### Korrekturen aus dem Audit vom 18.10. (`docs/audits/2026-10-18-audit-3.0.0-nachkorrektur.md`)
 
@@ -209,7 +414,7 @@ Verhalten, das Clients sehen:
 
 | Bereich | bisher | jetzt |
 |---|---|---|
-| Fehlerantworten (API-03) | drei Formen; `HTTPException` und 422 nur mit `detail` | überall `detail` (wie bisher) **plus** `error` mit `code`, `message`, `request_id`; in der OpenAPI-Spec als `ErrorResponse` (4XX/5XX) |
+| Fehlerantworten (API-03) | drei Formen; `HTTPException` und 422 nur mit `detail` | jede Fehlerantwort der API mit `detail` (wie bisher) **plus** `error` mit `code`, `message`, `request_id`; in der OpenAPI-Spec als `ErrorResponse` (4XX/5XX). Das öffentliche `/ready`-503 bekam beides erst mit dem finalen Audit |
 | `/upload`, `/nodes` (D-04) | kein Gesamt-Zeitlimit | **504** `UPLOAD_TIMEOUT` nach `METADATA_AGENT_UPLOAD_TIMEOUT`; die Antwort nennt den Node: `discarded_node` (verworfen) oder `node` (nicht verwerfbar oder schon im Workflow) |
 | `/detect-content-type`, `/extract-field` (P-01) | kein Gesamt-Zeitlimit | **504** `GENERATION_TIMEOUT` wie `/generate` |
 | `/extract-field` (API-05) | unbekanntes Feld erst nach dem Abruf der Quelle 404 | 404 vor dem Abruf |
@@ -700,14 +905,11 @@ diese Punkte:
 
 ---
 
-Stand: 2026-08-18 · gegenüber Commit `9abc2db`
+## 2026-08-18 (ohne Versionsnummer) — Objektfelder: ein String in einem Objektfeld erreicht das Repository nicht mehr
 
-Im Arbeitsbaum, noch nicht committet. Die Testsuite umfasst **1177 Tests**
-(vorher 1176, davon 7 rot); `ruff check` und `ruff format --diff` sind sauber.
-
----
-
-## Objektfelder: ein String in einem Objektfeld erreicht das Repository nicht mehr
+Stand: 2026-08-18 · gegenüber Commit `9abc2db`. Damals im Arbeitsbaum, nicht
+committet; die Testsuite umfasste **1177 Tests** (vorher 1176, davon 7 rot);
+`ruff check` und `ruff format --diff` waren sauber.
 
 Hintergrund, Regeln und Wartungshinweise stehen in **[OBJEKTFELDER.md](OBJEKTFELDER.md)**.
 Hier nur, was sich für Aufrufer und Betrieb ändert.
@@ -870,7 +1072,7 @@ Dateipaare byteweise überein.
 
 ---
 
-## Intern (Objektfelder)
+### Intern (Objektfelder)
 
 - **`FieldNormalizer`** hat `_is_object_field`, `_object_key`,
   `_normalize_object_field` und `_as_object`. Alle vier Schreibweisen der
@@ -890,7 +1092,7 @@ Dateipaare byteweise überein.
 
 ---
 
-# Frühere Änderungen
+## 2026-08-12 (ohne Versionsnummer) — Frühere Änderungen
 
 Stand: 2026-08-12 · gegenüber Commit `52b008c` (CORS Fix) · **789 Tests**
 
@@ -900,9 +1102,9 @@ Referenz auf `52b008c` beziehen sich auf jenen Zeitpunkt.
 
 ---
 
-## Was sich für Aufrufer ändert
+### Was sich für Aufrufer ändert
 
-### 1. Lizenz: kein `COPYRIGHT_FREE` mehr, wenn keine erkannt wurde
+#### 1. Lizenz: kein `COPYRIGHT_FREE` mehr, wenn keine erkannt wurde
 
 **Vorher:** Fand die Extraktion keine Lizenz, schrieb der Upload
 `ccm:commonlicense_key: ["COPYRIGHT_FREE"]`.
@@ -917,7 +1119,7 @@ Prüf-Workflow, den der Upload ohnehin startet.
 > **Sichtbar in der Redaktion:** Neu hochgeladene Inhalte ohne erkennbare Lizenz
 > haben ein leeres Lizenzfeld statt „Urheberrechtsfrei".
 
-### 2. Lizenz: nicht zuordenbare Angaben gehen nicht mehr verloren
+#### 2. Lizenz: nicht zuordenbare Angaben gehen nicht mehr verloren
 
 **Vorher:** Jeder `ccm:custom_license`-Wert mit einem `/` galt als
 Vokabular-URI. Passte das letzte Pfadsegment auf keinen bekannten Schlüssel,
@@ -933,7 +1135,7 @@ Eingabe, die den Verlust auslöste:
 | `Nur für Bildungszwecke / nicht kommerziell` | gelöscht → `COPYRIGHT_FREE` | `CUSTOM`, Text bleibt |
 | `© 2024 Uni München` | `CUSTOM`, Text bleibt | unverändert |
 
-### 3. Lizenz: `creativecommons.org`-Links werden abgebildet (neu)
+#### 3. Lizenz: `creativecommons.org`-Links werden abgebildet (neu)
 
 ```
 https://creativecommons.org/licenses/by-sa/4.0/      → CC_BY_SA + 4.0
@@ -951,7 +1153,7 @@ mehr sagen als die Lizenz.
 Die Schreibweise (`CC_BY_SA`, Unterstriche) ist gegen das Live-Repository
 geprüft: WLO speichert genau diese Form — und nur sie löst auf, siehe Punkt 19.
 
-### 4. `collection_id` ist immer ein Array
+#### 4. `collection_id` ist immer ein Array
 
 ```jsonc
 { "collection_id": ["3039bdb2-…"] }   // ✅
@@ -966,7 +1168,7 @@ kopierte Sammlungs-URLs akzeptiert.
 
 *Kein Bruch für bestehende Clients — der Parameter war nie ausgeliefert.*
 
-### 5. Body-Format: alle drei Formen sind jetzt gleichwertig
+#### 5. Body-Format: alle drei Formen sind jetzt gleichwertig
 
 Betrifft **`/upload`, `/validate` und `/export/markdown`**.
 
@@ -995,7 +1197,7 @@ einer Ebene:
                 "metadata": { "cclom:title": "…" } } }
 ```
 
-### 6. Die Antwort sagt, gegen welches Schema geschrieben wurde (neu)
+#### 6. Die Antwort sagt, gegen welches Schema geschrieben wurde (neu)
 
 ```jsonc
 {
@@ -1018,21 +1220,21 @@ ohne metadataset : schema_used=null          repo_fields_available=26
 
 Der Name `schema_used` ist derselbe wie bei `/validate` und `/export/markdown`.
 
-### 7. `workflow_steps`: leere Liste wird abgelehnt
+#### 7. `workflow_steps`: leere Liste wird abgelehnt
 
 `[]` liest sich wie „keine Schritte", hätte aber beim Weglassen auf den Standard
 `200_tocheck` zurückgefallen — das Gegenteil. Jetzt `422`. Für einen Upload ohne
 Workflow: `start_workflow: false`. Unbekannte Status geben ebenfalls `422`,
 bevor etwas ins Repository geht.
 
-### 8. `discarded_node` in der Antwort (neu)
+#### 8. `discarded_node` in der Antwort (neu)
 
 Bricht ein Upload ab, nachdem der Node schon angelegt war, wird er
 zurückgenommen (Papierkorb, wiederherstellbar) und seine ID steht in
 `discarded_node`. Scheitert auch die Rücknahme, bleibt das Feld gesetzt — dann
 existiert der Node und muss von Hand weg.
 
-### 9. Autoren-VCARD folgt dem Repository-Format
+#### 9. Autoren-VCARD folgt dem Repository-Format
 
 ```
 vorher:  BEGIN:VCARD\nFN:Max Müller\nN:Müller;Max\nVERSION:3.0\nEND:VCARD
@@ -1051,7 +1253,7 @@ angezeigten Namen landen.
 
 ---
 
-### 10. Standard-LLM ist `gpt-5.6-luna`
+#### 10. Standard-LLM ist `gpt-5.6-luna`
 
 Vorher `gpt-4.1-mini`. Das neue Modell ist ein Reasoning-Modell der Nano-Klasse
 und nimmt einen anderen Request-Body — beides gegen die B-API gemessen:
@@ -1080,7 +1282,7 @@ Läufen `ccm:oeh_event_begin` und destabilisierte einmal die Inhaltstyp-Erkennun
 > Der AcademicCloud-Default `deepseek-r1` antwortete auf Staging mit
 > `404 Model Not Found`. Behoben in Punkt 13.
 
-### 11. Sechs Felder erreichen das Repository, die vorher weggefiltert wurden
+#### 11. Sechs Felder erreichen das Repository, die vorher weggefiltert wurden
 
 Ein redaktioneller Vergleichs-Upload von WLO-Seite schrieb Felder, die dieser
 Agent nicht schrieb. Der Grund waren drei verschiedene Sperren, nicht eine:
@@ -1173,7 +1375,7 @@ Die drei Flags bleiben auf `true` — das Senden kostet nichts und wirkt ohne
 Codeänderung, sobald WLO die Properties anlegt. `WLO-REPO-FELDER.md` führt sie
 mit ⚠️ und ist damit zugleich die Liste, die es dafür braucht.
 
-### 12. Durchsatzgrenzen des LLM-Gateways sind einstellbar (neu)
+#### 12. Durchsatzgrenzen des LLM-Gateways sind einstellbar (neu)
 
 Zwei neue Einstellungen, beide prozessweit wirksam:
 
@@ -1227,7 +1429,7 @@ Default Workers: 10 → 2 (limit of b-api)
 LLM Throughput: max 2 in flight, max 2 req/s
 ```
 
-### 13. AcademicCloud-Default ist ein Modell, das es gibt
+#### 13. AcademicCloud-Default ist ein Modell, das es gibt
 
 `deepseek-r1` → **`openai-gpt-oss-120b`**. Der alte Default antwortete mit
 `404 Model Not Found`; ein Default, der nicht funktionieren kann, ist schlechter
@@ -1235,7 +1437,7 @@ als keiner, weil nichts am Fehler auf die Einstellung zeigt. Das neue Modell
 lieferte in der Messung vom 12.08.2026 die gleichmäßigste Latenz der
 AcademicCloud-Modelle (4,99 s ± 2,31 s bei der Extraktion, p95 6,59 s im Chat).
 
-### 14. Nativ OpenAI zieht mit der B-API-Implementierung gleich
+#### 14. Nativ OpenAI zieht mit der B-API-Implementierung gleich
 
 - **`METADATA_AGENT_OPENAI_API_BASE`** muss nicht auf OpenAI zeigen. Jeder
   Endpunkt, der `/chat/completions` bedient und einen Bearer-Token annimmt,
@@ -1252,7 +1454,7 @@ Reasoning-Modelle (`gpt-5`, `o1`, `o3`, `o4` → `max_completion_tokens`, kein
 `temperature`, dafür `verbosity` und `reasoning_effort`) greift bei nativem
 OpenAI genauso wie über die B-API.
 
-### 15. `ENV-PARAMETER.md` — vollständige Referenz (neu)
+#### 15. `ENV-PARAMETER.md` — vollständige Referenz (neu)
 
 Alle 43 Umgebungsvariablen an einer Stelle, mit Defaults und Betriebsbeispielen.
 `README.md`, `INSTALL.md` und `DEPLOYMENT.md` verweisen darauf, statt jeweils
@@ -1263,7 +1465,7 @@ lässt den Test fehlschlagen, und ein dokumentierter Name, den `Settings` nicht
 mehr liest, ebenfalls — letzteres ist der unangenehmere Fall, weil das Setzen
 dann so aussieht, als wirke es.
 
-### 16. Der Lernressourcentyp kommt an — im richtigen Feld, aus dem vollen Vokabular
+#### 16. Der Lernressourcentyp kommt an — im richtigen Feld, aus dem vollen Vokabular
 
 Zwei Fehler, die sich gegenseitig verdeckten.
 
@@ -1302,7 +1504,7 @@ jetzt nur noch, wenn die Extraktion nichts gefunden hat.
 Das Konzept „Lexikon oder Enzyklopädie" war eines der 133 fehlenden — ohne beide
 Korrekturen zusammen wäre es nicht möglich gewesen.
 
-### 17. Zweistufiger Upload: `POST /node` und `node_id` am `/upload` (neu)
+#### 17. Zweistufiger Upload: `POST /node` und `node_id` am `/upload` (neu)
 
 Wer eine Node-ID braucht, bevor die Metadaten existieren — um sie anzuzeigen, zu
 verlinken oder einer Redaktion zu übergeben — bekommt sie jetzt einzeln:
@@ -1351,7 +1553,7 @@ mit dieser ID in der flachen Form → `node_created: false`, 9 Felder auf
 demselben Knoten, und im Repository existiert genau **ein** Knoten mit diesem
 Titel.
 
-### 18. `cm:name` wird gesetzt, wenn das Repository keinen ableiten kann
+#### 18. `cm:name` wird gesetzt, wenn das Repository keinen ableiten kann
 
 Der Live-Durchlauf legte einen Fehler offen, den kein aufgezeichneter Test finden
 konnte: `POST /node` mit nur einem Titel scheiterte an
@@ -1386,7 +1588,7 @@ sieht.
 > nichts davon auflöst. Korrigiert auf die echte „Arbeitsblatt"-URI, plus ein
 > Test, der jede in Tests verwendete URI gegen den Vokabular-Snapshot prüft.
 
-### 19. Lizenzschlüssel: die Schreibweise entschied, ob die Lizenz existiert
+#### 19. Lizenzschlüssel: die Schreibweise entschied, ob die Lizenz existiert
 
 Das Vokabular von `ccm:commonlicense_key` bot `CC BY-SA` an — mit Leerzeichen und
 Bindestrich. Das Repository speichert den Wert, **erkennt ihn aber nicht als
@@ -1421,7 +1623,7 @@ gespeichert wird die, die auflöst:
 'CC BY-SA' → CC_BY_SA      'cc by-sa' → CC_BY_SA      'Namensnennung' → null
 ```
 
-### 20. Der Lernressourcentyp: das Modell sah die falschen 20
+#### 20. Der Lernressourcentyp: das Modell sah die falschen 20
 
 Der Extraktions-Prompt listet höchstens 20 Konzepte und hängt „… und N weitere"
 an. In der Reihenfolge des veröffentlichten Vokabulars sind die ersten 20
@@ -1450,7 +1652,7 @@ einmal; ein Test prüft das. Derselbe Arbeitsblatt-Text liefert danach
 > auf: ein Wert, der geschrieben wird, `200` bekommt und trotzdem nirgends
 > ankommt. Weder Statuscode noch `fields_written` sagen etwas dazu.
 
-### 21. `/upload/verify` prüft jetzt, ob ein Wert überhaupt ein Wert ist
+#### 21. `/upload/verify` prüft jetzt, ob ein Wert überhaupt ein Wert ist
 
 Drei Fehler dieser Sitzung hatten dieselbe Bauart: etwas wurde gesendet, das
 Repository antwortete `200`, und der Wert kam nie als Wert an.
@@ -1516,7 +1718,7 @@ An zwei echten Knoten geprüft: der Testknoten meldet **einen** echten Befund
 > noch einmal als `extra_in_repo`. Beides behoben; die Umbenennungstabelle liegt
 > jetzt an einer Stelle.
 
-### 22. `/upload` zeigt seine Optionen — und ein leeres Feld heißt jetzt überall dasselbe
+#### 22. `/upload` zeigt seine Optionen — und ein leeres Feld heißt jetzt überall dasselbe
 
 Zwei Befunde aus derselben Ecke.
 
@@ -1568,9 +1770,9 @@ Für Listen gilt **keine** einheitliche Regel, und das ist Absicht:
 | `workflow_receiver` / `receiver` | **niemanden benachrichtigen** — eine echte Wahl, die sonst verloren ginge |
 | `workflow_steps` / `steps` | `422` mit Verweis auf `start_workflow: false` |
 
-## Konfiguration
+### Konfiguration
 
-### `WLO_REPOSITORY_BASE_URL` entfernt
+#### `WLO_REPOSITORY_BASE_URL` entfernt
 
 Die Variable war in `DEPLOYMENT.md` und `INSTALL.md` als Repository-Override
 dokumentiert und wurde **von niemandem gelesen** — auch vor dem Refactor nicht.
@@ -1581,7 +1783,7 @@ Das Ziel-Repository wird ausschließlich über
 **`METADATA_AGENT_REPOSITORY_URL`** gesetzt. Bestehende `.env`-Dateien mit der
 alten Variable brechen nicht (`extra: "ignore"`).
 
-### UTF-8-Ausgabe unter Windows
+#### UTF-8-Ausgabe unter Windows
 
 Die Fortschrittsausgabe enthält Emoji. Auf einer cp1252-Konsole brach ein Upload
 damit mitten im Schreiben mit `UnicodeEncodeError` ab — ausgelöst schon von einem
@@ -1590,7 +1792,7 @@ Import auf UTF-8. Unter Linux und Docker ändert das nichts.
 
 ---
 
-## Intern
+### Intern
 
 - **Neue Module** aus `repository_service.py` herausgelöst — reine Umzüge,
   Verhalten unverändert: `repository_values.py` (Feld-Filter, Flattening,
@@ -1607,7 +1809,7 @@ Import auf UTF-8. Unter Linux und Docker ändert das nichts.
   Upload sein Budget schon verbraucht hat, innerhalb einer auf 60 s gedeckelten
   Serverless-Invocation.
 
-### Tests und Abdeckung
+#### Tests und Abdeckung
 
 789 Tests (vorher keine). Abdeckung der Service-Schicht:
 
@@ -1621,7 +1823,7 @@ Import auf UTF-8. Unter Linux und Docker ändert das nichts.
 
 ---
 
-## Was noch offen ist
+### Was noch offen ist
 
 - **Nichts davon lief gegen ein echtes Repository.** Alle Tests arbeiten gegen
   einen aufgezeichneten HTTP-Client. Gegen die Live-Instanz wurde nur *gelesen*

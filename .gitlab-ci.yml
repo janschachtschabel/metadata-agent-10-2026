@@ -29,8 +29,9 @@ workflow:
 variables:
   # Same uv as the Dockerfile, so CI and image resolve alike.
   UV_VERSION: 0.7.13
-  PYTHON_VERSION: 3.13
-  BASE_LAYER: bookworm-slim
+  # The tests run on the image's own base (Debian 13 "trixie", Dockerfile) -
+  # uv 0.7.13 has no trixie image, so uv is installed into it.
+  CI_PYTHON_IMAGE: python:3.13-slim@sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f
   # GitLab CI creates a separate mountpoint for the build directory,
   # so we need to copy instead of using hard links.
   UV_LINK_MODE: copy
@@ -97,7 +98,7 @@ helm binary:
 run tests:
   extends: .check
   stage: test
-  image: ghcr.io/astral-sh/uv:$UV_VERSION-python$PYTHON_VERSION-$BASE_LAYER
+  image: $CI_PYTHON_IMAGE
   variables:
     UV_CACHE_DIR: .uv-cache
     PLAYWRIGHT_BROWSERS_PATH: $CI_PROJECT_DIR/.playwright-browsers
@@ -121,6 +122,7 @@ run tests:
       paths:
         - .playwright-browsers
   script:
+    - pip install uv==$UV_VERSION
     - export PATH="$CI_PROJECT_DIR/tools:$PATH"
     - helm version --short
     - uv sync --locked
@@ -129,6 +131,9 @@ run tests:
     # Chromium comes from the cache after the first run; --with-deps still
     # installs the system libraries each time.
     - uv run playwright install --with-deps chromium
+    # The bundled Chromium: reported, and fails the job when it is more than
+    # two major versions behind the stable Chrome (audit 18.10. final).
+    - uv run python scripts/check_browser_age.py
     # -rs lists every skipped test with its reason in the job log.
     - uv run pytest -q -rs --cov
     - uv run mypy
@@ -140,9 +145,22 @@ run tests:
 pip audit:
   extends: .check
   stage: test
-  image: ghcr.io/astral-sh/uv:$UV_VERSION-python$PYTHON_VERSION-$BASE_LAYER
+  image: $CI_PYTHON_IMAGE
   script:
+    - pip install uv==$UV_VERSION
     - uvx pip-audit==2.10.1 -r requirements.txt --require-hashes --disable-pip
+
+# The development tools (pytest, ruff, mypy …) never reach the image: a finding
+# here is reported, not a reason to stop the pipeline.
+pip audit dev:
+  extends: .check
+  stage: test
+  image: $CI_PYTHON_IMAGE
+  allow_failure: true
+  script:
+    - pip install uv==$UV_VERSION
+    - uv export --frozen --only-dev --format requirements-txt --no-emit-project > dev-requirements.txt
+    - uvx pip-audit==2.10.1 -r dev-requirements.txt --require-hashes --disable-pip
 
 # The Helm chart and its alert rules. tests/test_helm_chart.py (run tests)
 # checks them against the code; these check that helm and Prometheus accept
@@ -167,8 +185,9 @@ helm lint:
     expire_in: 1 day
 
 # The rendered manifests against the Kubernetes schemas (audit T-07); the
-# Prometheus Operator kinds against the CRDs catalog. Both schema sets are
-# fetched at run time. The image has a shell only in its -alpine variant; it
+# Prometheus Operator kinds against the CRDs catalog, pinned to a commit (a
+# moved branch would change the check). Both schema sets are fetched at run
+# time. The image has a shell only in its -alpine variant; it
 # runs by tag because its digest could not be read without pulling it.
 kubeconform:
   extends: .check
@@ -178,7 +197,7 @@ kubeconform:
     name: ghcr.io/yannh/kubeconform:v0.7.0-alpine
     entrypoint: [""]
   script:
-    - /kubeconform -strict -summary -schema-location default -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' rendered/default.yaml rendered/ingress.yaml
+    - /kubeconform -strict -summary -schema-location default -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/501527ab9c40c827144c8f45945b25a023e344ce/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' rendered/default.yaml rendered/ingress.yaml
 
 alert rules:
   extends: .check
@@ -220,7 +239,7 @@ check docker image in merge requests:
   variables:
     IMAGE: metadata-agent-api:mr-$CI_MERGE_REQUEST_IID
   script:
-    - docker buildx build --load --tag "$IMAGE" .
+    - docker buildx build --load --build-arg VERSION="$CI_COMMIT_REF_NAME" --build-arg REVISION="$CI_COMMIT_SHA" --tag "$IMAGE" .
     - *check_image
   rules:
     - if: "$CI_PIPELINE_SOURCE == 'merge_request_event'"
@@ -231,7 +250,7 @@ build and push docker image from main and develop branches:
   variables:
     IMAGE: $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:$CI_COMMIT_REF_SLUG
   script:
-    - docker buildx build --load --tag "$IMAGE" .
+    - docker buildx build --load --build-arg VERSION="$CI_COMMIT_REF_SLUG" --build-arg REVISION="$CI_COMMIT_SHA" --tag "$IMAGE" .
     - *check_image
     # Log in only now (audit OPS-09): build, smoke test and scanner run with
     # the Docker socket, the password must not be in the daemon's config yet.
@@ -247,10 +266,14 @@ build and push docker image on tag creation:
   variables:
     IMAGE: $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:$CI_COMMIT_REF_NAME
   script:
-    - docker buildx build --load --tag "$IMAGE" .
+    - docker buildx build --load --build-arg VERSION="$CI_COMMIT_REF_NAME" --build-arg REVISION="$CI_COMMIT_SHA" --tag "$IMAGE" .
     - *check_image
     # Log in only now, as above.
     - echo "$DOCKER_PASSWORD" | docker login $DOCKER_REGISTRY -u $DOCKER_USERNAME --password-stdin
     - docker image push "$IMAGE"
+  # Release tags only (v3.0.0); another tag publishes nothing. The release image
+  # is rebuilt from the tagged commit, not promoted from main: main is
+  # published under the moving tag "main" only, so there is no immutable main
+  # image of that commit to promote (see CHANGELOG 3.0.0, CI).
   rules:
-    - if: "$CI_COMMIT_TAG"
+    - if: "$CI_COMMIT_TAG =~ /^v/"

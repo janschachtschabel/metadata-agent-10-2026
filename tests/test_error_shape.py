@@ -103,8 +103,28 @@ def test_endpoints_acting_with_the_service_account_say_so():
     """Audit S-13: the accepted gaps are documented where an integrator reads."""
     paths = main.app.openapi()["paths"]
 
-    for path in ("/upload", "/nodes", "/node", "/workflow/{node_id}", "/screenshot"):
+    for path in (
+        "/upload",
+        "/nodes",
+        "/node",
+        "/workflow/{node_id}",
+        "/screenshot",
+        # Read non-public nodes with node_id / node_url (audit 18.10. final, S-18).
+        "/generate",
+        "/detect-content-type",
+        "/extract-field",
+    ):
         assert "Service-Konto" in paths[path]["post"]["description"], path
+
+
+def test_the_notes_name_what_the_service_account_reveals_and_accepts():
+    """S-18: history with editor names; any authority as workflow receiver."""
+    paths = main.app.openapi()["paths"]
+
+    workflow = paths["/workflow/{node_id}"]["post"]["description"]
+    assert "Benutzernamen" in workflow and "receiver" in workflow
+    assert "workflow_receiver" in paths["/upload"]["post"]["description"]
+    assert "nicht öffentliche" in paths["/generate"]["post"]["description"]
 
 
 def test_every_documented_gap_names_a_real_operation():

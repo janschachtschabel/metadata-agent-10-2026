@@ -9,14 +9,19 @@ The captured screenshots can be uploaded as preview images to edu-sharing nodes.
 """
 
 import asyncio
+import html
 import logging
 import time
 from typing import Any, Optional
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 from weakref import WeakKeyDictionary
 
-
+from ..utils.loggable import loggable_text, loggable_url
 from ..utils.public_url import PublicUrlError, require_public_http_url
+from ..utils.security_headers import (
+    SCREENSHOT_BROWSER_HEADER,
+    SCREENSHOT_BROWSER_TOKEN,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,45 +52,92 @@ def delivered_format(requested: str) -> str:
     return requested if requested in ("png", "jpeg") else "png"
 
 
-def _loggable_url(url: str) -> str:
-    """Scheme, host and path: query strings carry tokens, user info passwords."""
-    parts = urlsplit(url)
-    return f"{parts.scheme}://{parts.netloc.rpartition('@')[2]}{parts.path}"
+# A request of these methods carries no body that a redirect could resend.
+_SAFE_METHODS = ("GET", "HEAD")
 
 
-def _public_requests_only():
+def _refresh_page(target: str) -> str:
+    """A page that navigates on to `target` - as a new, routed navigation."""
+    url = html.escape(target, quote=True)
+    return f'<!doctype html><meta http-equiv="refresh" content="0;url={url}">'
+
+
+def _public_requests_only(redirect_hops: list[str]):
     """
     Route handler that aborts browser requests to non-public hosts.
 
     A public page may embed internal URLs. Each distinct origin is checked once
     per capture; data:, blob: and about: URLs need no network. Playwright calls
-    route handlers only for the first URL of a redirect chain — redirect hops
-    are checked separately (see _require_public_targets).
+    route handlers only for the first URL of a redirect chain: requests with a
+    body therefore go out one hop at a time (_one_hop_at_a_time). GET and HEAD -
+    navigations included - stay with Chromium, which streams them (a direct link
+    to a large video or ZIP is not downloaded whole); their redirect targets
+    land in `redirect_hops` and refuse the capture afterwards (see
+    _require_public_targets), and the API refuses the marked hop itself.
     """
     verdicts: dict[str, bool] = {}
 
-    async def handle(route):
-        request_url = route.request.url
-        parts = urlsplit(request_url)
-        if parts.scheme in ("data", "blob", "about"):
-            await route.continue_()
-            return
+    async def allowed(url: str) -> bool:
+        parts = urlsplit(url)
         origin = f"{parts.scheme}://{parts.netloc}"
         if origin not in verdicts:
             try:
-                await require_public_http_url(request_url)
+                await require_public_http_url(url)
                 verdicts[origin] = True
             except PublicUrlError as e:
-                logger.warning(
-                    f"Blocked browser request to {_loggable_url(request_url)}: {e}"
-                )
+                logger.warning(f"Blocked browser request to {loggable_url(url)}: {e}")
                 verdicts[origin] = False
-        if verdicts[origin]:
+        return verdicts[origin]
+
+    async def handle(route):
+        request = route.request
+        if urlsplit(request.url).scheme in ("data", "blob", "about"):
             await route.continue_()
-        else:
+        elif not await allowed(request.url):
             await route.abort("blockedbyclient")
+        elif request.method not in _SAFE_METHODS:
+            await _one_hop_at_a_time(route, allowed, redirect_hops)
+        else:
+            await route.continue_()
 
     return handle
+
+
+async def _one_hop_at_a_time(route, allowed, redirect_hops: list[str]) -> None:
+    """
+    Send a request with a body without following a redirect; check the target.
+
+    Chromium follows a redirect without asking the route handler again (audit
+    S-15: a 307 carried a text/plain POST to the API on loopback). So no 3xx
+    reaches it: a hop of a form submission becomes a new GET navigation, which
+    passes the handler again, and any other request with a body is not
+    redirected at all - a 307/308 would resend the body to the new target.
+    route.fetch() buffers the answer in the driver; bodies of answers to POSTs
+    are small, unlike a direct link to a file (see _public_requests_only).
+    """
+    from playwright.async_api import Error as PlaywrightError
+
+    request = route.request
+    try:
+        response = await route.fetch(max_redirects=0)
+    except PlaywrightError as e:
+        logger.info(
+            f"📸 {loggable_url(request.url)} could not be fetched: {loggable_text(e)}"
+        )
+        await route.abort("failed")
+        return
+    location = response.headers.get("location")
+    if not (300 <= response.status < 400 and location):
+        await route.fulfill(response=response)
+        return
+    target = urljoin(request.url, location)
+    redirect_hops.append(target)
+    if request.is_navigation_request() and await allowed(target):
+        await route.fulfill(
+            status=200, content_type="text/html", body=_refresh_page(target)
+        )
+    else:
+        await route.abort("blockedbyclient")
 
 
 def _public_websockets_only():
@@ -102,7 +154,7 @@ def _public_websockets_only():
         try:
             await require_public_http_url(http_url)
         except PublicUrlError as e:
-            logger.warning(f"Blocked browser WebSocket to {_loggable_url(ws.url)}: {e}")
+            logger.warning(f"Blocked browser WebSocket to {loggable_url(ws.url)}: {e}")
             await ws.close(code=1008, reason="blocked")
             return
         ws.connect_to_server()
@@ -147,7 +199,7 @@ async def _open(page, url: str, redirect_hops: list[str]) -> None:
         # A hop inward is refused first: whether the internal target refused
         # the connection or answered must not show in the response.
         await _require_public_targets(redirect_hops)
-        logger.info(f"📸 {url} could not be loaded: {e}")
+        logger.info(f"📸 {loggable_url(url)} could not be loaded: {loggable_text(e)}")
         raise ScreenshotError(_LOAD_FAILED) from e
 
     # Give the network a bounded chance to settle. Pages that never go quiet
@@ -155,7 +207,9 @@ async def _open(page, url: str, redirect_hops: list[str]) -> None:
     try:
         await page.wait_for_load_state("networkidle", timeout=10000)
     except PlaywrightTimeoutError:
-        logger.info(f"📸 {url} did not reach network idle — capturing anyway")
+        logger.info(
+            f"📸 {loggable_url(url)} did not reach network idle — capturing anyway"
+        )
 
     await _require_public_targets(redirect_hops)
     _require_loaded(page.url)
@@ -279,7 +333,7 @@ class ScreenshotService:
     ) -> ScreenshotResult:
         """Capture screenshot using internal Playwright (privacy-safe)."""
         start = time.monotonic()
-        logger.info(f"📸 Playwright: capturing {url} ({width}x{height})")
+        logger.info(f"📸 Playwright: capturing {loggable_url(url)} ({width}x{height})")
 
         try:
             from playwright.async_api import Error as PlaywrightError
@@ -298,14 +352,18 @@ class ScreenshotService:
                         device_scale_factor=1,
                         # Service workers fetch outside the request check below.
                         service_workers="block",
+                        # On every request, redirect hops included: the API
+                        # refuses it (security_headers.py, audit S-15).
+                        extra_http_headers={
+                            SCREENSHOT_BROWSER_HEADER: SCREENSHOT_BROWSER_TOKEN
+                        },
                     )
-                    await context.route("**/*", _public_requests_only())
-                    await context.route_web_socket("**/*", _public_websockets_only())
-
-                    # Redirect hops bypass the route handler and reach the
-                    # network unchecked. Collect them so the result can be
-                    # refused.
+                    # Redirect targets the route handler did not send itself
+                    # (images, scripts) reach the network unchecked. Collect
+                    # them so the result can be refused.
                     redirect_hops: list[str] = []
+                    await context.route("**/*", _public_requests_only(redirect_hops))
+                    await context.route_web_socket("**/*", _public_websockets_only())
 
                     def note_redirect(request):
                         if request.redirected_from is not None:
@@ -338,7 +396,9 @@ class ScreenshotService:
         except PlaywrightError as e:
             # Browser messages carry network errors and server paths: they stay
             # in the log, the caller gets a neutral reason.
-            logger.error(f"❌ Playwright: capturing {url} failed: {e}")
+            logger.error(
+                f"❌ Playwright: capturing {loggable_url(url)} failed: {loggable_text(e)}"
+            )
             raise ScreenshotError("Screenshot konnte nicht erstellt werden.") from e
 
         capture_time = int((time.monotonic() - start) * 1000)

@@ -100,8 +100,12 @@ async def test_an_answer_matching_no_concept_is_asked_again(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_after_the_last_retry_unmatched_entries_are_dropped(monkeypatch):
-    gateway = _Answers({"value": ["Physik", "Quatschwert"]})
+async def test_a_partial_match_keeps_its_matches_without_asking_again(monkeypatch):
+    # Final audit 18.10.: asking again for a partly matching list threw the
+    # matches away whenever a later attempt matched less ([a, b, x] then [x]x3
+    # ended as []) and cost up to llm_max_retries more full-text calls. 2.1.1
+    # did not ask again either. Unmatched entries are dropped.
+    gateway = _Answers({"value": ["Physik", "Quatschwert"]}, {"value": ["Quatsch"]})
     service = _service(gateway, monkeypatch)
 
     _, value, _ = await service.extract_field(
@@ -109,7 +113,19 @@ async def test_after_the_last_retry_unmatched_entries_are_dropped(monkeypatch):
     )
 
     assert value == [PHYSIK]
-    assert None not in value
+    assert gateway.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_when_no_attempt_matches_the_result_is_empty(monkeypatch):
+    gateway = _Answers({"value": ["Quatschwert"]})
+    service = _service(gateway, monkeypatch)
+
+    _, value, _ = await service.extract_field(
+        _core_field("ccm:taxonid"), "Text", None, "de"
+    )
+
+    assert value == []
     assert gateway.calls == 3  # first call + llm_max_retries
 
 

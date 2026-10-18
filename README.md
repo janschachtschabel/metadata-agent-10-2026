@@ -16,6 +16,7 @@ Generiert strukturierte Metadaten nach dem [WLO/OEH-Schema](https://wirlernenonl
   - [POST /validate](#post-validate)
   - [POST /export/markdown](#post-exportmarkdown)
   - [POST /node](#post-node)
+  - [POST /nodes](#post-nodes)
   - [POST /upload](#post-upload)
   - [POST /workflow/{node_id}](#post-workflownode_id)
   - [POST /upload/verify/{node_id}](#post-uploadverifynode_id)
@@ -300,7 +301,7 @@ docker-compose up -d
 
 # Oder manuell:
 docker build -t metadata-agent-api .
-docker run -d -p 8000:8000 --env-file .env metadata-agent-api
+docker run -d -p 127.0.0.1:8000:8000 --read-only --tmpfs /tmp --tmpfs /home/appuser --stop-timeout 120 --env-file .env metadata-agent-api
 ```
 
 ### Testen
@@ -316,6 +317,29 @@ curl -X POST http://localhost:8000/generate \
 ```
 
 Die interaktive API-Dokumentation ist unter **`/docs`** (Swagger UI) verfügbar. Sie lädt nur vom Agenten selbst, nicht von einem CDN oder Google Fonts (Swagger UI liegt unter `src/static/docs/`).
+
+### Entwicklung: Tests, Lint, Typen
+
+```bash
+uv sync                                  # mit den Entwicklungswerkzeugen
+uv run playwright install chromium       # für die Browser-Tests
+uv run pytest -q -rs --cov               # Suite + Coverage-Untergrenze (pyproject.toml)
+uv run ruff check && uv run ruff format --check
+uv run mypy                              # ganz src/
+```
+
+| Variable | Wirkung |
+|---|---|
+| `REQUIRE_BROWSER=1` | Fehlt Chromium oder das Widget-Bundle, schlagen die Browser-Tests fehl statt sich zu überspringen (beide CI) |
+| `REQUIRE_HELM=1` | Dasselbe für die Tests, die den Helm-Chart rendern (`helm` im `PATH`) |
+| `RUN_NETWORK_TESTS=1` | Führt die mit `slow` markierten Tests gegen echte Dienste aus. Ohne den Schalter läuft die Suite offline: `tests/conftest.py` lässt nur Verbindungen zu Loopback zu und lässt jeden Test scheitern, der etwas anderes versucht |
+
+Die Tests lesen weder `.env` noch die eigenen `METADATA_AGENT_*`-, `B_API_KEY`-
+oder `OPENAI_API_KEY`-Variablen (`tests/conftest.py`). **Windows:** Startet
+Chromium nicht (`EPERM … playwright-artifacts`), `TEMP` und `TMP` in PowerShell
+auf ein Verzeichnis im Arbeitsbereich setzen. In Git Bash `TEMP` nicht
+umsetzen – MSYS verbiegt den Pfad, und pytest legt dann `pytest-of-*/` im
+Repository an (steht in `.gitignore`).
 
 ---
 
@@ -511,6 +535,7 @@ Die Metadaten-Felder liegen **direkt auf Top-Level** (nicht in einem `metadata`-
 > **`_origins`:** Enthält die Herkunft jedes extrahierten Feldes (`"ai"` = KI-generiert, `"user"` = manuell). Wird bei Re-Extraktion (`existing_metadata` mit `_origins`) für unveränderte Felder beibehalten.
 >
 > **`_source_text`:** Rohtext vor der KI-Extraktion. Wird bei Text-Input oder nach URL-Crawling mitgeliefert.
+> Ein neuer Text über 10.000 Zeichen zusammen mit `_source_text` gilt als neue Quelle (Hinweis in `processing.warnings`), nicht als Korrekturanweisung.
 >
 > **Screenshot:** Wenn `screenshot_method` angegeben wurde und ein Screenshot erfolgreich war, enthält die Response zusätzlich `preview_image_url` als Base64 Data-URL (`data:image/png;base64,...`).
 
@@ -521,13 +546,14 @@ Die Metadaten-Felder liegen **direkt auf Top-Level** (nicht in einem `metadata`-
 | Alles erschlossen | `200` | `processing.status: "success"` |
 | Teilergebnis | `200` | `processing.status: "partial"`, `fields_failed > 0`, Ursache in `processing.error` und `processing.errors` |
 | Kein Feld erschlossen | `502` (Drosselung `503`) | `detail` (lesbar), `error.code`, `error.request_id`, dazu `processing` |
+| Kontext, Version oder `schema_file` unbekannt | `404` | `error.code` `NOT_FOUND` – vor Abruf der Quelle, Screenshot und KI-Aufruf |
 | Textextraktion gescheitert | `504` / `502` / `422` | `error.code` `TEXT_EXTRACTION_*` |
 | Zeitlimit (`METADATA_AGENT_GENERATE_TIMEOUT`) | `504` | `error.code` `GENERATION_TIMEOUT` |
 
 **Jede Fehlerantwort** aller Endpunkte hat dieselbe Form (`ErrorResponse` in der
 OpenAPI-Spec): `detail` für Menschen – bei `422` die Liste der Schema-Verstöße –
-und `error` mit `code` (z. B. `NOT_FOUND`, `VALIDATION_ERROR`, `UPSTREAM_ERROR`,
-`UPLOAD_TIMEOUT`, `LLM_*`), `message` und `request_id` (auch im Header
+und `error` mit `code` (z. B. `NOT_FOUND`, `VALIDATION_ERROR`, `SCHEMA_UNAVAILABLE`,
+`UPSTREAM_ERROR`, `UPLOAD_TIMEOUT`, `LLM_*`), `message` und `request_id` (auch im Header
 `X-Request-ID`, im Log des Dienstes zu finden).
 
 `processing.content_type_detection.method` sagt, wie die Inhaltsart zustande
@@ -755,11 +781,11 @@ curl -X POST http://localhost:8000/validate \
 
 - **Pflichtfelder** — Sind alle `required`-Felder ausgefüllt? (Core + Schema)
 - **Datentypen** — Stimmen Werte mit erwarteten Typen überein? (number, boolean, array)
-- **Datumsformate** — ISO 8601 (`YYYY-MM-DD`, `YYYY-MM-DDTHH:MM:SS`)
+- **Datumsformate** — ISO 8601 (`YYYY-MM-DD`, `YYYY-MM-DDTHH:MM:SS`); der Tag muss existieren (kein `2026-02-30`)
 - **Zeitformate** — `HH:MM:SS` oder `HH:MM`
 - **URL-Formate** — Protokoll vorhanden (`http://` / `https://`)
-- **Geo-Koordinaten** — Latitude (−90 bis 90), Longitude (−180 bis 180)
-- **Vokabular** — Geschlossene Vokabulare mit Fuzzy-Matching und Vorschlägen
+- **Geo-Koordinaten** — Felder, deren ID auf `latitude`/`lat` bzw. `longitude`/`lon`/`lng` endet: Latitude (−90 bis 90), Longitude (−180 bis 180)
+- **Vokabular** — Geschlossene Vokabulare mit Fuzzy-Matching; Vorschläge für die ersten 5 ungültigen Werte je Feld
 
 #### Response
 
@@ -943,12 +969,12 @@ wie `ccm:oeh_event_begin` still weg.
 
 | Status | Bedeutung |
 |---|---|
-| `200` | Ergebnis im Body: `success`, `node`, `node_full`, `node_created` (`true` beim Anlegen, `false` beim Update), `fields_written`, `fields_skipped`, `field_errors`; `preview`, `collections`, `workflow` nur, wenn angefordert. Scheitert ein Schritt, kommt `success: false` mit `step` und `error` |
+| `200` | Ergebnis im Body: `success`, `node`, `node_full`, `node_created` (`true` beim Anlegen, `false` beim Update), `fields_written`, `fields_skipped`, `field_errors`; `preview`, `collections`, `workflow` nur, wenn angefordert. Scheitert ein Schritt, nachdem der Node angelegt bzw. geändert wurde (Teilergebnis), kommt `success: false` mit `step` und `error` |
 | `400` | Body ist kein JSON-Objekt |
 | `403` | Update außerhalb des Zwei-Stunden-Fensters, oder die Erstellungszeit ist nicht lesbar |
 | `404` | Node existiert nicht, oder das Dienstkonto hat keinen Zugriff |
-| `422` | Body passt nicht zum Schema (z.B. `collection_id` als String statt Liste) |
-| `502` | Update: der Node ließ sich wegen eines Repository-Fehlers nicht lesen (Fenster nicht prüfbar) – erneut versuchen |
+| `422` | Body passt nicht zum Schema (z.B. `collection_id` als String statt Liste); beim Schreiben ohne Ergebnis (nichts angelegt, nichts geändert) auch `VALIDATION_ERROR` (Objektform eines Felds verletzt) oder `SCHEMA_UNAVAILABLE` (Kontext/Version unbekannt) |
+| `502` | Update: der Node ließ sich wegen eines Repository-Fehlers nicht lesen (Fenster nicht prüfbar) – erneut versuchen. Beim Schreiben ohne Ergebnis: `UPSTREAM_ERROR` (Repository lehnte ab oder war nicht erreichbar); `detail` mit dem Fehlertext, dazu `discarded_node`/`node`/`step`/`field_errors`, wenn gesetzt |
 | `503` | Repository-Zugangsdaten nicht konfiguriert |
 | `504` | `METADATA_AGENT_UPLOAD_TIMEOUT` überschritten (`UPLOAD_TIMEOUT`); `discarded_node` nennt einen dabei angelegten, unvollständigen und verworfenen Node; `node` einen, der bleibt: schon im Workflow, vollständig geschrieben, nicht verwerfbar oder (mit `node_id`) der bestehende Node |
 
@@ -1250,6 +1276,9 @@ Nach Node-Erstellung werden automatisch Aspects hinzugefügt, die für bestimmte
 | Fall | HTTP | Kennzeichen |
 |---|---|---|
 | Body verstößt gegen das Schema | `422` | `error.code` `VALIDATION_ERROR` |
+| Schreiben ohne Ergebnis (nichts angelegt, nichts geändert): Objektform verletzt / Kontext oder Version unbekannt | `422` | `error.code` `VALIDATION_ERROR` / `SCHEMA_UNAVAILABLE`; `detail` mit dem Fehlertext, dazu `field_errors` |
+| Schreiben ohne Ergebnis: Repository lehnte ab oder war nicht erreichbar | `502` | `error.code` `UPSTREAM_ERROR`; `discarded_node`/`node`/`step`/`field_errors`, wenn gesetzt |
+| Dublette, Teilergebnis (der Node existiert) | `200` | `success: false` |
 | `node_id` außerhalb des Bearbeitungsfensters / unbekannt | `403` / `404` | wie `/nodes` |
 | `node_id` wegen eines Repository-Fehlers nicht lesbar | `502` | erneut versuchen |
 | ohne `WLO_GUEST_USERNAME`/`WLO_GUEST_PASSWORD` | `503` | |
@@ -1333,9 +1362,17 @@ curl -X POST http://localhost:8000/workflow/3039bdb2-f51f-4cc8-b1d9-3fb6b0ffc1d9
 ```
 
 `current_status` wird nach den Schritten aus dem Repository zurückgelesen,
-`history` enthält die Workflow-Historie des Nodes. Schlägt eine der beiden
-Leseoperationen fehl, bleibt das Feld leer — die bereits ausgeführten Schritte
-gelten trotzdem als erfolgreich.
+`history` enthält die Workflow-Historie des Nodes (mit den Benutzernamen der
+Bearbeitenden). Schlägt eine der beiden Leseoperationen fehl, bleibt das Feld
+leer — die bereits ausgeführten Schritte gelten trotzdem als erfolgreich.
+
+| Status | Bedeutung |
+|---|---|
+| `200` | Ergebnis im Body; scheitert ein Schritt nach einem gesetzten, kommt `success: false` |
+| `400` | `node_id` keine Node-UUID, Body fehlt oder ist kein JSON-Objekt |
+| `404` | Node unbekannt – es wird kein Status gesetzt |
+| `503` | Repository-Zugangsdaten nicht konfiguriert |
+| `504` | `METADATA_AGENT_UPLOAD_TIMEOUT` überschritten (`UPLOAD_TIMEOUT`), mit `node` |
 
 ---
 
@@ -1525,8 +1562,10 @@ Auf dem internen Port nennt `/health` zusätzlich `llm_provider` und
 
 `/ready` antwortet `{"status": "ready"}` oder `503`, wenn die Konfiguration
 nicht arbeiten kann – etwa `B_API_KEY` fehlt im Modus `static`, oder
-`WLO_GUEST_USERNAME`/`WLO_GUEST_PASSWORD` fehlen. Die Gründe stehen im Log und
-auf dem internen Port. Abhängige Dienste ruft
+`WLO_GUEST_USERNAME`/`WLO_GUEST_PASSWORD` fehlen (außer mit
+`METADATA_AGENT_REQUIRE_REPOSITORY=false` für ein Deployment, das nur
+erschließt). Das `503` hat wie jeder Fehler `detail` und `error`
+(`NOT_READY`); die Gründe stehen im Log und auf dem internen Port. Abhängige Dienste ruft
 es nicht auf. Beide stehen nicht in der OpenAPI-Spec.
 
 - Mit `METADATA_AGENT_INTERNAL_PORT` gibt es sie zusätzlich auf einem internen
@@ -1757,7 +1796,7 @@ Prefix `METADATA_AGENT_` wird automatisch vorangestellt (außer API-Keys).
 | `METADATA_AGENT_B_API_AUTH_MODE` | `auto` | `auto`, `forward` oder `static`, siehe [Welcher Schlüssel](#welcher-schlüssel-die-ki-aufrufe-trägt) |
 | `METADATA_AGENT_LLM_TEMPERATURE` | `0.3` | Kreativität (0.0–1.0) |
 | `METADATA_AGENT_LLM_MAX_TOKENS` | `2000` | Max Tokens pro LLM-Aufruf |
-| `METADATA_AGENT_LLM_MAX_RETRIES` | `3` | Wiederholungsversuche bei Fehler |
+| `METADATA_AGENT_LLM_MAX_RETRIES` | `3` | Versuche je KI-Aufruf (`1` = keine Wiederholung) und zusätzliche Aufrufe bei ungültigem Feldwert; mindestens `1` |
 | `METADATA_AGENT_LLM_RETRY_DELAY` | `1.0` | Wartezeit zwischen Retries (Sekunden) |
 
 ### Provider-spezifische Einstellungen
@@ -2112,8 +2151,9 @@ Das Docker-Image enthält **Playwright + Chromium** für datenschutzfreundliche 
 
 ```bash
 # Fertiges Image aus der internen Registry
-docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:main
-docker run -d -p 8000:8000 -e B_API_KEY=<key> $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:main
+docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v3.0.0
+docker run -d -p 127.0.0.1:8000:8000 --read-only --tmpfs /tmp --tmpfs /home/appuser --stop-timeout 120 \
+  -e B_API_KEY=<key> $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v3.0.0
 
 # Oder lokal bauen:
 cp .env.template .env
@@ -2126,7 +2166,7 @@ docker-compose up -d
 | Variable | Erforderlich | Beschreibung |
 |----------|:---:|-------------|
 | `B_API_KEY` | ✅ | B-API Key für LLM-Zugriff (oder `OPENAI_API_KEY`) |
-| `METADATA_AGENT_LLM_PROVIDER` | — | `b-api-openai` (Standard), `b-api-academiccloud`, `openai` |
+| `METADATA_AGENT_LLM_PROVIDER` | — | `b-api-openai` (Standard), `b-api-academiccloud`, `b-api-router`, `openai` |
 | `WLO_GUEST_USERNAME` | für `/upload` | WLO Repository Upload-Benutzername |
 | `WLO_GUEST_PASSWORD` | für `/upload` | WLO Repository Upload-Passwort |
 
@@ -2167,8 +2207,10 @@ railway up
 
 1. Repository mit Render verbinden
 2. Web Service erstellen
-3. Build Command: `uv sync`
-4. Start Command: `uvicorn src.main:app --host 0.0.0.0 --port $PORT`
+3. Build Command: `uv sync --locked --no-dev && uv run playwright install --with-deps chromium`
+   (ohne Chromium keine Screenshots; ohne `--with-deps` fehlen auf dem Build-Image
+   ggf. die Systembibliotheken – dann das Docker-Image verwenden)
+4. Start Command: `uv run uvicorn src.main:app --host 0.0.0.0 --port $PORT`
 5. Environment Variables konfigurieren
 
 ### Kubernetes

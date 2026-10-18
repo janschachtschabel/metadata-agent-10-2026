@@ -412,9 +412,12 @@ class MetadataWriteMixin:
                     "Accept": "application/json",
                 },
             )
-            current_aspects = []
-            if r.status_code == 200:
-                current_aspects = r.json().get("node", {}).get("aspects", [])
+            if r.status_code != 200:
+                # The PUT replaces the aspect list (hence the merge): sent
+                # without the current ones it would drop them from the node.
+                logger.warning(f"⚠️ Aspects of {node_id} unreadable: {r.status_code}")
+                return f"{lost} (HTTP {r.status_code})"
+            current_aspects = r.json().get("node", {}).get("aspects", [])
 
             new_aspects = [a for a in extra_aspects if a not in current_aspects]
             if new_aspects:

@@ -3,23 +3,21 @@
 import asyncio
 from typing import Any, Optional
 
-from fastapi import HTTPException, Request
+from fastapi import HTTPException, Request, Response
 from pydantic import ValidationError
 
-from ...models.schemas import (
-    UploadRequest,
-    UploadResponse,
-    UploadedNodeInfo,
-    FieldUploadError,
-    CollectionResult,
-    WorkflowStepResult,
-)
+from ...models.schemas import UploadRequest, UploadResponse
+from ...services.repository_result import WriteResult
 import logging
 
 
 from fastapi import APIRouter
 
-from ..responses import SAVE_NODE_ERROR_STATUS, upload_timeout_response
+from ..responses import (
+    SAVE_NODE_ERROR_STATUS,
+    failure_response,
+    upload_timeout_response,
+)
 
 from .. import deps
 from ..deps import (
@@ -27,6 +25,7 @@ from ..deps import (
     parse_json_object,
     require_repository_service,
 )
+from ...utils.loggable import loggable_url
 from ..openapi import documented_body_schema
 from .request_body import invalid_body
 
@@ -124,6 +123,22 @@ der Workflow-Historie:
 ```
 
 Für bereits hochgeladene Nodes gibt es dafür `POST /workflow/{node_id}`.
+
+## Fehlschlag
+
+Wurde nichts geschrieben, antwortet der Endpoint nicht mit `200`, sondern im
+Fehlerformat (`detail`, `error.code`, `error.request_id`):
+
+| Status | `error.code` | Fall |
+|--------|--------------|------|
+| `422` | `VALIDATION_ERROR` | Body verstößt gegen das Schema oder gegen die Objektform eines Felds (z.B. String statt `{"name": …}`) — vor der ersten Anfrage ans Repository |
+| `422` | `SCHEMA_UNAVAILABLE` | Kontext/Version unbekannt, das Schema ließ sich nicht laden |
+| `502` | `UPSTREAM_ERROR` | Repository hat Anlegen oder alle Metadaten abgelehnt, oder war nicht erreichbar; `discarded_node` nennt einen dabei angelegten und verworfenen Node, `node` einen, der nicht verworfen werden konnte, `field_errors` die abgelehnten Felder |
+
+`200` mit `success: false` bleibt für Dubletten (`duplicate: true`) und
+Teilergebnisse: Der Node existiert und trägt, was geschrieben wurde — etwa
+wenn ein späterer Schritt scheiterte, oder bei `node_id`, wenn der Node
+teilweise geschrieben sein kann.
 
 ## Response
 
@@ -244,7 +259,7 @@ async def upload_to_repository(request: Request):
     capture = _PreviewCapture.start(req, _fields_with_source(req))
 
     try:
-        result = await repo_service.upload_metadata(
+        raw = await repo_service.upload_metadata(
             metadata=req.metadata,
             check_duplicates=req.check_duplicates,
             start_workflow=req.start_workflow,
@@ -261,27 +276,52 @@ async def upload_to_repository(request: Request):
             preview_source=capture.source,
             deadline=_deadline(),
         )
+        result = WriteResult.from_service(raw)
+        refusal = refused_write(result)
     except BaseException:
-        # As in /generate: nobody awaits the capture any more.
+        # As in /generate, and for a refusal raised as 403/404/502: nobody
+        # awaits the capture any more.
         capture.cancel()
         raise
-
-    if result.get("error_code") == "upload_timeout":
+    if refusal is not None:
         capture.cancel()
-        return upload_timeout_response(deps.settings.upload_timeout, result)
+        return refusal
 
-    # A handed-over node that may not be written is refused like in /nodes.
-    error_code = result.get("error_code")
-    if error_code in SAVE_NODE_ERROR_STATUS:
-        capture.cancel()
-        raise HTTPException(
-            status_code=SAVE_NODE_ERROR_STATUS[error_code],
-            detail=result.get("error", "Node kann nicht bearbeitet werden"),
-        )
-
-    preview_status = capture.status(result.get("preview"))
+    preview_status = capture.status(result.preview)
     capture.settle()
-    return _upload_response(result, preview_status)
+    return result.response(UploadResponse, preview_status)
+
+
+def refused_write(result: WriteResult) -> Optional[Response]:
+    """
+    The error answer of /upload and /nodes, or None for a result to report.
+
+    Deadline: 504. A handed-over node that may not be written: 403/404/502
+    (raised). A write that left nothing behind (API-08): 422 or 502, `detail`
+    with the text `error` had, plus the node it created and discarded
+    (`discarded_node`) or could not discard (`node`), and the refused fields.
+    """
+    if result.error_code == "upload_timeout":
+        return upload_timeout_response(
+            deps.settings.upload_timeout,
+            {"error": result.error or "", **result.present("discarded_node", "node")},
+        )
+    if result.error_code in SAVE_NODE_ERROR_STATUS:
+        raise HTTPException(
+            status_code=SAVE_NODE_ERROR_STATUS[result.error_code],
+            detail=result.error or "Node kann nicht bearbeitet werden",
+        )
+    failure = result.nothing_written
+    if failure is None:
+        return None
+    status, code = failure
+    detail = result.error or "Schreiben ins Repository fehlgeschlagen"
+    return failure_response(
+        status,
+        detail,
+        {"code": code, "message": detail},
+        **result.present("discarded_node", "node", "step", "field_errors"),
+    )
 
 
 def _deadline() -> float:
@@ -356,7 +396,8 @@ class _PreviewCapture:
             return cls(None)
         screenshot_service = deps.get_screenshot_service()
         logger.info(
-            f"📸 Starting async screenshot capture: {preview_url} (method: {req.screenshot_method.value})"
+            f"📸 Starting async screenshot capture: {loggable_url(preview_url)} "
+            f"(method: {req.screenshot_method.value})"
         )
         return cls(
             asyncio.create_task(
@@ -404,39 +445,3 @@ class _PreviewCapture:
             self.task.cancel()
         elif not self.task.cancelled():
             self.task.exception()  # fetched, so asyncio does not warn about it
-
-
-def _upload_response(
-    result: dict[str, Any], preview_status: Optional[dict]
-) -> UploadResponse:
-    node_info = UploadedNodeInfo(**result["node"]) if result.get("node") else None
-    raw_errors = result.get("field_errors")
-    field_errors = [FieldUploadError(**e) for e in raw_errors] if raw_errors else None
-    collections = (
-        [CollectionResult(**c) for c in result["collections"]]
-        if result.get("collections") is not None
-        else None
-    )
-    workflow = (
-        [WorkflowStepResult(**step) for step in result["workflow"]]
-        if result.get("workflow") is not None
-        else None
-    )
-    return UploadResponse(
-        success=result.get("success", False),
-        duplicate=result.get("duplicate"),
-        node=node_info,
-        node_full=result.get("node_full"),
-        error=result.get("error"),
-        step=result.get("step"),
-        fields_written=result.get("fields_written"),
-        fields_skipped=result.get("fields_skipped"),
-        node_created=result.get("node_created"),
-        schema_used=result.get("schema_used"),
-        repo_fields_available=result.get("repo_fields_available"),
-        field_errors=field_errors,
-        preview=preview_status,
-        collections=collections,
-        workflow=workflow,
-        discarded_node=result.get("discarded_node"),
-    )

@@ -11,7 +11,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from .utils.security_headers import SecurityHeadersMiddleware
+from .utils.security_headers import (
+    ScreenshotBrowserRefusalMiddleware,
+    SecurityHeadersMiddleware,
+)
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from .api import deps
@@ -189,6 +192,10 @@ app.add_middleware(UnexpectedErrorMiddleware)
 app.add_middleware(
     BodySizeLimitMiddleware, max_bytes=lambda: deps.settings.max_request_bytes
 )
+
+# Whatever a captured page makes the screenshot browser send to this API -
+# over loopback, through redirects - is refused before any endpoint (S-15).
+app.add_middleware(ScreenshotBrowserRefusalMiddleware)
 
 app.add_middleware(
     CORSMiddleware,

@@ -2,9 +2,10 @@
 
 import asyncio
 import ipaddress
+import re
 import socket
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
@@ -106,8 +107,41 @@ def _checked_url(url: str) -> tuple[str, str, int]:
         hostname = authority.raw_host.decode("ascii")
     except (httpx.InvalidURL, UnicodeError) as exc:
         raise PublicUrlError("URL ist syntaktisch ungültig.") from exc
+    _require_plain_host(hostname)
 
-    return candidate, hostname, port or (443 if parsed.scheme == "https" else 80)
+    # Handed on with the host as checked (audit 18.10. final, S-14): the text
+    # extraction and Chromium parse the URL again, and must find the same host.
+    # Path and query stay as they were, without the tabs and line breaks
+    # urlsplit (like every browser) drops.
+    normalized = urlunsplit(
+        (
+            authority.scheme,
+            authority.netloc.decode("ascii"),
+            parsed.path,
+            parsed.query,
+            parsed.fragment,
+        )
+    )
+    return normalized, hostname, port or (443 if parsed.scheme == "https" else 80)
+
+
+# Letters, digits, hyphen - and underscore, which DNS allows and real hosts use.
+# Everything else ('\', '%', spaces, control characters) is read differently by
+# Python and WHATWG parsers: 'http://127.0.0.1\x.example/' is one hostname for
+# httpx and the host 127.0.0.1 for Chromium.
+_HOST_LABEL = re.compile(r"[a-z0-9_-]+", re.IGNORECASE)
+
+
+def _require_plain_host(hostname: str) -> None:
+    """Accept an IP literal or a name of plain labels (after IDNA), else raise."""
+    try:
+        ipaddress.ip_address(hostname)
+        return
+    except ValueError:
+        pass
+    labels = hostname[:-1].split(".") if hostname.endswith(".") else hostname.split(".")
+    if not all(_HOST_LABEL.fullmatch(label) for label in labels):
+        raise PublicUrlError("Hostname enthält unzulässige Zeichen.")
 
 
 async def resolve_public_host(hostname: str, port: int) -> list[str]:

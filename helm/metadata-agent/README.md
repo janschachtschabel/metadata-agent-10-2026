@@ -22,7 +22,9 @@ helm install metadata-agent helm/metadata-agent \
 `METADATA_AGENT_B_API_AUTH_MODE=forward`. Alle Secret-Schlüssel sind optional
 eingebunden; ob die Konfiguration arbeiten kann, meldet `/ready` – ohne
 `WLO_GUEST_USERNAME`/`WLO_GUEST_PASSWORD` (etwa bei einem Tippfehler in
-`secret.existingSecret`) bleibt der Pod nicht bereit. Prüfliste für die erste
+`secret.existingSecret`) bleibt der Pod nicht bereit. Ein Deployment, das nur
+erschließt, setzt `env.METADATA_AGENT_REQUIRE_REPOSITORY: "false"` (bereit ohne
+sie, `/upload` und `/nodes` antworten dann mit `503`). Prüfliste für die erste
 Installation und Rollback: [DEPLOYMENT.md](../../DEPLOYMENT.md).
 
 **Kein Ingress hinter der B-API.** Der B-API-Proxy (`forwardApiKey`) ruft den

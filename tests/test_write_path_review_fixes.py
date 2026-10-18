@@ -533,3 +533,47 @@ async def test_a_failed_preview_fetch_names_the_type_not_the_text(error):
     assert message.startswith("Preview-Bild konnte nicht geladen werden")
     assert type(error).__name__ in message
     assert _no_secret(message)
+
+
+# --------- review 18.10. nit: the capture is cancelled exactly when refused
+
+
+@pytest.mark.parametrize(
+    "error_code, status",
+    [("write_failed", 502), ("node_not_found", 404), ("upload_timeout", 504)],
+)
+def test_a_refused_upload_cancels_its_running_capture(monkeypatch, error_code, status):
+    from types import SimpleNamespace
+
+    started: list[asyncio.Task] = []
+
+    async def capture(**kwargs):
+        started.append(asyncio.current_task())
+        await asyncio.sleep(3600)
+
+    async def upload_metadata(**kwargs):
+        await asyncio.sleep(0)  # the capture task starts
+        return {"success": False, "error_code": error_code, "error": "nein"}
+
+    monkeypatch.setattr(
+        deps, "get_screenshot_service", lambda: SimpleNamespace(capture=capture)
+    )
+    monkeypatch.setattr(
+        deps,
+        "get_repository_service",
+        lambda: SimpleNamespace(upload_metadata=upload_metadata),
+    )
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/upload",
+            json={
+                "metadata": {"cclom:title": "Kurs"},
+                "preview_url": "https://example.org/",
+            },
+        )
+        # Before the client's loop shuts down and cancels whatever is left.
+        cancelled = bool(started) and started[0].cancelling() > 0
+
+    assert response.status_code == status, response.text
+    assert cancelled

@@ -17,7 +17,7 @@ from ...models.schemas import (
 
 from fastapi import APIRouter
 
-from ..responses import upload_timeout_response
+from ..responses import SAVE_NODE_ERROR_STATUS, upload_timeout_response
 from .request_body import invalid_body
 
 from .. import deps
@@ -160,6 +160,15 @@ Die Liste stammt aus der Repository-Konfiguration (`/rest/config/v1/values`).
 Unbekannte Status werden mit `422` abgelehnt, damit ein Tippfehler nicht als
 Status im Repository landet.
 
+## Fehler
+
+- `404` — der Node existiert nicht oder das Dienstkonto sieht ihn nicht; es wird
+  kein Status gesetzt.
+- `504` `UPLOAD_TIMEOUT` — nach `METADATA_AGENT_UPLOAD_TIMEOUT` Sekunden; `node`
+  nennt den Node, einzelne Schritte können bereits gesetzt sein.
+- `200` mit `success: false` — mindestens ein Schritt scheiterte; `steps` sagt,
+  welcher, die folgenden sind als `skipped` gemeldet.
+
 ## Response
 
 - **steps**: Ergebnis pro Schritt in der ausgeführten Reihenfolge
@@ -219,12 +228,29 @@ async def set_node_workflow(node_id: str, request: Request):
     except ValidationError as e:
         raise invalid_body(e) from e
 
-    result = await repo_service.set_workflow(
-        node_id=node_id,
-        steps=req.steps,
-        comment=req.comment,
-        receiver=req.receiver,
-    )
+    # N steps of up to 45 s each plus the reads: bounded like /upload.
+    try:
+        async with asyncio.timeout(deps.settings.upload_timeout):
+            result = await repo_service.set_workflow(
+                node_id=node_id,
+                steps=req.steps,
+                comment=req.comment,
+                receiver=req.receiver,
+            )
+    except TimeoutError:
+        return upload_timeout_response(
+            deps.settings.upload_timeout,
+            {
+                "node": {"nodeId": node_id},
+                "error": f"Workflow von Node {node_id} abgebrochen — "
+                "einzelne Schritte können bereits gesetzt sein",
+            },
+        )
+    if result.get("error_code") in SAVE_NODE_ERROR_STATUS:
+        raise HTTPException(
+            status_code=SAVE_NODE_ERROR_STATUS[result["error_code"]],
+            detail=result.get("error", "Node kann nicht bearbeitet werden"),
+        )
 
     steps = None
     if result.get("steps") is not None:

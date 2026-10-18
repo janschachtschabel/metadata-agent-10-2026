@@ -151,12 +151,28 @@ def test_a_blank_node_id_becomes_none_rather_than_staying_empty_text():
 # ------------------------------------------------------------- through the API
 
 
-def test_the_documented_example_is_accepted():
+class _OfflineLlm:
+    """Answers the field without a network call (tests run offline, conftest.py)."""
+
+    provider, model = "b-api-academiccloud", "deepseek-v4-flash"
+
+    async def extract_field(self, field, *args, **kwargs):
+        return field.get("id"), "2025-03-15", None
+
+    async def close(self):
+        pass
+
+
+def test_the_documented_example_is_accepted(monkeypatch):
     """If the example the UI hands out does not validate, nothing else matters."""
+    from src.api import deps
+
+    monkeypatch.setattr(deps, "get_llm_service", lambda **kwargs: _OfflineLlm())
+
     with TestClient(app) as client:
         response = client.post("/extract-field", json=DOCS_EXAMPLE)
 
-    assert response.status_code != 422, response.json()
+    assert response.status_code == 200, response.json()
 
 
 @pytest.mark.parametrize(

@@ -13,9 +13,9 @@ from ..services.repository_curation import is_valid_node_id
 from ..config import get_settings
 from ..services.diagnostics import check_dependencies
 from ..services.input_source_service import get_input_source_service
-from ..services.metadata_service import get_metadata_service
+from ..services.metadata_service import get_metadata_service as _get_metadata_service
 from ..services.repository_service import get_repository_service
-from ..services.llm_service import get_llm_service
+from ..services.llm_service import get_llm_service as _get_llm_service
 from ..services.screenshot_service import (
     get_screenshot_service,
 )
@@ -35,6 +35,7 @@ __all__ = [
     "carry_schema_markers",
     "sanitize_json_string",
     "check_provider_override",
+    "check_model_override",
     "parse_json_object",
     "require_repository_service",
     "require_node_id",
@@ -65,11 +66,21 @@ def carry_schema_markers(data: dict) -> dict:
     return data
 
 
+# Largest body whose invalid JSON is repaired. The repair walks the text in
+# Python on the event loop: 20 MB took 2.4 s, for every request on the worker
+# (audit 18.10. final, S-16). Pasted multi-line texts are far below this; a
+# larger invalid body is refused with 400 like any other invalid JSON. Valid
+# JSON of any size up to METADATA_AGENT_MAX_REQUEST_BYTES parses as before.
+MAX_REPAIR_CHARS = 1_000_000
+
+
 def sanitize_json_string(raw_body: str) -> str:
     """
     Sanitize raw JSON string by escaping control characters in string values.
     This allows malformed JSON with literal newlines in strings to be parsed.
     Handles multi-line text input that wasn't properly escaped.
+
+    Bodies over MAX_REPAIR_CHARS come back unrepaired.
     """
     # Remove BOM if present
     raw_body = raw_body.lstrip("\ufeff")
@@ -80,8 +91,13 @@ def sanitize_json_string(raw_body: str) -> str:
         return raw_body  # Already valid JSON
     except json.JSONDecodeError:
         pass
+    if len(raw_body) > MAX_REPAIR_CHARS:
+        return raw_body
+    return _repair_control_characters(raw_body)
 
-    # Escape literal newlines and tabs inside JSON strings
+
+def _repair_control_characters(raw_body: str) -> str:
+    """Escape literal newlines and tabs inside JSON strings, drop other controls."""
     # This handles cases where users paste multi-line text without escaping
     result = []
     in_string = False
@@ -139,6 +155,37 @@ def check_provider_override(provider: str | None) -> None:
                 f"Provider openai läuft (hier: {settings.llm_provider})."
             ),
         )
+
+
+def check_model_override(provider: str | None, model: str | None) -> None:
+    """
+    Refuse a model outside METADATA_AGENT_ALLOWED_LLM_MODELS (empty: any).
+
+    A model named per request runs on the server's key wherever no caller key
+    is forwarded (audit 18.10. final, S-19). The provider's configured default
+    is always allowed; the answer names no setting.
+    """
+    allowed = settings.allowed_llm_model_names()
+    if not allowed or model is None:
+        return
+    default = settings.get_llm_config(provider_override=provider)["model"]
+    if model not in allowed and model != default:
+        raise HTTPException(
+            status_code=422,
+            detail=f"llm_model '{model}' ist auf diesem Dienst nicht freigegeben.",
+        )
+
+
+def get_metadata_service(llm_provider: str | None = None, llm_model: str | None = None):
+    """The metadata service - for an allowed model only (check_model_override)."""
+    check_model_override(llm_provider, llm_model)
+    return _get_metadata_service(llm_provider=llm_provider, llm_model=llm_model)
+
+
+def get_llm_service(llm_provider: str | None = None, llm_model: str | None = None):
+    """The LLM service - for an allowed model only (check_model_override)."""
+    check_model_override(llm_provider, llm_model)
+    return _get_llm_service(llm_provider=llm_provider, llm_model=llm_model)
 
 
 def parse_json_object(raw_body: bytes, example: str) -> dict:

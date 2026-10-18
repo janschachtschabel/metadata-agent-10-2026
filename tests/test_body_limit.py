@@ -142,3 +142,46 @@ async def test_the_buffered_body_is_not_held_twice_while_the_app_runs():
     ((length, in_use),) = sizes
     assert length == 2 * chunk
     assert in_use < 1.5 * length
+
+
+# ------------------------------------------------- repair of invalid JSON
+# Audit 18.10. final, S-16: an invalid 20 MB body was walked character by
+# character on the event loop - 2.4 s per request, for everyone on the worker.
+
+
+def test_a_small_body_with_raw_line_breaks_is_still_repaired():
+    from src.api.deps import parse_json_object
+
+    data = parse_json_object(b'{"text": "Zeile 1\nZeile 2"}', "{}")
+
+    assert data == {"text": "Zeile 1\nZeile 2"}
+
+
+def test_a_large_invalid_body_is_refused_without_a_repair(monkeypatch):
+    from fastapi import HTTPException
+
+    from src.api import deps
+
+    walked = []
+    original = deps._repair_control_characters
+
+    def spy(raw):
+        walked.append(len(raw))
+        return original(raw)
+
+    monkeypatch.setattr(deps, "_repair_control_characters", spy)
+    body = ('{"text": "' + "x" * (deps.MAX_REPAIR_CHARS + 1) + '\n"}').encode()
+
+    with pytest.raises(HTTPException) as error:
+        deps.parse_json_object(body, "{}")
+
+    assert error.value.status_code == 400
+    assert walked == []
+
+
+def test_a_large_valid_body_is_parsed_as_before():
+    from src.api.deps import MAX_REPAIR_CHARS, parse_json_object
+
+    text = "x" * (MAX_REPAIR_CHARS + 1)
+
+    assert parse_json_object(f'{{"text": "{text}"}}'.encode(), "{}") == {"text": text}

@@ -50,7 +50,11 @@ class FieldNormalizer:
     }
 
     def normalize_field_value(
-        self, value: Any, field_schema: dict, normalize_vocabularies: bool = True
+        self,
+        value: Any,
+        field_schema: dict,
+        normalize_vocabularies: bool = True,
+        exact_only: bool = False,
     ) -> Any:
         """
         Normalize a single field value based on its schema.
@@ -59,6 +63,9 @@ class FieldNormalizer:
             value: The value to normalize
             field_schema: The field's schema definition
             normalize_vocabularies: Whether to normalize vocabulary values
+            exact_only: For values the caller or the node brings: a vocabulary
+                value is matched only exactly (URI, value, label or altLabel
+                in any language) and kept unchanged when nothing matches
 
         Returns:
             Normalized value
@@ -85,7 +92,7 @@ class FieldNormalizer:
                 # no value: dropped rather than written as null.
                 normalized = (
                     self._normalize_single_value(
-                        v, datatype, vocabulary, normalize_vocabularies
+                        v, datatype, vocabulary, normalize_vocabularies, exact_only
                     )
                     for v in value
                     if v is not None and v != ""
@@ -100,7 +107,7 @@ class FieldNormalizer:
                     return value
 
         return self._normalize_single_value(
-            value, datatype, vocabulary, normalize_vocabularies
+            value, datatype, vocabulary, normalize_vocabularies, exact_only
         )
 
     def _is_object_field(self, field_schema: dict) -> bool:
@@ -174,8 +181,16 @@ class FieldNormalizer:
         datatype: str,
         vocabulary: Optional[dict],
         normalize_vocabularies: bool,
+        exact_only: bool = False,
     ) -> Any:
         """Normalize a single (non-array) value."""
+
+        # The caller's own values: exact matches only, unknown ones stay - a
+        # legacy concept the repository still holds is no reason to drop it
+        # (final audit 18.10.), and no fuzzy search over unbounded lists.
+        if exact_only and vocabulary and normalize_vocabularies:
+            if vocabulary.get("concepts"):
+                return self._exact_concept(value, vocabulary["concepts"])
 
         # Vocabulary normalization
         if vocabulary and normalize_vocabularies:
@@ -355,6 +370,45 @@ class FieldNormalizer:
         if best_match is None:
             return None
         return _concept_key(best_match, has_uris, has_values, best_match.get("label"))
+
+    def _exact_concept(self, value: Any, concepts: list) -> Any:
+        """The concept a value names exactly (as 2.1.1 matched), else the value itself."""
+        exact, labels = self._exact_index(concepts)
+        if isinstance(value, str):
+            text = value.strip()
+            found = exact.get(value, exact.get(text, labels.get(text.lower())))
+        elif isinstance(value, (bool, int, float)):
+            found = exact.get(str(value).lower())
+        else:
+            found = None
+        return value if found is None else found
+
+    def _exact_index(self, concepts: list) -> tuple[dict, dict]:
+        """
+        URI/value -> concept key and lower-case label/altLabel -> concept key.
+
+        Built once per vocabulary and kept for the next entries of the same
+        list: 1,000 caller values against 894 concepts stay a dictionary lookup.
+        """
+        cached = getattr(self, "_exact_cache", None)
+        if cached is not None and cached[0] is concepts:
+            return cached[1]
+        has_uris = any(c.get("uri") for c in concepts)
+        has_values = any(c.get("value") for c in concepts)
+        exact: dict = {}
+        labels: dict = {}
+        for concept in concepts:
+            key = _concept_key(concept, has_uris, has_values, _german_label(concept))
+            for own in (concept.get("uri"), concept.get("value")):
+                if own:
+                    exact.setdefault(own, key)
+            label = concept.get("label", "")
+            names = list(label.values()) if isinstance(label, dict) else [label]
+            for name in [*names, *concept.get("altLabels", [])]:
+                if isinstance(name, str) and name.strip():
+                    labels.setdefault(name.strip().lower(), key)
+        self._exact_cache = (concepts, (exact, labels))
+        return exact, labels
 
     def _find_fuzzy_match(self, value: str, concepts: list) -> Optional[dict]:
         """The concept whose label is closest, within 30 % of the length and at most 3 edits."""

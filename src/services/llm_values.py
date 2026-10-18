@@ -29,18 +29,20 @@ class ValueNormalizerMixin:
 
     def _is_valid_vocabulary_value(self, value: Any, vocabulary: dict) -> bool:
         """
-        Every entry is a concept of the closed vocabulary.
+        The answer holds a concept of the closed vocabulary.
 
-        A None inside a list is an answer that matched no concept: the list is
-        invalid, so extract_field asks again (audit L-07). An empty list is "no
-        value", nothing to ask again about.
+        A list counts when at least one entry is a concept; extract_field keeps
+        those and drops the rest. Asking again for a partial match threw its
+        matches away whenever a later attempt matched less (final audit
+        18.10.). A list matching nothing is asked again (audit L-07); an empty
+        list is "no value", nothing to ask again about.
         """
         if value is None:
             return False
 
         valid_entries = concept_keys(vocabulary.get("concepts", []))
         if isinstance(value, list):
-            return all(v is not None and v in valid_entries for v in value)
+            return not value or any(v is not None and v in valid_entries for v in value)
         return value in valid_entries
 
     def _parse_json_response(self, content: str) -> Optional[dict[str, Any]]:

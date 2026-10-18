@@ -81,3 +81,36 @@ def test_models_and_utils_never_import_the_services(layer):
     }
 
     assert not {file: names for file, names in offenders.items() if names}
+
+
+ROOT_MODULES = ("config.py", "metrics.py", "infra.py")
+
+
+@pytest.mark.parametrize("module", ROOT_MODULES)
+def test_root_modules_never_import_the_api_or_the_services(module):
+    """
+    Audit 18.10. final: config, metrics and infra sit below everything - the
+    services read the settings, the internal port serves /metrics.
+    """
+    names = _imports(SRC / module)
+
+    assert not sorted(
+        name
+        for name in names
+        if name.split(".")[:2] in (["src", "api"], ["src", "services"])
+    )
+
+
+def test_nothing_imports_the_application_module():
+    """src.main builds the app at import time; importing it is a side effect."""
+    offenders = sorted(
+        str(path.relative_to(SRC))
+        for path in SRC.rglob("*.py")
+        if path.name != "main.py"
+        and any(
+            name == "src.main" or name.startswith("src.main.")
+            for name in _imports(path)
+        )
+    )
+
+    assert not offenders

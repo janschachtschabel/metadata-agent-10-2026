@@ -52,7 +52,7 @@ def _assert_logged_without_secrets(caplog, scheme):
 async def test_a_blocked_request_is_logged_without_query_or_credentials(caplog):
     route = _Route(SECRET_URL)
 
-    await _public_requests_only()(route)
+    await _public_requests_only([])(route)
 
     assert route.aborted == "blockedbyclient"
     _assert_logged_without_secrets(caplog, "http")
@@ -66,3 +66,54 @@ async def test_a_blocked_websocket_is_logged_without_query_or_credentials(caplog
 
     assert socket.closed is not None
     _assert_logged_without_secrets(caplog, "ws")
+
+
+async def test_a_page_that_cannot_be_loaded_is_logged_without_query(caplog):
+    from playwright.async_api import Error as PlaywrightError
+
+    from src.services.screenshot_service import ScreenshotError, _open
+
+    class _Page:
+        async def goto(self, url, **kwargs):
+            raise PlaywrightError(
+                f"Page.goto: net::ERR_CONNECTION_REFUSED at {SECRET_URL}\n"
+                f'Call log:\n  - navigating to "{SECRET_URL}"'
+            )
+
+    caplog.set_level("INFO")
+    with pytest.raises(ScreenshotError):
+        await _open(_Page(), SECRET_URL.replace("user:passwort@", ""), [])
+
+    for secret in ("token", "geheim", "passwort", "abschnitt"):
+        assert secret not in caplog.text, secret
+
+
+async def test_text_extraction_logs_the_url_without_query(caplog, monkeypatch):
+    import socket
+
+    import httpx
+
+    from src.services.input_source_service import InputSourceService
+
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *a, **kw: [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))
+        ],
+    )
+
+    async def post(self, url, json=None, **kwargs):
+        return httpx.Response(
+            200, json={"text": ""}, request=httpx.Request("POST", url)
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", post)
+    caplog.set_level("INFO")
+
+    with pytest.raises(Exception) as error:
+        await InputSourceService().fetch_from_url("https://example.org/a?token=geheim")
+
+    assert "https://example.org/a" in caplog.text
+    assert "geheim" not in caplog.text
+    assert "geheim" not in str(error.value)

@@ -18,6 +18,7 @@ from ..deps import (
     require_repository_service,
 )
 from ..responses import SAVE_NODE_ERROR_STATUS
+from .request_body import invalid_body
 
 
 router = APIRouter()
@@ -53,6 +54,12 @@ router = APIRouter()
 ## Summary
 
 Zählt die Anzahl der Felder pro Status-Kategorie.
+
+## Fehler
+
+- `404` — der Node existiert nicht oder das Dienstkonto hat keinen Zugriff (Repository `403`/`404`)
+- `422` — der Body passt nicht zu `VerifyRequest`; `detail` nennt Feld und Grund
+- `502` — das Repository konnte den Node wegen eines Fehlers nicht liefern
 """,
     openapi_extra={
         "requestBody": {
@@ -112,9 +119,7 @@ async def verify_upload(node_id: str, request: Request):
         try:
             req = VerifyRequest(**data)
         except ValidationError as e:
-            raise HTTPException(
-                status_code=422, detail=f"Ungültiger Request-Body: {e.errors()}"
-            ) from e
+            raise invalid_body(e) from e
 
         expected_metadata = req.expected_metadata
 

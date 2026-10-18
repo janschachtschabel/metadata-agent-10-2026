@@ -13,9 +13,9 @@ from typing import Any, Optional
 
 from ..config import get_settings
 from ..utils.schema_loader import (
-    get_content_types,
     get_content_type_prompt,
     detect_schema_from_text,
+    read_content_types,
 )
 from . import metadata_export, metadata_validation
 from .llm_auth import current_auth_source
@@ -190,6 +190,13 @@ class MetadataService:
         field_schemas: dict[Any, dict] = {
             f.get("id"): f.get("system", {}) for f in all_fields
         }
+        # The fields that now hold this run's LLM answer (the merge may have kept
+        # the caller's value instead).
+        extracted_ids = {
+            field_id
+            for field_id, value in extracted_values.items()
+            if value is not None and flat_metadata.get(field_id) is value
+        }
         flat_metadata = await self._post_process(
             flat_metadata,
             field_schemas,
@@ -199,6 +206,7 @@ class MetadataService:
             enable_geocoding,
             warnings,
             deadline,
+            extracted_ids,
         )
         ordered_metadata = order_by_schema(
             flat_metadata, context, version, schema_file, include_core
@@ -245,19 +253,30 @@ class MetadataService:
         enable_geocoding: bool,
         warnings: list[str],
         deadline: Optional[float] = None,
+        extracted_ids: Optional[set] = None,
     ) -> dict[str, Any]:
         """
         Normalise values by their schema, geocode locations, shape the output.
 
+        The fields in `extracted_ids` (this run's LLM answers) get the full
+        vocabulary matching, fuzzy included: a closed vocabulary drops what is
+        no concept. The caller's or the node's values are matched exactly, as
+        in 2.1.1 (URI, value, label or altLabel -> the concept), and what
+        matches nothing - a legacy concept - is kept (final audit 18.10.).
+
         Each step that fails leaves the metadata as it was and adds a warning.
         """
+        extracted_ids = extracted_ids or set()
         if normalize_output:
             for field_id, value in flat_metadata.items():
                 if value is not None and field_id in field_schemas:
                     try:
                         flat_metadata[field_id] = (
                             self.field_normalizer.normalize_field_value(
-                                value, field_schemas[field_id], normalize_vocabularies
+                                value,
+                                field_schemas[field_id],
+                                normalize_vocabularies,
+                                exact_only=field_id not in extracted_ids,
                             )
                         )
                     except Exception as e:
@@ -305,7 +324,14 @@ class MetadataService:
             LLMError: a fatal LLM failure - no fallback can make up for a
                 refused key, and the field extraction would fail the same way.
         """
-        content_types = get_content_types(context, version)
+        reason: Optional[str]
+        try:
+            content_types = read_content_types(context, version)
+            reason = "für diesen Kontext ist keine KI-Erkennung konfiguriert"
+        except Exception as e:
+            logger.warning(f"Content types of {context!r} {version} unreadable: {e}")
+            content_types = []
+            reason = "die Inhaltsarten des Kontexts konnten nicht gelesen werden"
         if content_types:
             prompt_hint = get_content_type_prompt(context, version, language)
             detection = await self.llm_service.detect_content_type(
@@ -318,8 +344,6 @@ class MetadataService:
                     "schema_file": detection.schema_file,
                 }
             reason = detection.problem
-        else:
-            reason = "für diesen Kontext ist keine KI-Erkennung konfiguriert"
 
         fallback = detect_schema_from_text(text, context, version)
         return {

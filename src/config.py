@@ -126,6 +126,12 @@ class Settings(BaseSettings):
     # while setting up or debugging a deployment.
     debug_endpoints: bool = False
 
+    # Models a request may name in llm_model, comma-separated; empty: any (as in
+    # 2.1.1). Wherever no caller key is forwarded, that model runs on the
+    # server's key (audit 18.10. final, S-19). The provider's configured default
+    # model is always allowed.
+    allowed_llm_models: str = ""
+
     # B-API Base URL (Staging/Prod — endpoint paths are derived automatically)
     # Staging: https://b-api.staging.openeduhub.net
     # Prod:    https://b-api.prod.openeduhub.net
@@ -191,7 +197,9 @@ class Settings(BaseSettings):
     # 'minimal' is rejected by the API; valid: none, low, medium, high.
     llm_verbosity: str = "low"
     llm_reasoning_effort: str = "low"
-    llm_max_retries: int = 3
+    # Attempts of one LLM call (1 = no repetition) - and how many extra calls an
+    # invalid field value may cost. 0 would leave a call no attempt at all.
+    llm_max_retries: int = Field(default=3, ge=1)
     llm_retry_delay: float = 1.0
 
     # How hard the gateway may be pushed. Unset means: use the default
@@ -244,6 +252,11 @@ class Settings(BaseSettings):
     # WLO Repository Upload Credentials (for /upload endpoint)
     wlo_guest_username: str = Field(default="", alias="WLO_GUEST_USERNAME")
     wlo_guest_password: str = Field(default="", alias="WLO_GUEST_PASSWORD")
+
+    # Whether /ready requires WLO_GUEST_USERNAME/PASSWORD. false: a deployment
+    # that only generates (as 2.1.1 could) gets traffic without them; /upload
+    # and /nodes then answer 503 and the start log warns.
+    require_repository: bool = True
 
     # WLO Repository Inbox ID (where new upload nodes are created)
     wlo_inbox_id: str = "21144164-30c0-4c01-ae16-264452197063"
@@ -406,6 +419,12 @@ class Settings(BaseSettings):
         config.update(self.get_throughput_limits(config["provider"]))
         return config
 
+    def allowed_llm_model_names(self) -> set[str]:
+        """METADATA_AGENT_ALLOWED_LLM_MODELS as a set; empty means: no restriction."""
+        return {
+            name.strip() for name in self.allowed_llm_models.split(",") if name.strip()
+        }
+
     def config_warnings(self) -> list[str]:
         """
         Settings that cannot work together, printed at startup - never a secret.
@@ -452,7 +471,12 @@ class Settings(BaseSettings):
         if missing:
             warnings.append(
                 f"{' und '.join(missing)} {'fehlt' if len(missing) == 1 else 'fehlen'}: "
-                "/ready meldet 503, /upload und /nodes antworten mit 503."
+                + (
+                    "/ready meldet 503, /upload und /nodes antworten mit 503."
+                    if self.require_repository
+                    else "/upload und /nodes antworten mit 503 (/ready bleibt bereit: "
+                    "METADATA_AGENT_REQUIRE_REPOSITORY=false)."
+                )
             )
 
         # Deadline + what runs after it must fit the 120 s of ingress and grace

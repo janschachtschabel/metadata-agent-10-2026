@@ -467,18 +467,10 @@ def test_generate_refuses_a_bad_request_before_fetching_the_source(monkeypatch):
                 "schema_file": "http://w3id.org/gibt/es/nicht",
             },
         )
-        long_correction = client.post(
-            "/generate",
-            json={
-                "input_source": "url",
-                "source_url": "https://example.org/kurs",
-                "text": "x" * 10_001,
-                "existing_metadata": {"_source_text": "Seite", "cclom:title": "T"},
-            },
-        )
+        # A text over the correction limit is no longer refused: since the final
+        # audit of 18.10. it is a new source (tests/test_generate_final_audit.py).
 
     assert unknown_schema.status_code == 400, unknown_schema.text
-    assert long_correction.status_code == 400, long_correction.text
 
 
 # ------------- release review 2026-10-18 (M2): a finished write is never undone

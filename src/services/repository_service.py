@@ -25,6 +25,7 @@ from .repository_nodes import NodeMixin
 from .repository_preview import MAX_PREVIEW_BYTES as MAX_PREVIEW_BYTES
 from .repository_preview import PreviewError as PreviewError
 from .repository_preview import resolve_preview as resolve_preview
+from .repository_result import METADATA_INVALID, WRITE_FAILED
 from .repository_review import ReviewMixin
 from .repository_support import get_repository_config as get_repository_config
 
@@ -478,6 +479,7 @@ class RepositoryService(NodeMixin, MetadataWriteMixin, ReviewMixin):
             if violations:
                 return {
                     "success": False,
+                    "error_code": METADATA_INVALID,
                     "error": "Metadaten wurden nicht geschrieben: "
                     + "; ".join(v["message"] for v in violations),
                     "violations": violations,
@@ -570,6 +572,18 @@ class RepositoryService(NodeMixin, MetadataWriteMixin, ReviewMixin):
         discard is shielded: a cancel arriving meanwhile must not abort it.
         """
         node_id = progress.created_node_id
+        if job.node_id and progress.node_touched and not progress.keeps_node:
+            # The request may have reached the repository before it raised
+            # (e.g. ReadTimeout): said like the deadline path says it.
+            return {
+                "success": False,
+                "error": f"{error} — der bestehende Node {job.node_id} kann "
+                "teilweise geschrieben sein",
+                "node": {
+                    "nodeId": job.node_id,
+                    "repositoryUrl": f"{base_url}/components/render/{job.node_id}",
+                },
+            }
         if progress.keeps_node and node_id is None:
             node_id = job.node_id
         return await asyncio.shield(
@@ -621,7 +635,7 @@ class RepositoryService(NodeMixin, MetadataWriteMixin, ReviewMixin):
         else:
             node_result = await self._create_tracked(client, base_url, target, progress)
             if not node_result.get("success"):
-                return node_result
+                return {**node_result, "error_code": WRITE_FAILED}
             node_id = node_result["nodeId"]
 
         # 3. The aspects the special fields need, then the metadata the schema
@@ -1172,10 +1186,16 @@ class RepositoryService(NodeMixin, MetadataWriteMixin, ReviewMixin):
 
         `keep`: the node is complete or already in the workflow (editors may
         have been notified) - it is reported in `node`, never discarded. Only
-        with `keep` may the id be a node the caller handed over.
+        with `keep` may the id be a node the caller handed over. Everything
+        else left nothing behind but litter: error_code WRITE_FAILED (502).
         """
-        result: dict[str, Any] = {"success": False, "error": error}
+        result: dict[str, Any] = {
+            "success": False,
+            "error_code": WRITE_FAILED,
+            "error": error,
+        }
         if created_node_id and keep:
+            del result["error_code"]
             result["node"] = {
                 "nodeId": created_node_id,
                 "repositoryUrl": f"{base_url}/components/render/{created_node_id}",

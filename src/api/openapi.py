@@ -123,11 +123,16 @@ _SERVICE_ACCOUNT_NOTE = (
     "und handelt mit dem Service-Konto des Agents ({what}). Das ist akzeptiert, "
     "weil nur der B-API-Proxy den Dienst erreicht (NetworkPolicy, UEBERGABE.md §3)."
 )
+_READS_NODES = (
+    "liest mit `input_source` `node_id` oder `node_url` auch nicht öffentliche "
+    "Nodes und gibt deren Inhalt in das Ergebnis"
+)
 _ACCEPTED_GAPS = {
     (
         "/upload",
         "post",
-    ): "schreibt; mit `node_id` auch in einen vorhandenen Node im Bearbeitungsfenster",
+    ): "schreibt; mit `node_id` auch in einen vorhandenen Node im Bearbeitungsfenster; "
+    "`workflow_receiver` nimmt jeden Authority-Namen an",
     (
         "/nodes",
         "post",
@@ -136,12 +141,17 @@ _ACCEPTED_GAPS = {
     (
         "/workflow/{node_id}",
         "post",
-    ): "setzt Workflow-Status, auch Veröffentlichungs-Status wie 150_PUBLISH_IN_SEARCH, ohne Bearbeitungsfenster",
+    ): "setzt Workflow-Status, auch Veröffentlichungs-Status wie 150_PUBLISH_IN_SEARCH, "
+    "ohne Bearbeitungsfenster; `receiver` nimmt jeden Authority-Namen an; die Antwort "
+    "enthält die Workflow-Historie mit den Benutzernamen der Bearbeitenden",
     (
         "/screenshot",
         "post",
     ): "setzt mit `node_id` das Vorschaubild eines Nodes im Bearbeitungsfenster",
     ("/upload/verify/{node_id}", "post"): "liest auch nicht öffentliche Nodes",
+    ("/generate", "post"): _READS_NODES,
+    ("/detect-content-type", "post"): _READS_NODES,
+    ("/extract-field", "post"): _READS_NODES,
 }
 
 

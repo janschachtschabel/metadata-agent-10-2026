@@ -32,6 +32,10 @@ class ReviewMixin:
             self, client: httpx.AsyncClient, base_url: str, node_id: str
         ) -> Optional[dict[str, Any]]: ...
 
+        async def _read_node(
+            self, client: httpx.AsyncClient, base_url: str, node_id: str
+        ) -> tuple[Optional[dict[str, Any]], bool]: ...
+
     async def verify_node(
         self,
         node_id: str,
@@ -73,11 +77,13 @@ class ReviewMixin:
                 )
 
                 if response.status_code != 200:
+                    # 403 too: the service account cannot see the node, which
+                    # the caller cannot tell from a missing one (as on /nodes).
                     return {
                         "success": False,
                         **(
                             {"error_code": "node_not_found"}
-                            if response.status_code == 404
+                            if response.status_code in (403, 404)
                             else {}
                         ),
                         "error": f"Failed to fetch node: {repository_error(response)}",
@@ -140,7 +146,9 @@ class ReviewMixin:
         checking, to walk the remaining editorial states step by step.
 
         Returns the per-step result plus the node's resulting workflow state and
-        its full history (which records who set which state).
+        its full history (which records who set which state). A node the
+        repository does not show this account (403, 404) gets error_code
+        node_not_found before any state is set.
         """
         config = get_repository_config()
         base_url = config["base_url"]
@@ -150,6 +158,19 @@ class ReviewMixin:
             async with httpx.AsyncClient(
                 timeout=timeout, event_hooks=OWN_SERVICE_HOOKS
             ) as client:
+                # An outage on this read says nothing about the node: the
+                # steps then run and report their own failures, as before.
+                _, missing = await self._read_node(client, base_url, node_id)
+                if missing:
+                    return {
+                        "success": False,
+                        "error_code": "node_not_found",
+                        "nodeId": node_id,
+                        "error": (
+                            f"Node {node_id} konnte nicht gelesen werden — er "
+                            "existiert nicht oder der Dienst hat keinen Zugriff darauf."
+                        ),
+                    }
                 run = await run_workflow_steps(
                     client,
                     self._auth_header,

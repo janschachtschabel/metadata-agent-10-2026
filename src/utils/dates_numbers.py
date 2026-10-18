@@ -11,6 +11,7 @@ it, nothing is lost. Non-strings give None.
 
 import math
 import re
+from datetime import date
 from typing import Any, Optional
 
 GERMAN_MONTHS = {
@@ -126,14 +127,27 @@ def parse_german_number(text: str) -> Optional[int]:
     return thousands * 1000 + tail if tail else None
 
 
+# "12.345.678" or "1.234,5": dots group thousands, a comma marks the decimals.
+# A first group starting with 0 groups nothing ("0.950" is 0.95). One dot group
+# without a comma ("1.500", "52.520") is ambiguous; it stays a decimal as in
+# 2.1.1 - a model writes English decimals far more often than that.
+_GERMAN_THOUSANDS = re.compile(
+    r"^[+-]?[1-9]\d{0,2}(?:(?:\.\d{3}){2,}(?:,\d+)?|\.\d{3}(?:\.\d{3})*,\d+)$"
+)
+
+
 def to_number(value: Any, integer: bool) -> Optional[float | int]:
-    """A finite number from a number or a numeric string / German number word."""
+    """
+    A finite number from a number or a numeric string / German number word.
+
+    Integer fields round half up (2.7 people are 3, not 2).
+    """
     if isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
         if not math.isfinite(value):
             return None
-        return int(value) if integer else value
+        return _rounded(value) if integer else value
     if not isinstance(value, str):
         return None
 
@@ -143,13 +157,20 @@ def to_number(value: Any, integer: bool) -> Optional[float | int]:
     word = parse_german_number(text)
     if word is not None:
         return word
+    text = text.replace(" ", "")
+    if _GERMAN_THOUSANDS.match(text):
+        text = text.replace(".", "")
     try:
-        number = float(text.replace(",", ".").replace(" ", ""))
+        number = float(text.replace(",", "."))
     except ValueError:
         return None
     if not math.isfinite(number):
         return None
-    return int(number) if integer else number
+    return _rounded(number) if integer else number
+
+
+def _rounded(number: float) -> int:
+    return math.floor(number + 0.5)
 
 
 def iso_date(year: int, month: int, day: int) -> Optional[str]:
@@ -187,11 +208,9 @@ def read_date(text: str) -> Optional[str]:
     callers differ in what they do with it.
     """
     val = text.strip()
-    if re.match(r"^\d{4}-\d{2}-\d{2}$", val):
-        return val
-    match = re.match(r"^(\d{4}-\d{2}-\d{2})T", val)
+    match = re.match(r"^(\d{4})-(\d{2})-(\d{2})(?:$|T)", val)
     if match:
-        return match.group(1)
+        return _checked_iso(*(int(part) for part in match.groups()))
 
     for pattern, two_digit_year in _NUMERIC_DATES:
         match = pattern.match(val)
@@ -211,6 +230,17 @@ def read_date(text: str) -> Optional[str]:
         month = GERMAN_MONTHS[match.group(1).lower()]
         return _checked(int(match.group(2)), month, int(match.group(3)))
     return None
+
+
+def _checked_iso(year: int, month: int, day: int) -> str:
+    """
+    An ISO date that exists; any year (an ISO date is meant as written, unlike
+    the 1900-2100 guard for German spellings in iso_date).
+    """
+    try:
+        return date(year, month, day).isoformat()
+    except ValueError:
+        raise ImpossibleDate(f"{year:04d}-{month:02d}-{day:02d}") from None
 
 
 def _checked(day: int, month: int, year: int) -> str:
@@ -240,24 +270,47 @@ def read_datetime(text: str) -> Optional[str]:
     YYYY-MM-DDTHH:MM for an ISO or German date-time, or a date alone (midnight).
 
     An ISO offset (Z, +02:00) is kept: without it a time given in UTC would be
-    read as local time.
+    read as local time. A date or time that does not exist gives None.
     """
     val = text.strip()
-    match = re.match(
-        r"^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})(?::\d{2}(?:\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?",
-        val,
-    )
+    match = _ISO_DATETIME.match(val)
     if match:
-        return f"{match.group(1)}T{match.group(2)}{match.group(3) or ''}"
+        return _checked_iso_datetime(match)
 
-    date_part, _, time_part = val.partition(" ")
     try:
-        day = read_date(date_part)
+        day = read_date(val)
+        if day is not None:
+            return f"{day}T00:00"
+        # A trailing time after a space or comma, optionally "um": the date in
+        # front may itself contain spaces ("15. März 2025 14:00").
+        match = _TRAILING_TIME.match(val)
+        if not match:
+            return None
+        day = read_date(match.group(1))
     except ImpossibleDate:
         return None
-    if day is None:
+    time = read_time(match.group(2))
+    return f"{day}T{time}" if day and time else None
+
+
+_ISO_DATETIME = re.compile(
+    r"^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?"
+    r"(Z|[+-]\d{2}:?\d{2})?"
+)
+
+
+def _checked_iso_datetime(match: re.Match[str]) -> Optional[str]:
+    year, month, day, hour, minute = (int(part) for part in match.groups()[:5])
+    second = int(match.group(6) or 0)
+    if not (hour <= 23 and minute <= 59 and second <= 59):
         return None
-    if not time_part:
-        return f"{day}T00:00"
-    time = read_time(time_part)
-    return f"{day}T{time}" if time else None
+    try:
+        day_part = _checked_iso(year, month, day)
+    except ImpossibleDate:
+        return None
+    return f"{day_part}T{hour:02d}:{minute:02d}{match.group(7) or ''}"
+
+
+_TRAILING_TIME = re.compile(
+    r"^(.+?)\s*(?:,\s*|\s+)(?:um\s+)?(\d{1,2}(?::\d{2}){0,2}(?:\s*[Uu]hr(?:\s*\d{2})?)?)$"
+)

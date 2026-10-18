@@ -5,6 +5,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from .repository_result import SCHEMA_UNAVAILABLE
+
 logger = logging.getLogger(__name__)
 
 
@@ -70,6 +72,7 @@ def no_writable_fields_result(
     schemas = f"core.json + {schema_file}" if schema_file else "core.json"
     return {
         "success": False,
+        "error_code": SCHEMA_UNAVAILABLE,
         "step": "schema",
         "error": (
             f"Für Kontext '{context}', Version '{version}' ({schemas}) ist kein "

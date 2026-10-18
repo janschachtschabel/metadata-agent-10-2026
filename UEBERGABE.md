@@ -13,9 +13,9 @@ Anforderungen erfüllt sind, steht in
 | | |
 |---|---|
 | Repo | API: <https://scm.edu-sharing.com/edu-sharing/projects/wlo/metaservices/metadata-agent>; Webkomponente: <https://scm.edu-sharing.com/edu-sharing/projects/wlo/metaservices/metadata-agent-webcomponent> (das gebaute Widget liegt im API-Repo unter `src/static/widget/`). Ob T6 Zugriff hat, ist noch zu bestätigen. |
-| CI | `.gitlab-ci.yml` baut bei jedem Push auf `main`/`develop` ein Image mit dem Branch als Tag und bei jedem Git-Tag ein Image mit der Version (z.B. `v3.0.0`). Produktion nur mit Versions-Tags. |
+| CI | `.gitlab-ci.yml` baut bei jedem Push auf `main`/`develop` ein Image mit dem Branch als Tag und bei jedem Git-Tag `v*` ein Image mit der Version (z.B. `v3.0.0`); andere Tags veröffentlichen nichts. Produktion nur mit Versions-Tags. |
 | GitLab-CI/CD-Variablen | Die Docker-Jobs in `.gitlab-ci.yml` brauchen: `DIND_IMAGE`, `DIND_HOST`, `DIND_DRIVER`, `DIND_TLS_CERTDIR` (Docker-in-Docker), `DOCKER_REGISTRY`, `DOCKER_USERNAME`, `DOCKER_PASSWORD` (maskiert). Test- und Ruff-Jobs brauchen keine. Die Webkomponente braucht keine eigenen Variablen. |
-| GitHub-Spiegel | `.github/workflows/docker-publish.yml`: Tests, Chart-Prüfung und Image-Bau bei jedem Push; nach DockerHub nur mit Secret `DOCKERHUB_PASSWORD` |
+| GitHub-Spiegel | `.github/workflows/docker-publish.yml`: Tests, Chart-Prüfung und Image-Bau bei Pushes auf `main`, Tags `v*` und Pull Requests auf `main`; nach DockerHub nur außerhalb von Pull Requests und mit Secret `DOCKERHUB_PASSWORD`. Dependabot (`.github/dependabot.yml`) schlägt Updates für `uv.lock` (damit Playwright/Chromium), Basis-Images und Actions vor |
 | Helm-Chart | [`helm/metadata-agent/`](helm/metadata-agent/README.md); die CI prüft ihn mit `helm lint` und die Alarmregeln mit `promtool` (Jobs `helm lint`, `alert rules`) |
 | Prüfungen vor einem Image | Tests mit Coverage-Untergrenze, mypy, `pip-audit` (Job `pip audit`); das gebaute Image startet schreibgeschützt ohne Schlüssel und muss `/health` beantworten (`scripts/smoke-image.sh`), Trivy bricht bei kritischen, behebbaren Lücken ab. In Merge Requests baut und prüft der Job `check docker image in merge requests`, ohne zu veröffentlichen |
 | Image | Multi-Stage auf `python:3.13-slim` (per Digest gepinnt, Aktualisierung im Kopf des Dockerfiles), läuft als Nutzer `appuser` (UID 1000), Code gehört root, `.dockerignore` vorhanden, HEALTHCHECK auf `/health`. Enthält Chromium für Screenshots (~400 MB), daher größer als ein reiner API-Dienst. Läuft mit schreibgeschütztem Root-Dateisystem, wenn `/tmp` und `/home/appuser` beschreibbar sind; der CI-Smoke-Test startet das Image so und lässt darin Chromium starten (lokal nicht geprüft, weil das Bauen Downloads braucht). |
@@ -70,12 +70,16 @@ Anforderungen erfüllt sind, steht in
     Agent bricht einen Lauf nach `METADATA_AGENT_GENERATE_TIMEOUT` (110 s) selbst
     ab und antwortet `504` mit `error.code: GENERATION_TIMEOUT` und Request-ID.
 - **Statuscodes:** `4xx` = die Anfrage ist falsch (fehlender Parameter, Node
-  außerhalb des Bearbeitungsfensters `403`, Node unbekannt `404`, gültiges
-  JSON mit falschem Inhalt `422`); `502` = ein abhängiger Dienst (KI,
-  Textextraktion, Repository) hat versagt; `504` = Zeitlimit. Jeder Fehler hat
-  `error.code` und `error.request_id`, auch eine unerwartete Ausnahme (`500`,
-  `INTERNAL_ERROR`). `/upload` und `/workflow` melden Teilergebnisse mit `200`
-  und `success:false` im Body.
+  außerhalb des Bearbeitungsfensters `403`, Node, Kontext oder Schema unbekannt
+  `404`, Body zu groß `413`, gültiges JSON mit falschem Inhalt `422`, auch
+  `SCHEMA_UNAVAILABLE` beim Schreiben); `502` = ein abhängiger Dienst (KI,
+  Textextraktion, Repository) hat versagt; `503` = Repository-Zugang nicht
+  konfiguriert (`/upload`, `/nodes`, `/workflow`) bzw. `/ready` nicht bereit;
+  `504` = Zeitlimit. Jeder Fehler hat `detail`, `error.code` und
+  `error.request_id`, auch eine unerwartete Ausnahme (`500`, `INTERNAL_ERROR`).
+  `/upload`, `/nodes` und `/workflow` melden mit `200` und `success:false` nur
+  noch Teilergebnisse (der Node existiert) und Dubletten; ein Schreiben ohne
+  Ergebnis ist `422`/`502`.
 - **Async-Jobs** (Job anlegen, Status abfragen) gibt es nicht. Das wäre der
   nächste Schritt, falls 120 s im Proxy nicht gehen.
 
@@ -213,7 +217,7 @@ Aufrufer“. Alternativen: Lesezugriffe anonym oder mit dem Ticket des Aufrufers
 - **Logs** gehen nach stdout. `METADATA_AGENT_LOG_FORMAT=json` schreibt ein
   Objekt je Zeile mit `time`, `level`, `logger`, `message` und `trace_id`.
   `METADATA_AGENT_LOG_LEVEL` steuert die Schwelle.
-- **Alarmregeln:** zehn Regeln in
+- **Alarmregeln:** zwölf Regeln in
   [`helm/metadata-agent/files/alerts.yaml`](helm/metadata-agent/files/alerts.yaml),
   vom Chart als `PrometheusRule` installiert und je Namespace ausgewertet.
   Kritisch sind nur Fehler mit dem eigenen Schlüssel und dem konfigurierten
@@ -228,9 +232,11 @@ Aufrufer“. Alternativen: Lesezugriffe anonym oder mit dem Ticket des Aufrufers
   | `MetadataAgentLlmThrottled` | warning | mehr als 5 × `LLM_RATE_LIMITED` in 15 min |
   | `MetadataAgentLlmUnreachable` | warning | mehr als 3 × `LLM_UNREACHABLE` in 10 min |
   | `MetadataAgentGenerationsFailing` | warning | über 50 % `failed` in 30 min (ab 3 Läufen) |
-  | `MetadataAgentUpstreamUnanswered` | warning | mehr als 3 Aufrufen ohne Antwort in 10 min (je Dienst, ohne `llm`) |
+  | `MetadataAgentUpstreamUnanswered` | warning | mehr als 3 Aufrufen ohne Antwort in 10 min (je Dienst, ohne `llm`), 5 min lang – laufende Aufrufe zählen anfangs als unbeantwortet |
   | `MetadataAgentUpstreamServerErrors` | warning | mehr als 5 Antworten mit 5xx in 10 min (je Dienst) |
   | `MetadataAgentGenerateSlow` | warning | p95 von `/generate` über 100 s, 15 min lang |
+  | `MetadataAgentServerErrors` | warning | mehr als 5 eigenen Antworten mit 5xx in 10 min (je Route, ohne `/health`, `/ready`) |
+  | `MetadataAgentInternalError` | critical | einem `500` (`INTERNAL_ERROR`, ein Fehler im Agent selbst) in 10 min, auch dem ersten nach dem Start eines Pods |
 
   `promtool test rules helm/metadata-agent/tests/alerts.test.yaml` prüft jede
   Regel mit Testdaten (auslösend und nicht auslösend). Pod-Ausfälle melden die
@@ -370,4 +376,11 @@ AcademicCloud ohne Vorlauf 51) und dauert 12–22 s.
 
 - Ansprechperson T4: **[Name, Kontakt]**
 - Updates (Abhängigkeiten, Sicherheitspatches, Modellwechsel) stößt
-  **[wer]** an. Modelle wechseln ohne Code-Änderung über Env oder Route.
+  **Team 4** an. Modelle wechseln ohne Code-Änderung über Env oder Route.
+- Update-Vorschläge kommen auf GitHub von Dependabot (`.github/dependabot.yml`:
+  `uv.lock`, Basis-Images, Actions). Auf GitLab ist keine Automatik
+  eingerichtet (Renovate bräuchte einen eigenen Runner) – dort prüft **Team 4**
+  regelmäßig. Das Alter des Chromium meldet die CI (`scripts/check_browser_age.py`,
+  Job `run tests`; Abbruch bei mehr als zwei Hauptversionen Rückstand). Nach einem
+  Playwright-Update: `uv export … > requirements.txt` und NOTICE nachziehen
+  (INSTALL.md 2.2).

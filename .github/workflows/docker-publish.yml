@@ -28,6 +28,7 @@ jobs:
           pip install uv==0.7.13
           uv sync --locked
           uv run playwright install --with-deps chromium
+          uv run python scripts/check_browser_age.py
           uv run ruff check
           uv run ruff format --check
           uv run pytest -q -rs --cov
@@ -36,6 +37,12 @@ jobs:
       # is the export of uv.lock, with hashes).
       - name: Audit dependencies
         run: uvx pip-audit==2.10.1 -r requirements.txt --require-hashes --disable-pip
+      # The development tools never reach the image: reported, not blocking.
+      - name: Audit development dependencies
+        continue-on-error: true
+        run: |
+          uv export --frozen --only-dev --format requirements-txt --no-emit-project > dev-requirements.txt
+          uvx pip-audit==2.10.1 -r dev-requirements.txt --require-hashes --disable-pip
 
   # The Helm chart and its alert rules (helm/metadata-agent/README.md).
   chart:
@@ -52,7 +59,7 @@ jobs:
         run: |
           for extra in "" "--set ingress.enabled=true"; do
             helm template ci helm/metadata-agent --set image.repository=ci/metadata-agent-api $extra |
-              docker run --rm -i ghcr.io/yannh/kubeconform:v0.7.0@sha256:85dbef6b4b312b99133decc9c6fc9495e9fc5f92293d4ff3b7e1b30f5611823c -strict -summary -schema-location default -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' -
+              docker run --rm -i ghcr.io/yannh/kubeconform:v0.7.0@sha256:85dbef6b4b312b99133decc9c6fc9495e9fc5f92293d4ff3b7e1b30f5611823c -strict -summary -schema-location default -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/501527ab9c40c827144c8f45945b25a023e344ce/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' -
           done
       - name: promtool
         run: |
@@ -73,7 +80,9 @@ jobs:
       - name: Inject slug/short variables
         uses: rlespinasse/github-slug-action@0e3299190dac9a700da92a90de4556116ea965ed  # v5.7.1
       - name: Build Docker image
-        run: docker build --tag ${{ github.repository }}:${{ env.GITHUB_REF_SLUG }} .
+        run: >
+          docker build --build-arg VERSION=${{ env.GITHUB_REF_SLUG }} --build-arg REVISION=${{ github.sha }}
+          --tag ${{ github.repository }}:${{ env.GITHUB_REF_SLUG }} .
       # Started read-only and without keys, it must answer /health and start
       # Chromium (scripts/smoke-image.sh).
       - name: Smoke test the image

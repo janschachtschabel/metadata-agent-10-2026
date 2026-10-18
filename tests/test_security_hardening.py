@@ -210,14 +210,8 @@ async def test_a_websocket_to_a_public_host_is_connected():
     assert socket.closed is None
 
 
-def test_the_capture_routes_websockets_through_the_check():
-    import inspect
-
-    from src.services.screenshot_service import ScreenshotService
-
-    source = inspect.getsource(ScreenshotService._capture_playwright)
-
-    assert "route_web_socket" in source and "_public_websockets_only()" in source
+# The capture routes WebSockets through the check: a real browser proves it in
+# test_screenshot_browser_policy.py (test_a_websocket_to_an_internal_host_...).
 
 
 async def test_the_pinned_fetch_prefers_ipv4_and_falls_back(monkeypatch):

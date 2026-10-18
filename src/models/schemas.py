@@ -311,14 +311,35 @@ class GenerateRequest(BaseModel):
 
 
 class ProcessingInfo(BaseModel):
-    """Processing statistics and debug info."""
+    """Processing statistics and debug info (`processing` of /generate)."""
 
-    success: bool
+    model_config = ConfigDict(extra="allow")
+
+    status: str = Field(
+        description="success, partial (some fields failed) or failed (no value at all)"
+    )
+    success: bool = Field(description="status is not 'failed'")
     fields_extracted: int = Field(description="Number of fields with values")
+    fields_failed: int = Field(
+        default=0, description="Fields that failed for a technical reason"
+    )
     fields_total: int = Field(description="Total number of fields in schema")
     processing_time_ms: int = Field(description="Processing time in milliseconds")
     llm_provider: str = Field(description="LLM provider used")
     llm_model: str = Field(description="LLM model used")
+    auth_source: Optional[str] = Field(
+        default=None, description="Which key the LLM calls carried (never the key)"
+    )
+    content_type_detection: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="How the content type was chosen: method (preselected, llm, "
+        "keywords), schema_file, confidence, reason",
+    )
+    error: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="The cause of a partial or failed run: code, message and "
+        "further details",
+    )
     errors: list[str] = Field(
         default_factory=list, description="Any errors encountered"
     )
@@ -327,11 +348,14 @@ class ProcessingInfo(BaseModel):
 
 class GenerateResponse(BaseModel):
     """
-    Response model for metadata generation.
+    Response of /generate (documentation only: the endpoint sends this shape as is).
 
-    The response contains header info, then flat metadata fields directly,
-    followed by processing info at the end.
+    Header, then every non-empty metadata field at top level under its field id
+    (additional properties), then `_origins`, `_source_text`,
+    `preview_image_url` where present, and `processing` last (audit API-09).
     """
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
 
     # Meta information (header)
     contextName: str = Field(description="Schema context name")
@@ -344,38 +368,51 @@ class GenerateResponse(BaseModel):
     language: str = Field(description="Language used for extraction")
     exportedAt: str = Field(description="ISO timestamp of generation")
 
-    # Flat metadata - stored internally but expanded in serialization
-    metadata: dict[str, Any] = Field(
-        default_factory=dict,
-        description="Generated metadata as flat key-value pairs. Fields appear at top level in response.",
+    origins: Optional[dict[str, str]] = Field(
+        default=None,
+        alias="_origins",
+        description="Origin of every returned field: 'ai' or 'user'",
+    )
+    source_text: Optional[str] = Field(
+        default=None,
+        alias="_source_text",
+        description="The text the values were extracted from - send it back in "
+        "existing_metadata for a correction round",
+    )
+    preview_image_url: Optional[str] = Field(
+        default=None, description="Screenshot as data URL, when one was taken"
     )
 
-    # Processing info (separate)
     processing: ProcessingInfo = Field(
         description="Processing statistics and debug info"
     )
 
-    def model_dump(self, **kwargs) -> dict[str, Any]:
-        """Custom serialization to flatten metadata into response."""
-        # Get base dict with header and processing
-        result: dict[str, Any] = {
-            "contextName": self.contextName,
-            "schemaVersion": self.schemaVersion,
-            "metadataset": self.metadataset,
-            "metadataset_uri": self.metadataset_uri,
-            "language": self.language,
-            "exportedAt": self.exportedAt,
-        }
 
-        # Add flattened metadata fields directly
-        for key, value in self.metadata.items():
-            if value is not None:
-                result[key] = value
+def check_schema_markers(
+    metadata: dict[str, Any], markers: tuple[str, ...]
+) -> dict[str, Any]:
+    """
+    The schema markers inside `metadata` are text (or null), `_schema` an object.
 
-        # Add processing info at the end
-        result["processing"] = self.processing.model_dump() if self.processing else {}
+    {"schemaVersion": 2} ended in a 500 and a contextName list in a 200 with
+    "unhashable type" as its message (audit API-07); a refusal here is a 422.
+    """
+    for marker in markers:
+        value = metadata.get(marker)
+        if value is not None and not isinstance(value, str):
+            raise ValueError(f"{marker} muss ein Text sein")
+    legacy = metadata.get("_schema")
+    if legacy is not None:
+        if not isinstance(legacy, dict):
+            raise ValueError("_schema muss ein Objekt sein")
+        for key in ("context", "version", "file"):
+            value = legacy.get(key)
+            if value is not None and not isinstance(value, str):
+                raise ValueError(f"_schema.{key} muss ein Text sein")
+    return metadata
 
-        return result
+
+_SCHEMA_MARKERS = ("contextName", "schemaVersion", "metadataset")
 
 
 class ValidateRequest(BaseModel):
@@ -408,6 +445,11 @@ class ValidateRequest(BaseModel):
         default="auto",
         description="Schema file ('auto' = read from metadataset in metadata)",
     )
+
+    @field_validator("metadata")
+    @classmethod
+    def _markers_are_text(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return check_schema_markers(value, _SCHEMA_MARKERS)
 
     def get_effective_params(self) -> tuple[str, str, str, dict[str, Any]]:
         """
@@ -489,6 +531,11 @@ class ExportMarkdownRequest(BaseModel):
         description="Output language ('auto' = read from metadata, fallback: de)",
     )
     include_empty: bool = Field(default=False, description="Include empty fields")
+
+    @field_validator("metadata")
+    @classmethod
+    def _markers_are_text(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return check_schema_markers(value, (*_SCHEMA_MARKERS, "language"))
 
     model_config = {
         "json_schema_extra": {

@@ -156,17 +156,19 @@ def _date_problem(v: Any) -> Optional[str]:
         if suggestion:
             return f"Date '{v}' should be formatted as '{suggestion}'"
         return f"Invalid date format '{v}' - expected YYYY-MM-DD"
-    month, day = int(v[5:7]), int(v[8:10])
-    if not (1 <= month <= 12 and 1 <= day <= 31):
+    try:
+        read_date(v)  # the day must exist: 2026-02-30 does not
+    except ImpossibleDate:
         return f"Invalid date values in '{v}'"
     return None
 
 
 def _datetime_problem(v: Any) -> Optional[str]:
-    if not isinstance(v, str) or re.match(
-        r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?", v
-    ):
+    if not isinstance(v, str):
         return None
+    if re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?", v):
+        # Day and time must exist: 2026-02-30T10:00 and T25:00 do not.
+        return None if read_datetime(v) else f"Invalid datetime values in '{v}'"
     suggestion = suggest_datetime_format(v)
     if suggestion:
         return f"Datetime '{v}' should be formatted as '{suggestion}'"
@@ -212,11 +214,15 @@ def _format_warnings(field_id: str, datatype: str, values: list) -> list[dict]:
 
 
 def _coordinate_errors(field_id: str, values: list) -> list[dict]:
-    """Coordinate fields are recognised by their id (latitude/lat, longitude/lon/lng)."""
-    name = field_id.lower()
-    if "latitude" in name or "lat" in name:
+    """
+    Coordinate fields are recognised by the last part of their id being
+    latitude/lat or longitude/lon/lng. A substring test made a capacity of 200
+    ("physicaLATtendee") an out-of-range latitude.
+    """
+    name = re.split(r"[:./]", field_id.lower())[-1]
+    if name in ("latitude", "lat"):
         axis, limit = "Latitude", 90
-    elif "longitude" in name or "lon" in name or "lng" in name:
+    elif name in ("longitude", "lon", "lng"):
         axis, limit = "Longitude", 180
     else:
         return []
@@ -234,6 +240,7 @@ def _vocabulary_warnings(field_id: str, system: dict, values: list) -> list[dict
     concepts = vocabulary.get("concepts", [])
     valid = concept_keys(concepts)
     warnings = []
+    searches_left = MAX_SUGGESTIONS_PER_FIELD
     for v in values:
         if isinstance(v, (dict, list)):
             # Unhashable, and never a concept: a concept is its URI or value.
@@ -242,7 +249,10 @@ def _vocabulary_warnings(field_id: str, system: dict, values: list) -> list[dict
             continue
         if not v or v in valid:
             continue
-        closest = find_closest_vocabulary_match(v, concepts)
+        closest = None
+        if searches_left > 0:
+            searches_left -= 1
+            closest = find_closest_vocabulary_match(v, concepts)
         message = (
             f"Value '{v}' not in vocabulary. Did you mean '{closest}'?"
             if closest
@@ -253,6 +263,11 @@ def _vocabulary_warnings(field_id: str, system: dict, values: list) -> list[dict
 
 
 # -------------------------------------------------------------- suggestions
+
+# The suggestion search compares a value with every label of every concept; 200
+# invalid values against 894 occupational categories blocked the event loop for
+# 12.6 s (audit P-07). Values past this count are reported without a suggestion.
+MAX_SUGGESTIONS_PER_FIELD = 5
 
 
 def find_closest_vocabulary_match(value: Any, concepts: list) -> Optional[str]:
@@ -266,6 +281,8 @@ def find_closest_vocabulary_match(value: Any, concepts: list) -> Optional[str]:
 
     value_lower = value.lower()
     uri_tail = "/" + value_lower.strip("/")
+    # The same bound as FieldNormalizer and the LLM answer matching.
+    limit = min(3, max(1, int(len(value) * 0.3)))
     best_match = None
     best_distance = float("inf")
 
@@ -277,9 +294,7 @@ def find_closest_vocabulary_match(value: Any, concepts: list) -> Optional[str]:
         label = concept.get("label", {})
         for lang_label in label.values() if isinstance(label, dict) else [label]:
             if isinstance(lang_label, str):
-                dist = levenshtein_within(
-                    value_lower, lang_label.lower(), int(len(value) * 0.4)
-                )
+                dist = levenshtein_within(value_lower, lang_label.lower(), limit)
                 if dist is not None and dist < best_distance:
                     best_distance = dist
                     best_match = uri

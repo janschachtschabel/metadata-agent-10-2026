@@ -35,7 +35,7 @@ heute gegen `/upload` programmiert, muss nichts anpassen.
 | `field_errors` | array \| null | – | `[{field_id, error, status_code}]` |
 | `preview` | object \| null | – | Status des Vorschaubild-Uploads. `method` ist immer `playwright` (lokal, auch bei `screenshot_method: "pageshot"`). Eine nicht öffentliche Vorschau-URL ergibt `success: false` mit `error` — der Upload selbst bleibt erfolgreich |
 | `collections` | array \| null | **nur wenn Sammlungen angegeben waren** | `[{collectionId, success, error}]` |
-| `workflow` | array \| null | **nur bei `start_workflow: true`** | `[{status, success, error}]` in ausgeführter Reihenfolge |
+| `workflow` | array \| null | **nur bei `start_workflow: true`** | `[{status, success, error, skipped}]` in angeforderter Reihenfolge; `skipped: true` bei einem Schritt, der nicht gesendet wurde, weil ein früherer scheiterte |
 | `node_created` | bool \| null | bei Erfolg | **NEU** — `true`, wenn dieser Aufruf den Node angelegt hat; `false`, wenn er über `node_id` übergeben wurde |
 | `discarded_node` | string \| null | nur nach Abbruch | ID des unvollständigen Nodes, der zurückgenommen wurde. **Nie gesetzt, wenn `node_id` übergeben wurde** — ein fremder Node wird nicht verworfen |
 
@@ -146,7 +146,10 @@ allen Metadaten, nur die Sammlungs-Referenz bzw. der Workflow-Schritt fehlt. Das
 steht im jeweiligen Eintrag.
 
 Jeder Workflow-Schritt ist ein eigener Aufruf und damit ein eigener Eintrag in
-der Workflow-Historie des Nodes — inklusive ausführendem Nutzer. Für bereits
+der Workflow-Historie des Nodes — inklusive ausführendem Nutzer. Scheitert ein
+Schritt, werden die folgenden nicht mehr gesendet (ein späterer Status setzt
+die früheren voraus, z.B. keine Veröffentlichung nach gescheiterter Freigabe);
+sie stehen mit `"success": false, "skipped": true` in der Liste. Für bereits
 hochgeladene Nodes gibt es denselben Ablauf als `POST /workflow/{node_id}`.
 
 ## Abbruch nach dem Anlegen
@@ -157,19 +160,32 @@ zurück, der nur seinen Titel trägt: für den Aufrufer unsichtbar, der `success
 false` sieht und es erneut versucht, wobei jedes Mal einer mehr liegen bleibt.
 
 Deshalb nimmt die API den angelegten Node in diesem Fall zurück (Papierkorb,
-`recycle=true`, also wiederherstellbar) und meldet ihn als `discarded_node`:
+`recycle=true`, also wiederherstellbar) und meldet ihn als `discarded_node`.
+Weil danach nichts angelegt bleibt, ist das seit dem finalen Audit (18.10.)
+eine Fehlerantwort (`502`, `UPSTREAM_ERROR`) statt `200` mit `success: false`;
+`detail` ist der bisherige `error`-Text:
 
 ```jsonc
+// HTTP 502
 {
-  "success": false,
-  "error": "Timeout bei der Verbindung zum Repository: … (unvollständiger Node wurde verworfen)",
+  "detail": "Timeout bei der Verbindung zum Repository: … (unvollständiger Node wurde verworfen)",
+  "error": { "code": "UPSTREAM_ERROR", "message": "…", "request_id": "3f9c2a7d1b4e5f60" },
   "discarded_node": "244bf208-de5e-4543-8bf2-08de5ed543fe"
 }
 ```
 
+Dasselbe gilt für jedes Schreiben ohne Ergebnis (nichts angelegt, nichts
+geändert): `422` `VALIDATION_ERROR` (Objektform eines Felds verletzt), `422`
+`SCHEMA_UNAVAILABLE` (Kontext/Version unbekannt) oder `502` `UPSTREAM_ERROR`
+(Repository lehnte ab oder war nicht erreichbar), jeweils mit `discarded_node`,
+`node`, `step`, `field_errors`, wenn gesetzt. `200` mit `success: false` gibt es
+nur noch für Dubletten und Teilergebnisse (der Node existiert).
+
 Scheitert auch das Verwerfen, bleibt der Node bestehen und wird als `node.nodeId`
-mit einem entsprechenden Hinweis in `error` zurückgegeben — dann ist ein manueller
-Eingriff nötig.
+mit einem entsprechenden Hinweis zurückgegeben — dann ist ein manueller
+Eingriff nötig. Wird ein bestehender Node (`node_id`) unterbrochen, nachdem die
+Anfrage das Repository erreicht haben kann, nennt die Antwort den Node mit dem
+Hinweis „kann teilweise geschrieben sein“.
 
 Ein Fehler **vor** dem Anlegen verwirft nichts; ein erfolgreicher Upload ebenso
 wenig. Verworfen wird auch nie ein Node, der schon im Workflow ist (die Redaktion

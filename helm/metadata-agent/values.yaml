@@ -53,6 +53,9 @@ env:
   METADATA_AGENT_UPLOAD_TIMEOUT: "100"              # /upload, /nodes; + discard + preStop < 120 s
   METADATA_AGENT_MAX_REQUEST_BYTES: "20971520"      # 20 MB
   METADATA_AGENT_DEBUG_ENDPOINTS: "false"           # /debug/* answers 404
+  # false: a deployment that only generates is ready without WLO_GUEST_* in the
+  # Secret (as with 2.1.1); /upload and /nodes then answer 503.
+  METADATA_AGENT_REQUIRE_REPOSITORY: "true"
   METADATA_AGENT_LOG_FORMAT: json
   METADATA_AGENT_LOG_LEVEL: INFO
 

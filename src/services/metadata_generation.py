@@ -321,7 +321,11 @@ def run_outcome(
     the dict to report, or None.
     """
     fatal_error = extraction.get("fatal_error")
-    fields_extracted = len([v for v in extracted_values.values() if v is not None])
+    # [] or [None] is no value: counting it made a run of only empty answers
+    # and failures "partial" instead of "failed" (final audit 18.10.).
+    fields_extracted = len(
+        [v for v in extracted_values.values() if not is_effectively_empty(v)]
+    )
     fields_failed = len(extraction.get("errors", [])) + extraction.get("skipped", 0)
     if fatal_error is not None:
         fields_failed += 1

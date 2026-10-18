@@ -1,6 +1,9 @@
 """Validation and Markdown export of metadata (/validate, /export/markdown)."""
 
+import asyncio
+
 from fastapi import HTTPException, Request
+from pydantic import ValidationError
 
 from ...models.schemas import (
     ValidateRequest,
@@ -17,6 +20,7 @@ from ...utils.schema_loader import (
 from fastapi import APIRouter
 
 from .. import deps
+from .request_body import invalid_body
 from ..deps import (
     carry_schema_markers,
     parse_json_object,
@@ -98,8 +102,8 @@ async def validate_metadata(request: Request):
     # Validate with Pydantic model
     try:
         req = ValidateRequest(**data)
-    except Exception as e:
-        raise HTTPException(status_code=422, detail=f"Validation error: {str(e)}")
+    except ValidationError as e:
+        raise invalid_body(e)
 
     # Use get_effective_params for clean parameter extraction
     context, version, schema_file, metadata = req.get_effective_params()
@@ -118,7 +122,9 @@ async def validate_metadata(request: Request):
         raise HTTPException(status_code=400, detail=str(e))
 
     service = deps.get_metadata_service()
-    result = service.validate_metadata(
+    # CPU-bound (vocabulary suggestions); keep it off the event loop (audit P-07).
+    result = await asyncio.to_thread(
+        service.validate_metadata,
         metadata=metadata,
         context=context,
         version=version,
@@ -198,8 +204,8 @@ async def export_markdown(request: Request):
     # Validate with Pydantic model
     try:
         req = ExportMarkdownRequest(**data)
-    except Exception as e:
-        raise HTTPException(status_code=422, detail=f"Validation error: {str(e)}")
+    except ValidationError as e:
+        raise invalid_body(e)
 
     # Use get_effective_params for clean parameter extraction
     context, version, schema_file, language, metadata = req.get_effective_params()

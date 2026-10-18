@@ -22,6 +22,7 @@ from fastapi.responses import JSONResponse
 
 from .config import Settings
 from .metrics import metrics_response, precreate_alert_series
+from .utils.request_id import current_request_id
 from .utils.schema_loader import get_available_contexts
 
 logger = logging.getLogger(__name__)
@@ -61,15 +62,22 @@ def readiness_problems(settings: Settings) -> list[str]:
         problems.append("OPENAI_API_KEY fehlt (llm_provider=openai)")
     # Audit OPS-12: the chart marks every secret key optional, so a typo in
     # secret.existingSecret started a "ready" pod whose /upload and /nodes
-    # answer 503.
-    for name, value in (
-        ("WLO_GUEST_USERNAME", settings.wlo_guest_username),
-        ("WLO_GUEST_PASSWORD", settings.wlo_guest_password),
-    ):
-        if not value:
-            problems.append(f"{name} fehlt (Repository: /upload, /nodes)")
+    # answer 503. A deployment that only generates switches this off
+    # (METADATA_AGENT_REQUIRE_REPOSITORY=false; then a start warning).
+    if settings.require_repository:
+        for name, value in (
+            ("WLO_GUEST_USERNAME", settings.wlo_guest_username),
+            ("WLO_GUEST_PASSWORD", settings.wlo_guest_password),
+        ):
+            if not value:
+                problems.append(f"{name} fehlt (Repository: /upload, /nodes)")
     return problems
 
+
+_NOT_READY = (
+    "Dienst nicht bereit: Die Konfiguration ist unvollständig (Gründe im Log und "
+    "auf dem internen Port)."
+)
 
 # The problems last written to the log: the probe asks every few seconds.
 _logged_problems: list[str] = []
@@ -86,7 +94,16 @@ def readiness_response(settings: Settings, detailed: bool = True) -> JSONRespons
             logger.warning("Nicht bereit: %s", "; ".join(problems))
         _logged_problems[:] = problems
     if problems:
-        content: dict = {"status": "not_ready"}
+        # The API's error shape, as every other error (audit 18.10. final).
+        content: dict = {
+            "status": "not_ready",
+            "detail": _NOT_READY,
+            "error": {
+                "code": "NOT_READY",
+                "message": _NOT_READY,
+                "request_id": current_request_id(),
+            },
+        }
         if detailed:
             content["problems"] = problems
         return JSONResponse(status_code=503, content=content)

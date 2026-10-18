@@ -80,9 +80,43 @@ def test_not_ready_when_no_llm_call_could_succeed(monkeypatch, overrides, reason
         internal = client.get("/ready")
 
     assert public.status_code == internal.status_code == 503
-    # The public port names no setting (review of the 2026-10-18 round, S-08).
-    assert public.json() == {"status": "not_ready"}
+    # The public port names no setting (review of the 2026-10-18 round, S-08) -
+    # but answers in the API's error shape like every other error (audit
+    # 18.10. final).
+    body = public.json()
+    assert body["status"] == "not_ready"
+    assert body["error"]["code"] == "NOT_READY"
+    assert body["detail"] == body["error"]["message"]
+    assert body["error"]["request_id"] == public.headers["X-Request-ID"]
+    for setting in ("B_API_KEY", "OPENAI_API_KEY", "WLO_GUEST", "METADATA_AGENT"):
+        assert setting not in public.text, setting
     assert any(reason in p for p in internal.json()["problems"])
+
+
+def test_a_deployment_without_repository_can_be_ready(monkeypatch):
+    """
+    2.1.1 was ready without WLO_GUEST_*: deployments that only generate
+    (audit 18.10. final). METADATA_AGENT_REQUIRE_REPOSITORY=false restores
+    that; the missing credentials stay a start warning.
+    """
+    settings = _settings(
+        wlo_guest_username="", wlo_guest_password="", require_repository=False
+    )
+    monkeypatch.setattr(deps, "settings", settings)
+
+    with TestClient(main.app) as client:
+        public = client.get("/ready")
+    with TestClient(infra.create_internal_app(lambda: deps.settings)) as client:
+        internal = client.get("/ready")
+
+    assert public.status_code == internal.status_code == 200
+    warning = " ".join(settings.config_warnings())
+    assert "WLO_GUEST_USERNAME" in warning and "/upload" in warning
+    assert "/ready meldet 503" not in warning
+
+
+def test_the_repository_is_required_by_default():
+    assert Settings(_env_file=None).require_repository is True
 
 
 def test_forward_mode_without_own_key_is_ready(monkeypatch):

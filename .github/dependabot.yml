@@ -1,0 +1,23 @@
+# Update proposals (audit 18.10. final). The bundled Chromium follows playwright
+# in uv.lock; no image scanner sees it. After a uv update run
+#   uv export --frozen --no-dev --format requirements-txt --no-emit-project > requirements.txt
+# and update NOTICE - tests/test_requirements_in_step.py and tests/test_license.py
+# fail on the pull request until then. GitLab has no equivalent configured
+# (Renovate needs its own runner; UEBERGABE.md section 8).
+version: 2
+updates:
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      python:
+        patterns: ["*"]
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

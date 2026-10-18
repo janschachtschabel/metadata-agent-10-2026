@@ -11,8 +11,13 @@ dependencies = [
     "pydantic>=2.10.0",
     "pydantic-settings>=2.14.2",
     "httpx>=0.28.0",
-    "playwright>=1.49.0",
+    # Bundles the Chromium of the screenshots: raise with every release (the CI
+    # reports the browser's age; Renovate/Dependabot propose the update).
+    "playwright>=1.63.0",
     "prometheus-client>=0.26.0",
+    # Imported directly (middlewares, responses), not only through fastapi.
+    # Floor: PYSEC-2026-249 (<1.3.1).
+    "starlette>=1.3.1",
 ]
 
 [tool.pytest.ini_options]
@@ -33,14 +38,15 @@ markers = [
 ]
 
 # Audit T-01: measured in CI (uv run pytest --cov). The floor sits just under
-# the measured value (80 % with branches, 2026-10-18, without the browser
-# tests; 73 % before the audit fixes); raise it with the tests.
+# the measured value (90 % with branches and the browser tests, 2026-10-18,
+# final audit; 80 % before that round, 73 % before the first audit fixes);
+# raise it with the tests.
 [tool.coverage.run]
 branch = true
 source = ["src"]
 
 [tool.coverage.report]
-fail_under = 79
+fail_under = 87
 skip_covered = true
 show_missing = true
 
@@ -76,15 +82,14 @@ dev = [
 ]
 
 [tool.uv]
-# Security floors for packages that arrive only transitively: fastapi asks for
-# starlette>=0.46.0 and nothing pins anyio or idna, so a fresh resolution could
-# pick versions with known advisories (pip-audit: PYSEC-2026-249 for starlette
-# <1.3.1, PYSEC-2026-4023/4024/4025 for anyio <4.14.2, PYSEC-2026-215 for
-# idna <3.15). python-dotenv comes with pydantic-settings and keeps the floor
-# it had as a direct dependency. uv applies these when it locks; pip ignores
-# [tool.uv].
+# Security floors for packages that arrive only transitively: nothing pins
+# anyio or idna, so a fresh resolution could pick versions with known
+# advisories (pip-audit: PYSEC-2026-4023/4024/4025 for anyio <4.14.2,
+# PYSEC-2026-215 for idna <3.15). starlette is a direct dependency now and
+# carries its floor there. python-dotenv comes with pydantic-settings and keeps
+# the floor it had as a direct dependency. uv applies these when it locks; pip
+# ignores [tool.uv].
 constraint-dependencies = [
-    "starlette>=1.3.1",
     "anyio>=4.14.2",
     "idna>=3.15",
     "python-dotenv>=1.2.2",

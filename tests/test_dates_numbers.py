@@ -94,7 +94,8 @@ def test_german_number_words(value, expected):
     "value, datatype, expected",
     [
         (42, "integer", 42),
-        (42.7, "integer", 42),
+        # Rounded, not truncated (final audit 18.10.): 42.7 people are 43.
+        (42.7, "integer", 43),
         (42.7, "number", 42.7),
         ("12,5", "number", 12.5),
         ("1 200", "integer", 1200),

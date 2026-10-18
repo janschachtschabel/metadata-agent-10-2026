@@ -10,7 +10,10 @@
 **Kurz:** Image tauschen genügt für Docker/Compose. Mit dem Helm-Chart (0.3.0)
 vor der Installation die Namespaces der NetworkPolicy anpassen. Clients, die auf
 Statuscodes verzweigen, prüfen die Tabelle „Breaking“ im CHANGELOG – die
-mitgelieferte Webkomponente und 2.1.1 sind nicht betroffen.
+mitgelieferte Webkomponente und das 2.1.1-Widget sind nicht betroffen (ein
+langer neuer Text zusammen mit `_source_text` gilt wie in 2.1.1 als neue
+Quelle, nicht als zu lange Korrekturanweisung). Die Webkomponente 3.x braucht
+den Agent 3.x (WIDGET-REFERENZ.md).
 
 - **Helm-Chart 0.3.0:**
   - **NetworkPolicy** (Standard an): Port 8000 nur aus `networkPolicy.ingressNamespaces`
@@ -31,6 +34,10 @@ mitgelieferte Webkomponente und 2.1.1 sind nicht betroffen.
     oder `WLO_GUEST_PASSWORD` – etwa durch einen Tippfehler in
     `secret.existingSecret` –, bleibt der Pod nicht bereit (`503`, Grund einmal
     im Log). Ohne sie antworten `/upload` und `/nodes` ohnehin mit `503`.
+    Ein Deployment, das nur erschließt (mit 2.1.1 ohne diese Zugangsdaten
+    bereit), setzt `METADATA_AGENT_REQUIRE_REPOSITORY=false` (Helm:
+    `env.METADATA_AGENT_REQUIRE_REPOSITORY: "false"`): bereit ohne sie, mit
+    Startwarnung.
   - **Secret-Änderungen starten die Pods nicht mehr neu.** Die Annotation
     `checksum/secret` ist entfallen: Sie zeigte einen ungesalzenen Hash der
     Secret-Werte jedem, der Deployments lesen darf. Nach einer Änderung:
@@ -46,7 +53,10 @@ mitgelieferte Webkomponente und 2.1.1 sind nicht betroffen.
   `504 GENERATION_TIMEOUT`. `METADATA_AGENT_UPLOAD_TIMEOUT` (100 s) begrenzt
   `/upload` und `/nodes`; danach `504 UPLOAD_TIMEOUT`. Beide samt Aufräumen und
   preStop müssen unter den 120 s von Ingress und Grace-Period bleiben – sonst
-  warnt der Agent beim Start.
+  warnt der Agent beim Start. Die 110 s gelten auch ohne Ingress (Docker,
+  Compose): Wer dort mit langsamen Modellen längere Läufe braucht (2.1.1 lief
+  unbegrenzt), erhöht `METADATA_AGENT_GENERATE_TIMEOUT` und die Timeouts der
+  Clients davor.
 - **Logger-Namen:** Fehlerzeilen kommen von `src.api.responses`, Endpunkte von
   `src.api.routers.*`, KI-Aufrufe von `src.services.llm_transport`. Wer im
   Logging-System auf `logger="src.main"` filtert, passt das an.
@@ -197,7 +207,7 @@ $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api
 
 **Pull:**
 ```bash
-docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:main
+docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v3.0.0
 ```
 
 ---
@@ -207,11 +217,12 @@ docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:main
 ```bash
 docker run -d \
   --name metadata-agent-api \
-  -p 8000:8000 \
+  -p 127.0.0.1:8000:8000 \
+  --read-only --tmpfs /tmp --tmpfs /home/appuser --stop-timeout 120 \
   -e B_API_KEY=<key> \
   -e WLO_GUEST_USERNAME=<user> \
   -e WLO_GUEST_PASSWORD=<pass> \
-  $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:main
+  $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v3.0.0
 ```
 
 ---
@@ -223,8 +234,8 @@ docker run -d \
 | Variable | Beschreibung |
 |---|---|
 | `B_API_KEY` | API-Key für die B-API-LLM-Provider (OpenAI, AcademicCloud, Router). Pflicht im Modus `static`; im Default `auto` der Rückfall für Aufrufe ohne weitergereichten Schlüssel; im Modus `forward` nicht nötig (siehe `METADATA_AGENT_B_API_AUTH_MODE`) |
-| `WLO_GUEST_USERNAME` | edu-sharing-Konto für `/upload`, `/nodes`, `/node`, `/workflow`, `/screenshot` mit `node_id` und Node-Quellen. Ohne es antwortet `/ready` mit `503` |
-| `WLO_GUEST_PASSWORD` | Passwort dazu. Ohne es antwortet `/ready` mit `503` |
+| `WLO_GUEST_USERNAME` | edu-sharing-Konto für `/upload`, `/nodes`, `/node`, `/workflow`, `/screenshot` mit `node_id` und Node-Quellen. Ohne es antwortet `/ready` mit `503` (außer mit `METADATA_AGENT_REQUIRE_REPOSITORY=false`) |
+| `WLO_GUEST_PASSWORD` | Passwort dazu. Ohne es antwortet `/ready` mit `503` (außer mit `METADATA_AGENT_REQUIRE_REPOSITORY=false`) |
 
 ### Optional (Secrets)
 
@@ -349,10 +360,11 @@ Provider und Auth-Modus (`llm_provider`, `b_api_auth_mode`) stehen nur in
 Im Container ist ein HEALTHCHECK konfiguriert (Interval: 30s, Timeout: 10s, Retries: 3).
 
 `GET /ready` antwortet `{"status": "ready"}`. Kann die Konfiguration nicht
-arbeiten, antwortet es mit `503` (`{"status": "not_ready"}`), z.B. wenn `B_API_KEY`
-im Modus `static` oder `WLO_GUEST_USERNAME`/`WLO_GUEST_PASSWORD` fehlen. Die
-Gründe stehen im Log und in `/ready` auf dem internen Port, nicht auf dem
-öffentlichen. Abhängige
+arbeiten, antwortet es mit `503` (`status: "not_ready"`, dazu `detail` und
+`error.code` `NOT_READY` wie jeder Fehler), z.B. wenn `B_API_KEY` im Modus
+`static` oder `WLO_GUEST_USERNAME`/`WLO_GUEST_PASSWORD` fehlen (Letzteres nicht
+mit `METADATA_AGENT_REQUIRE_REPOSITORY=false`). Die Gründe stehen im Log und in
+`/ready` auf dem internen Port (`problems`), nicht auf dem öffentlichen. Abhängige
 Dienste ruft `/ready` bewusst nicht auf: Ein Ausfall der B-API soll nicht alle
 Pods auf einmal aus dem Service nehmen. Ohne `B_API_KEY` im Modus `auto` bleibt
 der Pod bereit (hinter dem Proxy mit `forwardApiKey` ein gültiger Betrieb); das
@@ -471,8 +483,11 @@ Schemata. Bei Vorschaubild-URLs wird jede Weiterleitung einzeln geprüft
 (höchstens 5, Download höchstens 10 MB). Im Screenshot-Browser werden direkte
 Anfragen an interne Hosts blockiert; führt eine Weiterleitung oder Navigation der
 Seite (auch in Frames oder für Bilder) zu einem internen Ziel, wird die Aufnahme
-verworfen. Der Weiterleitungs-Request selbst ist dann allerdings schon gesendet —
-wer auch das ausschließen muss, braucht Egress-Regeln für den Container.
+verworfen. Der Weiterleitungs-Request selbst (GET) ist dann allerdings schon
+gesendet — wer auch das ausschließen muss, braucht Egress-Regeln für den
+Container. Anfragen mit Body (Formular-POST) prüft der Agent vor jedem
+Weiterleitungs-Hop und leitet sie nie mit Body weiter; jede Anfrage des
+Screenshot-Browsers an die API des Agenten selbst wird mit `403` abgelehnt.
 
 Jeder Screenshot startet ein eigenes Chromium. Es laufen höchstens zwei
 gleichzeitig, weitere warten; eine Aufnahme darf samt DNS-Prüfung und Wartezeit

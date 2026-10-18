@@ -19,8 +19,8 @@ bricht nichts, ein Tippfehler fällt aber auch nicht auf.
 |---|---|---|
 | `B_API_KEY` | — | `llm_provider=b-api-openai`, `b-api-academiccloud` oder `b-api-router`; im Modus `auto` nur noch als Rückfall, im Modus `forward` gar nicht (siehe [B-API: Authentifizierung](#b-api-authentifizierung)) |
 | `OPENAI_API_KEY` | — | `llm_provider=openai` |
-| `WLO_GUEST_USERNAME` | — | `/upload`, `/nodes`; fehlt er, antwortet `/ready` mit `503` (Warnung beim Start) |
-| `WLO_GUEST_PASSWORD` | — | `/upload`, `/nodes`; fehlt es, antwortet `/ready` mit `503` (Warnung beim Start) |
+| `WLO_GUEST_USERNAME` | — | `/upload`, `/nodes`; fehlt er, antwortet `/ready` mit `503` (Warnung beim Start) – außer mit `METADATA_AGENT_REQUIRE_REPOSITORY=false` |
+| `WLO_GUEST_PASSWORD` | — | `/upload`, `/nodes`; fehlt es, antwortet `/ready` mit `503` (Warnung beim Start) – außer mit `METADATA_AGENT_REQUIRE_REPOSITORY=false` |
 
 ---
 
@@ -30,8 +30,13 @@ bricht nichts, ein Tippfehler fällt aber auch nicht auf.
 |---|---|---|
 | `METADATA_AGENT_LLM_PROVIDER` | `b-api-openai` | `b-api-openai`, `b-api-academiccloud`, `b-api-router` oder `openai` (ohne B-API) |
 
+| `METADATA_AGENT_ALLOWED_LLM_MODELS` | leer | Modelle, die eine Anfrage in `llm_model` nennen darf, Komma-getrennt. Leer: jedes (wie 2.1.1). Das konfigurierte Default-Modell des Providers ist immer erlaubt; ein anderes Modell beantwortet der Agent mit `422` |
+
 Pro Request überschreibbar: `llm_provider` und `llm_model` im Body von
-`/generate`, `/detect-content-type` und `/extract-field`.
+`/generate`, `/detect-content-type` und `/extract-field`. Ein so gewähltes
+Modell läuft mit dem Schlüssel des Servers, wo kein Schlüssel des Aufrufers
+durchgereicht wird (`static`, `auto` ohne Header) –
+`METADATA_AGENT_ALLOWED_LLM_MODELS` begrenzt das.
 
 ## B-API: Authentifizierung
 
@@ -299,7 +304,7 @@ leeren“ wählen.
 | `METADATA_AGENT_LLM_MAX_TOKENS` | `2000` | Bei Reasoning-Modellen als `max_completion_tokens` gesendet |
 | `METADATA_AGENT_LLM_VERBOSITY` | `low` | Nur GPT-5/GPT-6 und o-Modelle. Leer = nicht senden |
 | `METADATA_AGENT_LLM_REASONING_EFFORT` | `low` | Nur GPT-5/GPT-6 und o-Modelle. `none`/`low`/`medium`/`high` |
-| `METADATA_AGENT_LLM_MAX_RETRIES` | `3` | Versuche bei `429`/`5xx` und Verbindungsfehlern. `401`/`403`/`404` werden nie wiederholt und beenden eine Erschließung sofort |
+| `METADATA_AGENT_LLM_MAX_RETRIES` | `3` | Zwei Bedeutungen: Versuche je KI-Aufruf bei `429`/`5xx` und Verbindungsfehlern (`1` = keine Wiederholung), und wie viele zusätzliche Aufrufe ein ungültiger Feldwert kosten darf. Mindestens `1` – `0` lehnt der Agent beim Start ab. `401`/`403`/`404` werden nie wiederholt und beenden eine Erschließung sofort |
 | `METADATA_AGENT_LLM_RETRY_DELAY` | `1.0` | Basiswert; der Abstand wächst linear mit dem Versuch |
 
 `VERBOSITY` und `REASONING_EFFORT` werden nur an Modelle mit den Präfixen
@@ -347,6 +352,7 @@ löst über `isDefault` im Manifest auf **2.0.0** auf.
 |---|---|---|
 | `METADATA_AGENT_REPOSITORY_URL` | `https://repository.staging.openeduhub.net/edu-sharing/rest` | Ziel für Abruf **und** Upload |
 | `METADATA_AGENT_WLO_INBOX_ID` | `21144164-30c0-4c01-ae16-264452197063` | Ordner, in dem neue Knoten entstehen |
+| `METADATA_AGENT_REQUIRE_REPOSITORY` | `true` | Ob `/ready` die Repository-Zugangsdaten (`WLO_GUEST_*`) verlangt. `false` für ein Deployment, das nur erschließt (wie mit 2.1.1 möglich): Es wird ohne sie bereit, `/upload` und `/nodes` antworten mit `503`, beim Start steht eine Warnung |
 | `METADATA_AGENT_TEXT_EXTRACTION_API_URL` | `https://text-extraction.staging.openeduhub.net` | |
 
 Prod-Repository: `https://redaktion.openeduhub.net/edu-sharing/rest`.

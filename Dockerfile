@@ -5,7 +5,9 @@
 # Screenshots are always captured here; 'pageshot' is only a legacy alias.
 #
 # Build:  docker build -t metadata-agent-api .
-# Run:    docker run -d -p 8000:8000 -e B_API_KEY=... metadata-agent-api
+# Run:    docker run -d -p 127.0.0.1:8000:8000 --read-only --tmpfs /tmp
+#           --tmpfs /home/appuser --stop-timeout 120 -e B_API_KEY=... metadata-agent-api
+#         (one line; README.md, "Docker")
 # =============================================================================
 
 # Base images by digest: a tag can move under an unchanged Dockerfile. Update
@@ -58,22 +60,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /app/.venv /app/.venv
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Install Playwright Chromium browser into shared location
-# (must be accessible by non-root appuser at runtime)
+# Install Playwright Chromium browser into shared location, readable by the
+# non-root appuser. User and permissions in the same layer as the browser and
+# before COPY src/ (audit 18.10. final): a code change rebuilds neither.
+# /app stays owned by root: the process serving requests can read its code but
+# not change it, and no chown copies the venv into another layer. Chromium
+# writes only to /tmp and the home directory.
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
-RUN mkdir -p $PLAYWRIGHT_BROWSERS_PATH \
-    && playwright install chromium
+RUN useradd -m -u 1000 appuser \
+    && mkdir -p $PLAYWRIGHT_BROWSERS_PATH \
+    && playwright install chromium \
+    && chmod -R o+rx $PLAYWRIGHT_BROWSERS_PATH
 
 # Copy application code (includes src/static/widget/ if present)
 COPY src/ ./src/
 # The image distributes third-party components; their notices go with it.
 COPY LICENSE NOTICE ./
 
-# Non-root user. /app stays owned by root: the process serving requests can
-# read its code but not change it, and no chown copies the venv into another
-# layer. Chromium writes only to /tmp and the home directory.
-RUN useradd -m -u 1000 appuser \
-    && chmod -R o+rx $PLAYWRIGHT_BROWSERS_PATH
 USER appuser
 
 # Environment variables
@@ -89,3 +92,12 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 
 # Run with uvicorn
 CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+# Which release and commit the image is (both CIs pass them). Last, so a new
+# commit changes only the image metadata, no layer.
+ARG VERSION=dev
+ARG REVISION=unknown
+LABEL org.opencontainers.image.title="metadata-agent-api" \
+      org.opencontainers.image.version="$VERSION" \
+      org.opencontainers.image.revision="$REVISION" \
+      org.opencontainers.image.licenses="Apache-2.0"
