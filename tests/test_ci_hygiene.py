@@ -345,8 +345,19 @@ def _dockerfile_base() -> str:
     return re.findall(r"^FROM (\S+)", dockerfile, re.M)[-1]
 
 
+def _without_digest(image: str) -> str:
+    return image.split("@", 1)[0]
+
+
 def test_gitlab_tests_run_on_the_os_of_the_image():
-    """The image is Debian 13 (trixie); the tests ran on bookworm."""
+    """
+    The image is Debian 13 (trixie); the tests ran on bookworm.
+
+    Same image and tag, each pinned by digest - but not the same digest:
+    Dependabot refreshes the Dockerfile digest weekly and cannot touch
+    .gitlab-ci.yml, so an equal-digest rule failed every one of its pull
+    requests (GitHub, 18.10.).
+    """
     jobs = _gitlab_jobs()
     variables = _gitlab()["variables"]
 
@@ -354,7 +365,8 @@ def test_gitlab_tests_run_on_the_os_of_the_image():
         image = _image(jobs[name]).replace(
             "$CI_PYTHON_IMAGE", variables["CI_PYTHON_IMAGE"]
         )
-        assert image == _dockerfile_base(), name
+        assert _without_digest(image) == _without_digest(_dockerfile_base()), name
+        assert re.search(r"@sha256:[0-9a-f]{64}$", image), name
         assert "pip install uv==$UV_VERSION" in _script(jobs[name]), name
 
 
@@ -404,3 +416,56 @@ def test_dependency_updates_are_proposed_automatically():
     ecosystems = {entry["package-ecosystem"] for entry in config["updates"]}
 
     assert {"uv", "docker", "github-actions"} <= ecosystems
+
+
+def test_dependabot_keeps_the_python_version_of_the_image():
+    """
+    Dependabot proposed python:3.13-slim -> 3.14-slim (GitHub, 18.10.): it only
+    edits the Dockerfile, while the CI images and the tests stay on 3.13. A new
+    Python version is a deliberate change across Dockerfile and both CIs;
+    Dependabot proposes digests (security fixes) of 3.13 only.
+    """
+    config = yaml.safe_load(
+        (ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8")
+    )
+    (docker,) = [e for e in config["updates"] if e["package-ecosystem"] == "docker"]
+    ignored = {
+        rule["dependency-name"]: set(rule.get("update-types", []))
+        for rule in docker.get("ignore", [])
+    }
+
+    assert {
+        "version-update:semver-major",
+        "version-update:semver-minor",
+    } <= ignored.get("python", set())
+
+
+def test_dependabot_waits_a_week_for_new_releases():
+    """
+    Its first pull request proposed playwright 1.64.0, five days old: a
+    release that new had been passed over on purpose (supply chain).
+    """
+    config = yaml.safe_load(
+        (ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8")
+    )
+
+    for entry in config["updates"]:
+        assert entry.get("cooldown", {}).get("default-days", 0) >= 7, entry[
+            "package-ecosystem"
+        ]
+
+
+def test_the_ruff_rule_set_does_not_follow_ruff_releases():
+    """
+    ruff 0.17 widened its default rules: Dependabot's update turned a clean
+    tree into 591 findings (GitHub, 18.10.). The project names its rules.
+    """
+    import tomllib
+
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    ruff = pyproject["tool"]["ruff"]
+
+    assert set(ruff["lint"]["select"]) == {"E4", "E7", "E9", "F", "C901"}
+    assert "extend-select" not in ruff["lint"]
+    # 0.17 also formats the Python blocks of Markdown files (README).
+    assert ruff["include"] == ["*.py", "*.pyi", "**/pyproject.toml"]

@@ -381,6 +381,12 @@ AcademicCloud ohne Vorlauf 51) und dauert 12–22 s.
   `uv.lock`, Basis-Images, Actions). Auf GitLab ist keine Automatik
   eingerichtet (Renovate bräuchte einen eigenen Runner) – dort prüft **Team 4**
   regelmäßig. Das Alter des Chromium meldet die CI (`scripts/check_browser_age.py`,
-  Job `run tests`; Abbruch bei mehr als zwei Hauptversionen Rückstand). Nach einem
-  Playwright-Update: `uv export … > requirements.txt` und NOTICE nachziehen
-  (INSTALL.md 2.2).
+  Job `run tests`; Abbruch bei mehr als zwei Hauptversionen Rückstand). Dependabot wartet eine
+  Woche auf neue Versionen. Es aktualisiert `uv.lock` nur für die Pakete, die es
+  anhebt, erzeugt `requirements.txt` aber selbst neu – vor dem Merge auf dem
+  Branch `uv lock` und `uv export --frozen --no-dev --format requirements-txt
+  --no-emit-project > requirements.txt` ausführen (bis dahin schlägt
+  `tests/test_requirements_in_step.py` fehl). NOTICE nennt Pakete ohne Version
+  und braucht nur bei einem neuen Paket eine Zeile. Ein Python-Versionswechsel
+  (3.13 → 3.14) kommt nicht von Dependabot, sondern bewusst in Dockerfile und
+  beiden CIs (`CI_PYTHON_IMAGE`) zugleich.

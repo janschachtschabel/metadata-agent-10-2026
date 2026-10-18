@@ -12,45 +12,45 @@ where available; entries marked "upstream" could not be read locally and are
 taken from the project's own declaration - check them in the built image.
 
 
-Python packages (requirements.txt, exported from uv.lock)
----------------------------------------------------------
+Python packages (versions: requirements.txt, exported from uv.lock)
+-------------------------------------------------------------------
 
-annotated-doc 0.0.4          MIT
-annotated-types 0.7.0        MIT
-anyio 4.14.2                 MIT
-certifi 2026.2.25            MPL-2.0 (unmodified; source: github.com/certifi/python-certifi)
-click 8.3.1                  BSD-3-Clause
-colorama 0.4.6               BSD-3-Clause
-fastapi 0.142.4              MIT
-greenlet 3.3.2               MIT AND PSF-2.0
-h11 0.16.0                   MIT
-httpcore 1.0.9               BSD-3-Clause
-httptools 0.7.1              MIT
-httpx 0.28.1                 BSD-3-Clause
-idna 3.20                    BSD-3-Clause
-opentelemetry-api 1.45.1     Apache-2.0
-playwright 1.63.0            Apache-2.0 (Copyright Microsoft Corporation; portions Google Inc.)
-prometheus-client 0.26.0     Apache-2.0 AND BSD-2-Clause
-pydantic 2.12.5              MIT
-pydantic-core 2.41.5         MIT
-pydantic-settings 2.15.0     MIT
-pyee 13.0.1                  MIT
-python-dotenv 1.2.2          BSD-3-Clause
-pyyaml 6.0.3                 MIT
-starlette 1.7.0              BSD-3-Clause
-typing-extensions 4.15.0     PSF-2.0
-typing-inspection 0.4.2      MIT
-uvicorn 0.41.0               BSD-3-Clause
-uvloop 0.22.1                MIT OR Apache-2.0 (upstream; Linux only, not installed locally)
-watchfiles 1.1.1             MIT
-websockets 16.0              BSD-3-Clause
+annotated-doc                MIT
+annotated-types              MIT
+anyio                        MIT
+certifi                      MPL-2.0 (unmodified; source: github.com/certifi/python-certifi)
+click                        BSD-3-Clause
+colorama                     BSD-3-Clause
+fastapi                      MIT
+greenlet                     MIT AND PSF-2.0
+h11                          MIT
+httpcore                     BSD-3-Clause
+httptools                    MIT
+httpx                        BSD-3-Clause
+idna                         BSD-3-Clause
+opentelemetry-api            Apache-2.0
+playwright                   Apache-2.0 (Copyright Microsoft Corporation; portions Google Inc.)
+prometheus-client            Apache-2.0 AND BSD-2-Clause
+pydantic                     MIT
+pydantic-core                MIT
+pydantic-settings            MIT
+pyee                         MIT
+python-dotenv                BSD-3-Clause
+pyyaml                       MIT
+starlette                    BSD-3-Clause
+typing-extensions            PSF-2.0
+typing-inspection            MIT
+uvicorn                      BSD-3-Clause
+uvloop                       MIT OR Apache-2.0 (upstream; Linux only, not installed locally)
+watchfiles                   MIT
+websockets                   BSD-3-Clause
 
 
 Browser
 -------
 
-Chromium 153.0.8010.12 (Chrome for Testing and Chrome Headless Shell, Playwright
-revision 1243), installed by `playwright install chromium`
+Chromium (Chrome for Testing and Chrome Headless Shell, the build that the
+playwright version in uv.lock installs via `playwright install chromium`)
                              BSD-3-Clause, with the third-party notices of the
                              Chromium project (chrome://credits)
 

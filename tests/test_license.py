@@ -31,18 +31,23 @@ def test_the_project_declares_the_license():
 
 
 def test_the_notice_names_every_package_the_image_installs():
+    """
+    By name and licence, without versions: the versions live in
+    requirements.txt. With versions every Dependabot update failed here until
+    NOTICE was edited by hand (GitHub, 18.10.); a new package still fails.
+    """
     notice = (ROOT / "NOTICE").read_text("utf-8")
-    pinned = re.findall(
-        r"^([A-Za-z0-9_.-]+)==([^\s\\;]+)",
+    names = re.findall(
+        r"^([A-Za-z0-9_.-]+)==",
         (ROOT / "requirements.txt").read_text("utf-8"),
         re.MULTILINE,
     )
 
-    assert pinned
-    for name, version in pinned:
-        assert re.search(rf"^{re.escape(name)} {re.escape(version)} ", notice, re.M), (
-            f"{name} {version}"
-        )
+    assert names
+    for name in names:
+        line = re.search(rf"^{re.escape(name)}  +(\S.*)$", notice, re.M)
+        assert line, name
+        assert not re.match(r"\d", line.group(1)), f"{name}: no version in NOTICE"
     for component in ("Chromium", "Roboto", "Material Icons", "Liberation", "Noto"):
         assert component in notice, component
 

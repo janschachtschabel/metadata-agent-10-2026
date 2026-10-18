@@ -1,15 +1,20 @@
 # Update proposals (audit 18.10. final). The bundled Chromium follows playwright
-# in uv.lock; no image scanner sees it. After a uv update run
-#   uv export --frozen --no-dev --format requirements-txt --no-emit-project > requirements.txt
-# and update NOTICE - tests/test_requirements_in_step.py and tests/test_license.py
-# fail on the pull request until then. GitLab has no equivalent configured
-# (Renovate needs its own runner; UEBERGABE.md section 8).
+# in uv.lock; no image scanner sees it. NOTICE names packages without versions,
+# so only a new package needs a NOTICE line (tests/test_license.py).
+# Dependabot updates uv.lock only for the packages it bumps, but regenerates
+# requirements.txt on its own - before merging run on the branch
+#   uv lock && uv export --frozen --no-dev --format requirements-txt --no-emit-project > requirements.txt
+# (tests/test_requirements_in_step.py fails until then). New releases wait a
+# week (cooldown). GitLab has no equivalent configured (Renovate needs its own
+# runner; UEBERGABE.md section 8).
 version: 2
 updates:
   - package-ecosystem: uv
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     groups:
       python:
         patterns: ["*"]
@@ -17,7 +22,17 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
+    ignore:
+      # A new Python version is a deliberate change across the Dockerfile and
+      # both CIs (CI_PYTHON_IMAGE); Dependabot only edits the Dockerfile.
+      # Digests of 3.13 (security fixes) are still proposed.
+      - dependency-name: python
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: monthly
+    cooldown:
+      default-days: 7

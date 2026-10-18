@@ -52,8 +52,14 @@ show_missing = true
 
 # Audits M-01 (2026-10-17, 2026-10-18): every function is split to complexity
 # <= 15; ruff check in CI fails a function that grows past it.
+[tool.ruff]
+# Python files only: ruff 0.17 also formats the code blocks of Markdown files.
+include = ["*.py", "*.pyi", "**/pyproject.toml"]
+
 [tool.ruff.lint]
-extend-select = ["C901"]
+# ruff's former defaults plus complexity, named so a ruff update does not
+# change the rules (0.17 widened its defaults: 591 findings on Dependabot's PR).
+select = ["E4", "E7", "E9", "F", "C901"]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 15

@@ -176,7 +176,20 @@ CI und Tests:
   Version und bricht ab, wenn sie mehr als zwei Hauptversionen hinter dem
   stabilen Chrome liegt.
 - **Update-Vorschläge:** `.github/dependabot.yml` für `uv.lock`, Basis-Images und
-  Actions; auf GitLab keine Automatik (UEBERGABE §8).
+  Actions; auf GitLab keine Automatik (UEBERGABE §8). Damit Dependabots
+  Vorschläge grün durchlaufen können: ruff-Regeln stehen fest in
+  `pyproject.toml` (ruff 0.17 erweiterte seine Standardregeln – 591 Meldungen);
+  NOTICE nennt Pakete und Lizenzen ohne Version (die stehen in
+  `requirements.txt`); das GitLab-Testimage muss Image und Tag des Dockerfile
+  tragen, aber nicht denselben Digest; Python-Versionssprünge (3.13 → 3.14)
+  schlägt Dependabot nicht mehr vor, nur neue Digests von 3.13; neue Versionen
+  warten eine Woche (`cooldown`). Dependabot hebt `uv.lock` nur teilweise an,
+  erzeugt `requirements.txt` aber vollständig neu – vor dem Merge `uv lock` und
+  `uv export` auf dem Branch (UEBERGABE §8).
+- **Abhängigkeiten aktualisiert** (nur Versionen, die mindestens eine Woche alt
+  sind): u. a. fastapi 0.143.0, pydantic 2.14.0, uvicorn 0.54.0, websockets
+  17.2, httptools 0.9.0, ruff 0.17.0, pytest 9.1.1; playwright bleibt 1.63.0
+  (1.64.0 ist jünger als eine Woche).
 - **pip-audit der Entwicklungsabhängigkeiten** in beiden CI, nicht blockierend.
 - **kubeconform:** CRD-Katalog auf einen Commit gepinnt.
 - **GitLab veröffentlicht nur Tags `v*`.** Das Release-Image wird weiter aus dem

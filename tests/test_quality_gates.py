@@ -46,7 +46,7 @@ def test_ruff_fails_functions_past_the_complexity_ceiling():
         "ruff"
     ]["lint"]
 
-    assert "C901" in lint["extend-select"]
+    assert "C901" in lint["select"]
     assert lint["mccabe"]["max-complexity"] <= 15
 
 
