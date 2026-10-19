@@ -74,8 +74,8 @@ bleibt erhalten:
   `X-API-KEY` wäre dort ein `401`.
 - Der Schlüssel gilt nur für die Anfrage, die ihn brachte: Er wird nicht
   gespeichert, nicht geloggt und nicht zwischen gleichzeitigen Anfragen geteilt.
-- Gilt nur für `b-api-openai` und `b-api-academiccloud`. Bei `openai` (nativ)
-  zählt weiter `OPENAI_API_KEY`.
+- Gilt für alle B-API-Provider: `b-api-openai`, `b-api-academiccloud` und
+  `b-api-router`. Bei `openai` (nativ) zählt weiter `OPENAI_API_KEY`.
 - In der Antwort von `/generate` steht unter `processing.auth_source`, woher der
   Schlüssel kam (`forwarded`, `static`) – nie der Schlüssel selbst.
 - Der Dienst prüft den Header nicht selbst. Er darf daher **nur über die B-API**
