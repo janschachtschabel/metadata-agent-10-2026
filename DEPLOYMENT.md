@@ -48,15 +48,25 @@ den Agent 3.x (WIDGET-REFERENZ.md).
   - **AcademicCloud:** `sharedLlmLimit.enabled=true` teilt das gemeinsame
     GWDG-Limit durch `replicaCount` (siehe
     [Durchsatzgrenzen](#llm-provider-spezifisch)).
-- **Neue Einstellungen:** `METADATA_AGENT_GENERATE_TIMEOUT` (110 s) begrenzt ein
+- **Neue Einstellungen:** `METADATA_AGENT_GENERATE_TIMEOUT` (300 s) begrenzt ein
   ganzes `/generate` (auch `/detect-content-type`, `/extract-field`); danach
   `504 GENERATION_TIMEOUT`. `METADATA_AGENT_UPLOAD_TIMEOUT` (100 s) begrenzt
   `/upload` und `/nodes`; danach `504 UPLOAD_TIMEOUT`. Beide samt Aufräumen und
-  preStop müssen unter den 120 s von Ingress und Grace-Period bleiben – sonst
-  warnt der Agent beim Start. Die 110 s gelten auch ohne Ingress (Docker,
+  preStop müssen unter den 320 s von Ingress und Grace-Period bleiben – sonst
+  warnt der Agent beim Start. Die 300 s gelten auch ohne Ingress (Docker,
   Compose): Wer dort mit langsamen Modellen längere Läufe braucht (2.1.1 lief
   unbegrenzt), erhöht `METADATA_AGENT_GENERATE_TIMEOUT` und die Timeouts der
   Clients davor.
+- **Lange Quellen (19.10.):** Der Quelltext wird auf 150.000 Zeichen gekürzt
+  (vorher 500.000); `processing.warnings` von `/generate` nennt dann die
+  Originallänge. Ein sehr langer Artikel (Goethe, 412.000 Zeichen) brauchte
+  ungekürzt 56 KI-Aufrufe à Ø 34 s, zusammen 126 s – mehr als die früheren
+  110 s; auf 150.000 Zeichen gekürzt 35–42 s mit denselben Feldern.
+- **Timeouts davor mindestens ~310 s:** Der B-API-Proxy und edu-sharing vor dem
+  Agenten haben eigene Timeouts, die der Chart nicht setzt. Sie müssen
+  mindestens ~310 s erlauben (300 s Zeitlimit + Antwort), sonst brechen sie
+  lange Erschließungen vorher ab und der Client sieht deren `504` statt des
+  Ergebnisses.
 - **Logger-Namen:** Fehlerzeilen kommen von `src.api.responses`, Endpunkte von
   `src.api.routers.*`, KI-Aufrufe von `src.services.llm_transport`. Wer im
   Logging-System auf `logger="src.main"` filtert, passt das an.
@@ -68,7 +78,7 @@ den Agent 3.x (WIDGET-REFERENZ.md).
 - **docker-compose.yml:** Port nur noch auf `127.0.0.1` (im Modus `auto`
   könnte sonst jeder im Netz Erschließungen auf `B_API_KEY` auslösen),
   schreibgeschützt mit tmpfs für `/tmp` und `/home/appuser` wie im Chart, und
-  `stop_grace_period: 120s` – Dockers Default von 10 s brach ein laufendes
+  `stop_grace_period: 320s` – Dockers Default von 10 s brach ein laufendes
   `/generate` ab. Wer von anderen Rechnern zugreifen muss, setzt `"8000:8000"`,
   nur hinter einer Zugriffsbeschränkung. Eine vorhandene `.env` reicht der
   Container jetzt ganz durch (`env_file`, optional; braucht Docker Compose
@@ -121,7 +131,7 @@ Was sich bei Fehlschlägen ändert:
   solche gekennzeichnet (`method: "keywords"`, Warnung).
 - **Timeout je KI-Aufruf 90 s** (`METADATA_AGENT_REQUEST_TIMEOUT`): vorher 60 s
   im Code und 300 s in `docker-compose.yml`/`.env.template`. 90 s lassen einen
-  Puffer unter dem Ingress-Timeout von 120 s für ein ganzes `/generate`. Wer den
+  Puffer unter dem Zeitlimit von 300 s für ein ganzes `/generate`. Wer den
   Wert selbst gesetzt hat, behält ihn.
 - **Günstigere Erschließung mit OpenAI-Providern:** Vor den Feld-Aufrufen läuft
   ein kurzer Vorlauf-Aufruf, der den Seitentext in den Prompt-Cache legt; die
@@ -177,8 +187,9 @@ Was sich bei Fehlschlägen ändert:
   dann über einen Port ohne Ingress, siehe [UEBERGABE.md](UEBERGABE.md). Nur
   mit einem Worker je Container.
 - **`METADATA_AGENT_LOG_FORMAT=json`**, wenn ein Log-Sammler JSON erwartet.
-- **Proxy- und Ingress-Timeout für `/generate`:** mindestens 120 s; das galt
-  schon für 2.0.x.
+- **Proxy- und Ingress-Timeout für `/generate`:** mindestens ~310 s – für den
+  B-API-Proxy, edu-sharing und einen eigenen Ingress (der Chart setzt 320 s).
+  2.0.x brauchte 120 s; seit 19.10. darf ein Lauf 300 s dauern.
 - **B-API-Proxy mit `forwardApiKey`:** Wer darauf umstellt, sorgt dafür, dass
   der Dienst nur über die B-API erreichbar ist. Optional
   `METADATA_AGENT_B_API_AUTH_MODE=forward`, siehe
@@ -218,7 +229,7 @@ docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v3.0.
 docker run -d \
   --name metadata-agent-api \
   -p 127.0.0.1:8000:8000 \
-  --read-only --tmpfs /tmp --tmpfs /home/appuser --stop-timeout 120 \
+  --read-only --tmpfs /tmp --tmpfs /home/appuser --stop-timeout 320 \
   -e B_API_KEY=<key> \
   -e WLO_GUEST_USERNAME=<user> \
   -e WLO_GUEST_PASSWORD=<pass> \
@@ -261,7 +272,7 @@ Alle Konfigurationsvariablen haben das Prefix `METADATA_AGENT_`:
 | `METADATA_AGENT_DEFAULT_MAX_WORKERS` | `20` | Parallele LLM-Worker (1–20), auch für `/generate` ohne `max_workers`; gedeckelt auf die Grenze des Providers |
 | `METADATA_AGENT_LLM_MAX_CONCURRENT_REQUESTS` | providerabhängig | Gleichzeitige LLM-Requests. Leer = Default des Providers (`b-api-openai`/`openai`: 20, `b-api-academiccloud`: 2) |
 | `METADATA_AGENT_LLM_MAX_REQUESTS_PER_SECOND` | providerabhängig | LLM-Requests pro Sekunde. Leer = Default des Providers (`b-api-academiccloud`: 2, sonst keine Grenze), `0` = aus |
-| `METADATA_AGENT_REQUEST_TIMEOUT` | `90` | Timeout je KI-Aufruf in Sekunden; Puffer unter dem Ingress-Timeout von 120 s |
+| `METADATA_AGENT_REQUEST_TIMEOUT` | `90` | Timeout je KI-Aufruf in Sekunden; Puffer unter `METADATA_AGENT_GENERATE_TIMEOUT` (300 s) |
 | `METADATA_AGENT_DEFAULT_CONTEXT` | `default` | Standard Schema-Kontext |
 | `METADATA_AGENT_SCREENSHOT_METHOD` | `playwright` | Immer lokal mit Chromium im Container; `pageshot` ist ein Legacy-Alias und nimmt ebenfalls lokal auf |
 | `METADATA_AGENT_CORS_ORIGINS` | `*` | CORS Origins (komma-getrennt oder `*`) |
@@ -317,12 +328,14 @@ Was das für die Laufzeit hieß — Erschließung mit 50 Feldern, gemessen am
 | `b-api-openai` / `gpt-6-luna` (Standard, gemessen 16.10.2026) | 12–22 s |
 
 Der Agent selbst begrenzt `/generate`, `/detect-content-type` und
-`/extract-field` auf `METADATA_AGENT_GENERATE_TIMEOUT` (110 s) und `/upload`,
+`/extract-field` auf `METADATA_AGENT_GENERATE_TIMEOUT` (300 s) und `/upload`,
 `/nodes` auf `METADATA_AGENT_UPLOAD_TIMEOUT` (100 s); Proxy und Ingress davor
 haben eigene Grenzen: ingress-nginx bricht ohne Annotation nach 60 s ab
 (`proxy-read-timeout`). Für `/generate` muss
-dort mindestens **120 s** stehen (siehe oben und [UEBERGABE.md](UEBERGABE.md)),
-sonst antwortet der Ingress mit `504`, während der Agent noch arbeitet. Bei
+dort mindestens **~310 s** stehen (der Chart setzt 320 s; siehe oben und
+[UEBERGABE.md](UEBERGABE.md)), sonst antwortet der Ingress mit `504`, während
+der Agent noch arbeitet. Das gilt ebenso für den B-API-Proxy und edu-sharing
+vor dem Agenten, deren Timeouts der Chart nicht setzen kann. Bei
 ingress-nginx außerdem `proxy-body-size` auf 20 MB setzen (Default 1 MB), sonst
 scheitert `/upload` mit Vorschaubild schon am Ingress. Beispiel-Annotationen:
 [UEBERGABE.md](UEBERGABE.md) §6.

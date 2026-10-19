@@ -21,7 +21,7 @@ from prometheus_client import REGISTRY
 
 import src.metrics  # noqa: F401 - registers the agent's metrics
 from src import main
-from src.config import Settings
+from src.config import INGRESS_TIMEOUT_SECONDS, Settings
 from src.metrics import UPSTREAM_SERVICES
 from src.services import llm_errors
 
@@ -503,6 +503,27 @@ def test_values_comments_name_the_generate_timeout():
 
     assert len(named) >= 2
     assert set(named) == {timeout}
+
+
+def test_ingress_and_grace_period_fit_the_generate_deadline():
+    """
+    19.10.: /generate may run 300 s. The ingress must wait for its answer, and
+    after SIGTERM the pod must live long enough to finish it (deadline + 10 s
+    for the answer and preStop, the start warning in Settings).
+    """
+    values = _values()
+    annotations = values["ingress"]["annotations"]
+    generate = float(values["env"]["METADATA_AGENT_GENERATE_TIMEOUT"])
+
+    assert generate == Settings(_env_file=None).generate_timeout == 300
+    assert annotations["nginx.ingress.kubernetes.io/proxy-read-timeout"] == str(
+        INGRESS_TIMEOUT_SECONDS
+    )
+    assert annotations["nginx.ingress.kubernetes.io/proxy-send-timeout"] == str(
+        INGRESS_TIMEOUT_SECONDS
+    )
+    assert values["terminationGracePeriodSeconds"] == INGRESS_TIMEOUT_SECONDS
+    assert generate + 10 <= INGRESS_TIMEOUT_SECONDS
 
 
 # Review 18.10. #18: an ingress the NetworkPolicy blocks

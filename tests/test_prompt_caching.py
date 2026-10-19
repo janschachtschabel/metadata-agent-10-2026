@@ -136,7 +136,7 @@ def test_the_instruction_points_at_the_text_above():
 @pytest.mark.asyncio
 async def test_a_failing_primer_is_not_retried(monkeypatch):
     # The primer is an optimisation; waiting out retries (up to Retry-After)
-    # would only delay the field calls inside the 120 s budget.
+    # would only delay the field calls inside the /generate budget.
     gateway = _Gateway(fail_primer=True)
     cfg = Settings(
         _env_file=None, b_api_key="own-key", llm_retry_delay=0, llm_max_retries=3

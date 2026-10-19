@@ -2,7 +2,7 @@
 One LLM call may take up to 90 s.
 
 Long pages with a reasoning model take well over the old 60 s; docker-compose
-and .env.template set 300 s, longer than the 120 s the ingress allows for a
+and .env.template set 300 s, longer than the 120 s the ingress then allowed for a
 whole /generate. 90 s leaves a buffer below that limit (decided 2026-10-16).
 """
 

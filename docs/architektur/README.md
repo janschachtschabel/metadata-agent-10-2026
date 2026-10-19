@@ -3,10 +3,13 @@
 Überblick über Metadata Agent 3.0: Webkomponente, B-API-Proxy, Agent,
 LLM-Anbindung, angebundene Dienste und Betrieb.
 
-> **Stand der Dateien (18.10.2026):** 3.0.0 – Titel, NetworkPolicy und
-> schreibgeschütztes Dateisystem im Chart, `/generate` höchstens 110 s. HTML mit
-> Archify 3.1.0 neu erzeugt (alle Prüfungen bestanden), PNG und SVG daraus
-> exportiert.
+> **Stand der Dateien (19.10.2026):** 3.0.0 – Titel, NetworkPolicy und
+> schreibgeschütztes Dateisystem im Chart. HTML am 18.10. mit Archify 3.1.0
+> erzeugt (alle Prüfungen bestanden), PNG und SVG daraus exportiert. Am 19.10.
+> nur die Zeitlimits nachgezogen: `/generate` höchstens 300 s (vorher 110 s),
+> Ingress und Grace-Period 320 s, Proxys davor mindestens ~310 s – in den
+> JSON-Quellen, im HTML und im SVG ersetzt (gleich lange Texte, Layout
+> unverändert), das Ablauf-PNG aus dem SVG neu gerendert.
 
 | Datei | Zweck |
 |---|---|

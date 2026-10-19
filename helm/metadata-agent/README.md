@@ -57,9 +57,9 @@ internen Port über IPv6 erreichen.
 
 | Ressource | Hinweis |
 |---|---|
-| Deployment | Probes auf dem internen Port (`/health`, `/ready`), 120 s Grace-Period für laufende `/generate`, läuft als UID 1000 ohne Capabilities, ohne Service-Account-Token und mit schreibgeschütztem Root-Dateisystem (`/tmp`, `/home/appuser` als emptyDir mit `sizeLimit`, `scratchVolumes`); Replicas weich über Knoten verteilt (`topologySpread`, `ScheduleAnyway`); `METADATA_AGENT_INTERNAL_PORT` kommt aus `service.internalPort`, `FORWARDED_ALLOW_IPS` aus `forwardedAllowIps` (DEPLOYMENT.md, „Hinter TLS“) |
+| Deployment | Probes auf dem internen Port (`/health`, `/ready`), 320 s Grace-Period für laufende `/generate` (bis 300 s), läuft als UID 1000 ohne Capabilities, ohne Service-Account-Token und mit schreibgeschütztem Root-Dateisystem (`/tmp`, `/home/appuser` als emptyDir mit `sizeLimit`, `scratchVolumes`); Replicas weich über Knoten verteilt (`topologySpread`, `ScheduleAnyway`); `METADATA_AGENT_INTERNAL_PORT` kommt aus `service.internalPort`, `FORWARDED_ALLOW_IPS` aus `forwardedAllowIps` (DEPLOYMENT.md, „Hinter TLS“) |
 | Service | Port 8000 (API) und 9000 (intern, nur für Prometheus) |
-| Ingress | nur mit `ingress.enabled` (hinter der B-API nicht, siehe oben); nur Port 8000; Annotationen für 120 s Timeout und 20 MB Body (ingress-nginx) |
+| Ingress | nur mit `ingress.enabled` (hinter der B-API nicht, siehe oben); nur Port 8000; Annotationen für 320 s Timeout und 20 MB Body (ingress-nginx); ein B-API-Proxy oder edu-sharing davor braucht ebenso mindestens ~310 s |
 | NetworkPolicy | Standard an: Port 8000 nur aus `networkPolicy.ingressNamespaces` (`b-api`), Port 9000 nur aus `prometheusNamespaces` (`monitoring`); ausgehend DNS nur zum Cluster-DNS (`networkPolicy.dns`), `egressNamespaces` nur auf `egressPorts` (Ports der Ziel-Pods) und Internet (IPv4) ohne private Netze. **Namespaces und Ports vor der Installation an den Cluster anpassen** (Details UEBERGABE §6; IPv6, LoadBalancer/DNAT und NodeLocal DNSCache: DEPLOYMENT.md, „Grenzen der NetworkPolicy“); braucht ein CNI mit NetworkPolicy-Unterstützung |
 | PodDisruptionBudget | bei mehr als einer Replica: mindestens ein Pod läuft während einer Node-Wartung weiter |
 | Secret | nur mit `secret.create` und `--set secret.values.<KEY>=…`; sonst ein vorhandenes Secret |

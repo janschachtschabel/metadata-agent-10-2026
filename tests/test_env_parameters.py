@@ -76,6 +76,11 @@ def test_the_env_template_names_every_deadline():
         assert f"{PREFIX}{name}" in values, name
 
 
+def test_the_env_template_offers_the_default_generate_timeout():
+    # 300 s since 19.10. (was 110 s); a copied template must not undo it.
+    assert _template_values()[f"{PREFIX}GENERATE_TIMEOUT"] == "300"
+
+
 def test_the_env_template_leaves_the_keys_empty():
     """A placeholder key passes the readiness check and fails on the first call."""
     values = _template_values()

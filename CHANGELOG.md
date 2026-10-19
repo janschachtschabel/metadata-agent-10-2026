@@ -3,7 +3,7 @@
 ## 3.0.0 — 2026-10-17 — Neuer Aufbau, Korrekturen aus dem Audit
 
 > **Update:** Einstellungen und Metriken bleiben; neu sind
-> `METADATA_AGENT_GENERATE_TIMEOUT` (Default 110 s, auch für `/detect-content-type`
+> `METADATA_AGENT_GENERATE_TIMEOUT` (Default 300 s, auch für `/detect-content-type`
 > und `/extract-field`, auch ohne Ingress), `METADATA_AGENT_UPLOAD_TIMEOUT` (Default
 > 100 s), `METADATA_AGENT_REQUIRE_REPOSITORY` (Default `true`) und
 > `METADATA_AGENT_ALLOWED_LLM_MODELS` (Default leer = alle);
@@ -19,6 +19,36 @@
 > – wer im Logging-System auf `logger="src.main"` filtert, muss das anpassen.
 > Helm-Chart 0.3.0 deployt `v3.0.0`. Schritt für Schritt: DEPLOYMENT.md,
 > „Update von 2.1.x auf 3.0.0“.
+
+### Lange Quellen (19.10.)
+
+Gemessen: der Wikipedia-Artikel zu Goethe, 412.000 Zeichen → 56 KI-Aufrufe à
+Ø 34 s → 126 s. Das alte Zeitlimit von 110 s brach ihn ab. Auf 200.000 Zeichen
+gekürzt dauerte er 59 s (Ø 12 s je Aufruf), auf 150.000 Zeichen 35–42 s
+(Ø 8,6 s) mit denselben Feldern. Die Werte hier ersetzen die 110 s / 120 s /
+500.000 Zeichen in den Abschnitten darunter.
+
+- **Textbudget 150.000 Zeichen** (`MAX_TEXT_LENGTH`, vorher 500.000), der Rest
+  wird abgeschnitten – für `/generate`, `/detect-content-type` und
+  `/extract-field`. `/generate` meldet das in `processing.warnings`:
+  „Quelltext auf 150.000 Zeichen gekürzt (Original: N Zeichen).“ Eine
+  Korrekturanweisung wird weiterhin nie gekürzt, die Quelle macht ihr Platz;
+  ein neuer Text über 10.000 Zeichen mit `_source_text` ist eine neue Quelle
+  und wird wie jede gekürzt.
+- **Zeitlimit für `/generate` 300 s** (`METADATA_AGENT_GENERATE_TIMEOUT`,
+  vorher 110 s; gilt auch für `/detect-content-type` und `/extract-field`).
+  `METADATA_AGENT_REQUEST_TIMEOUT` (90 s je KI-Aufruf) und
+  `METADATA_AGENT_UPLOAD_TIMEOUT` (100 s) bleiben.
+- **Ingress und Grace-Period 320 s** (vorher 120 s): Helm-Annotationen
+  `proxy-read-timeout`/`proxy-send-timeout`, `terminationGracePeriodSeconds`,
+  Compose `stop_grace_period`, `docker run --stop-timeout 320`. Die
+  Startwarnung kommt jetzt ab `METADATA_AGENT_GENERATE_TIMEOUT` > 310 bzw.
+  `METADATA_AGENT_UPLOAD_TIMEOUT` > 305.
+- **Alert `MetadataAgentGenerateSlow`:** feuert bei p95 über 270 s statt 100 s
+  (der Schwellwert hing am alten Zeitlimit; Läufe von 126 s sind jetzt normal).
+- **Betrieb: Die Proxys davor brauchen mindestens ~310 s.** Der B-API-Proxy
+  und edu-sharing vor dem Agenten haben eigene Timeouts, die der Chart nicht
+  setzt. Sind sie kürzer, brechen sie lange Erschließungen vorher ab.
 
 ### Korrekturen aus dem finalen Audit vom 18.10. (`docs/audits/2026-10-18-audit-3.0.0-final.md`)
 
@@ -409,7 +439,7 @@ Vereinheitlicht nach „wer ist schuld“ (Audit API-01). Antwortformen bleiben.
 | `POST /node` | Repository-Fehler beim Anlegen | 400 | **502** (fehlender Titel bleibt 400) |
 | `/screenshot` mit `node_id` | Node außerhalb des Bearbeitungsfensters | 200, Vorschau gesetzt | **403** (`404` unbekannt), wie `/upload` |
 | alle | unerwartete Ausnahme | 500 als Klartext ohne Request-ID/CORS | **500** JSON mit `error.code: INTERNAL_ERROR`, Request-ID und CORS |
-| `/generate` | Lauf länger als `METADATA_AGENT_GENERATE_TIMEOUT` | 504 vom Ingress nach 120 s; ohne Ingress (Docker, Compose) unbegrenzt | **504** vom Agenten mit `error.code: GENERATION_TIMEOUT` nach 110 s – auch ohne Ingress. Wer dort längere Läufe braucht, erhöht `METADATA_AGENT_GENERATE_TIMEOUT` |
+| `/generate` | Lauf länger als `METADATA_AGENT_GENERATE_TIMEOUT` | 504 vom Ingress nach 120 s; ohne Ingress (Docker, Compose) unbegrenzt | **504** vom Agenten mit `error.code: GENERATION_TIMEOUT` nach 300 s (bis 19.10.: 110 s) – auch ohne Ingress. Wer dort längere Läufe braucht, erhöht `METADATA_AGENT_GENERATE_TIMEOUT` |
 | `/generate` (API-06) | unbekannter Kontext, unbekannte Version oder Schema-Datei | 502 `GENERATION_FAILED` nach Abruf und KI-Aufruf | **404** vor Abruf der Quelle, Screenshot und KI-Aufruf |
 | `/upload`, `/nodes` (API-08) | Schreiben ohne Ergebnis (nichts angelegt, nichts geändert) | 200 `success:false` | **422** `VALIDATION_ERROR` (Objektform verletzt), **422** `SCHEMA_UNAVAILABLE` (Kontext/Version unbekannt), **502** `UPSTREAM_ERROR` (Repository lehnte ab/nicht erreichbar); `detail` = bisheriger `error`-Text, dazu `discarded_node`/`node`/`step`/`field_errors`. Dubletten und Teilergebnisse bleiben 200 |
 | `/workflow/{node_id}` (API-12) | unbekannter Node / kein Zeitlimit | 200 `success:false` / unbegrenzt | **404**, kein Status gesetzt / **504** `UPLOAD_TIMEOUT` nach `METADATA_AGENT_UPLOAD_TIMEOUT` mit `node` |

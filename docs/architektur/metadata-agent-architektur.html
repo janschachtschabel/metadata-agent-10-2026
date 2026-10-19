@@ -5700,7 +5700,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <li>Tracing-Header (x-client-trace-id, B3) gehen an eigene Dienste</li>
           <li>ohne B-API-Proxy: Widget ruft den Agent direkt, LLM über B_API_KEY (wie 2.0.x) oder OPENAI_API_KEY</li>
           <li>Helm-Chart: NetworkPolicy (API nur aus dem B-API-Namespace, intern nur Prometheus; ausgehend Cluster-DNS, B-API-Ports, Internet ohne private Netze), schreibgeschütztes Root-Dateisystem</li>
-          <li>/generate endet spätestens nach 110 s (504), unter den 120 s von Ingress und Grace Period</li>
+          <li>/generate endet spätestens nach 300 s (504), unter den 320 s von Ingress und Grace Period</li>
         </ul>
       </div>
     </div>

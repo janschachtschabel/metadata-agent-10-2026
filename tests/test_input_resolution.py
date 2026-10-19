@@ -237,8 +237,71 @@ def test_a_long_source_keeps_the_correction(generator):
 
     assert response.status_code == 200, response.text
     sent = generator.texts[0]
-    assert len(sent) <= 500_000
+    # Text budget 150,000 since 19.10. (was 500,000; 200,000 measured slower).
+    assert len(sent) <= 150_000
     assert sent.rstrip().endswith(INSTRUCTION)
+    warnings = response.json()["processing"]["warnings"]
+    assert any("(Original: 720.000 Zeichen)" in w for w in warnings), warnings
+
+
+# ---------------------------- long sources (19.10.): 150,000 characters, warned
+
+
+def _truncation_warnings(response) -> list[str]:
+    return [
+        w
+        for w in response.json()["processing"]["warnings"]
+        if w.startswith("Quelltext auf")
+    ]
+
+
+def test_a_long_source_is_cut_to_the_budget_and_the_client_is_told(generator):
+    # The Goethe article: 412k characters took 56 LLM calls and 126 s; cut to
+    # 200k 59 s, to 150k 35-42 s with the same fields (measured 19.10.).
+    source = "x" * 250_000
+
+    with TestClient(main.app) as client:
+        response = client.post("/generate", json={"text": source})
+
+    assert response.status_code == 200, response.text
+    assert len(generator.texts[0]) == 150_000
+    assert _truncation_warnings(response) == [
+        "Quelltext auf 150.000 Zeichen gekürzt (Original: 250.000 Zeichen)."
+    ]
+
+
+def test_a_source_within_the_budget_is_not_cut_and_not_warned(generator):
+    source = "x" * 150_000
+
+    with TestClient(main.app) as client:
+        response = client.post("/generate", json={"text": source})
+
+    assert response.status_code == 200, response.text
+    assert generator.texts[0] == source
+    assert _truncation_warnings(response) == []
+
+
+def test_a_long_new_text_over_an_old_source_is_cut_like_any_source(generator):
+    # Over MAX_CORRECTION_LENGTH with _source_text: a new source (final audit
+    # 18.10.), and as such subject to the text budget.
+    new_text = "y" * 300_000
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/generate",
+            json={
+                "text": new_text,
+                "existing_metadata": {"_source_text": "Alte Quelle."},
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert generator.texts[0] == "y" * 150_000
+    warnings = response.json()["processing"]["warnings"]
+    assert any("neue Quelle" in w for w in warnings), warnings
+    assert _truncation_warnings(response) == [
+        "Quelltext auf 150.000 Zeichen gekürzt (Original: 300.000 Zeichen)."
+    ]
 
 
 def test_the_returned_source_text_is_the_source_alone(generator):

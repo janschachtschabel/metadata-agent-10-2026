@@ -22,8 +22,11 @@ from . import deps
 
 logger = logging.getLogger(__name__)
 
-# ~125k tokens - generous for long web pages, bounded for the LLM context.
-MAX_TEXT_LENGTH = 500_000
+# ~40k tokens. Every field call sends the whole text: the Goethe article
+# (412k characters) took 56 calls of 34 s on average, 126 s in all (19.10.).
+# Cut to 200k it took 59 s, to 150k 35-42 s with the same fields - well under
+# the 120 s of proxies that were not raised; the rest is cut off.
+MAX_TEXT_LENGTH = 150_000
 
 # A correction is an instruction, not a second source text. It is never cut
 # off, so without a bound of its own it could push the source out of the
@@ -56,6 +59,21 @@ def truncate(text: str, reserve: int = 0) -> str:
         return text
     logger.warning(f"⚠️ Text truncated from {len(text)} to {limit} characters")
     return text[:limit]
+
+
+def truncation_warnings(original: str, kept: str) -> list[str]:
+    """The warning for the client when `kept` is a cut-off `original`, else none."""
+    if len(kept) >= len(original):
+        return []
+    return [
+        f"Quelltext auf {_thousands(len(kept))} Zeichen gekürzt "
+        f"(Original: {_thousands(len(original))} Zeichen)."
+    ]
+
+
+def _thousands(number: int) -> str:
+    """200000 -> '200.000' (German digit grouping)."""
+    return f"{number:,}".replace(",", ".")
 
 
 async def resolve_input(req) -> ResolvedInput:

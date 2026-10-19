@@ -250,7 +250,7 @@ docker build --progress=plain -t metadata-agent-api .
 docker run -d \
   --name metadata-agent-api \
   -p 127.0.0.1:8000:8000 \
-  --read-only --tmpfs /tmp --tmpfs /home/appuser --stop-timeout 120 \
+  --read-only --tmpfs /tmp --tmpfs /home/appuser --stop-timeout 320 \
   -e B_API_KEY=your-api-key \
   metadata-agent-api
 
@@ -258,7 +258,7 @@ docker run -d \
 docker run -d \
   --name metadata-agent-api \
   -p 127.0.0.1:8000:8000 \
-  --read-only --tmpfs /tmp --tmpfs /home/appuser --stop-timeout 120 \
+  --read-only --tmpfs /tmp --tmpfs /home/appuser --stop-timeout 320 \
   --env-file .env \
   --restart unless-stopped \
   metadata-agent-api
@@ -267,7 +267,7 @@ docker run -d \
 docker run -d \
   --name metadata-agent-api \
   -p 127.0.0.1:8000:8000 \
-  --read-only --tmpfs /tmp --tmpfs /home/appuser --stop-timeout 120 \
+  --read-only --tmpfs /tmp --tmpfs /home/appuser --stop-timeout 320 \
   --env-file .env \
   --restart unless-stopped \
   --memory 1g \
@@ -317,14 +317,14 @@ services:
     build: .
     container_name: metadata-agent-api
     # Like the Helm chart: only locally reachable, read-only root filesystem,
-    # 120 s to finish a running /generate on stop (audit OPS-15).
+    # 320 s to finish a running /generate on stop (audit OPS-15).
     ports:
       - "127.0.0.1:8000:8000"
     read_only: true
     tmpfs:
       - /tmp
       - /home/appuser
-    stop_grace_period: 120s
+    stop_grace_period: 320s
     # The whole .env, if there is one (needs Docker Compose 2.24+)
     env_file:
       - path: .env
@@ -506,7 +506,7 @@ services:
     ports: ["127.0.0.1:8000:8000"]
     read_only: true
     tmpfs: [/tmp, /home/appuser]
-    stop_grace_period: 120s
+    stop_grace_period: 320s
     environment:
       - METADATA_AGENT_LLM_PROVIDER=b-api-openai
       - B_API_KEY=${B_API_KEY}
@@ -517,7 +517,7 @@ services:
     ports: ["127.0.0.1:8001:8000"]
     read_only: true
     tmpfs: [/tmp, /home/appuser]
-    stop_grace_period: 120s
+    stop_grace_period: 320s
     environment:
       - METADATA_AGENT_LLM_PROVIDER=b-api-academiccloud
       - B_API_KEY=${B_API_KEY}
@@ -528,7 +528,7 @@ services:
     ports: ["127.0.0.1:8002:8000"]
     read_only: true
     tmpfs: [/tmp, /home/appuser]
-    stop_grace_period: 120s
+    stop_grace_period: 320s
     environment:
       - METADATA_AGENT_LLM_PROVIDER=openai
       - OPENAI_API_KEY=${OPENAI_API_KEY}
@@ -666,7 +666,7 @@ METADATA_AGENT_REPOSITORY_URL=https://redaktion.openeduhub.net/edu-sharing/rest
 docker run -d \
   --name metadata-agent-api \
   -p 127.0.0.1:8000:8000 \
-  --read-only --tmpfs /tmp --tmpfs /home/appuser --stop-timeout 120 \
+  --read-only --tmpfs /tmp --tmpfs /home/appuser --stop-timeout 320 \
   -e B_API_KEY=your-api-key \
   -e METADATA_AGENT_B_API_BASE_URL=https://b-api.prod.openeduhub.net \
   -e METADATA_AGENT_TEXT_EXTRACTION_API_URL=https://text-extraction.prod.openeduhub.net \
@@ -743,7 +743,7 @@ docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v3.0.
 docker run -d \
   --name metadata-agent-api \
   -p 127.0.0.1:8000:8000 \
-  --read-only --tmpfs /tmp --tmpfs /home/appuser --stop-timeout 120 \
+  --read-only --tmpfs /tmp --tmpfs /home/appuser --stop-timeout 320 \
   -e B_API_KEY=<key> \
   $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v3.0.0
 ```

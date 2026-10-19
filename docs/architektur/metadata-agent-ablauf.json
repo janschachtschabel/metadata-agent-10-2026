@@ -662,7 +662,7 @@
       "y": 830,
       "label": "200 JSON + X-Request-ID",
       "variant": "return",
-      "note": "höchstens 110 s (METADATA_AGENT_GENERATE_TIMEOUT, danach 504): Proxy- und Ingress-Timeout mindestens 120 s"
+      "note": "höchstens 300 s (METADATA_AGENT_GENERATE_TIMEOUT, danach 504): Proxy- und Ingress-Timeout mindestens 310 s"
     },
     {
       "id": "gen-relay",
@@ -836,7 +836,7 @@
       "dot": "amber",
       "title": "Zeiten und Fehler",
       "items": [
-        "/generate dauert mit gpt-6-luna 12–22 s und endet spätestens nach 110 s (504 GENERATION_TIMEOUT); Proxy und Ingress brauchen mindestens 120 s",
+        "/generate dauert mit gpt-6-luna 12–22 s und endet spätestens nach 300 s (504 GENERATION_TIMEOUT); Proxy und Ingress brauchen mindestens 310 s",
         "Abgelehnter Key (401/403) oder fehlendes Modell: sofort 502 mit error.code",
         "Drosselung: 503; Teilergebnis: 200 mit processing.status partial"
       ]

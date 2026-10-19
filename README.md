@@ -301,7 +301,7 @@ docker-compose up -d
 
 # Oder manuell:
 docker build -t metadata-agent-api .
-docker run -d -p 127.0.0.1:8000:8000 --read-only --tmpfs /tmp --tmpfs /home/appuser --stop-timeout 120 --env-file .env metadata-agent-api
+docker run -d -p 127.0.0.1:8000:8000 --read-only --tmpfs /tmp --tmpfs /home/appuser --stop-timeout 320 --env-file .env metadata-agent-api
 ```
 
 ### Testen
@@ -537,6 +537,8 @@ Die Metadaten-Felder liegen **direkt auf Top-Level** (nicht in einem `metadata`-
 > **`_source_text`:** Rohtext vor der KI-Extraktion. Wird bei Text-Input oder nach URL-Crawling mitgeliefert.
 > Ein neuer Text über 10.000 Zeichen zusammen mit `_source_text` gilt als neue Quelle (Hinweis in `processing.warnings`), nicht als Korrekturanweisung.
 >
+> **Lange Quellen:** Der Quelltext wird auf 150.000 Zeichen gekürzt, der Rest abgeschnitten (`MAX_TEXT_LENGTH`; gilt auch für `/detect-content-type` und `/extract-field`). `/generate` meldet das in `processing.warnings`, z. B. „Quelltext auf 150.000 Zeichen gekürzt (Original: 412.000 Zeichen).“ Eine Korrekturanweisung wird nie gekürzt; die Quelle macht ihr Platz.
+>
 > **Screenshot:** Wenn `screenshot_method` angegeben wurde und ein Screenshot erfolgreich war, enthält die Response zusätzlich `preview_image_url` als Base64 Data-URL (`data:image/png;base64,...`).
 
 #### Fehler und Teilergebnisse
@@ -548,7 +550,7 @@ Die Metadaten-Felder liegen **direkt auf Top-Level** (nicht in einem `metadata`-
 | Kein Feld erschlossen | `502` (Drosselung `503`) | `detail` (lesbar), `error.code`, `error.request_id`, dazu `processing` |
 | Kontext, Version oder `schema_file` unbekannt | `404` | `error.code` `NOT_FOUND` – vor Abruf der Quelle, Screenshot und KI-Aufruf |
 | Textextraktion gescheitert | `504` / `502` / `422` | `error.code` `TEXT_EXTRACTION_*` |
-| Zeitlimit (`METADATA_AGENT_GENERATE_TIMEOUT`) | `504` | `error.code` `GENERATION_TIMEOUT` |
+| Zeitlimit (`METADATA_AGENT_GENERATE_TIMEOUT`, 300 s) | `504` | `error.code` `GENERATION_TIMEOUT` |
 
 **Jede Fehlerantwort** aller Endpunkte hat dieselbe Form (`ErrorResponse` in der
 OpenAPI-Spec): `detail` für Menschen – bei `422` die Liste der Schema-Verstöße –
@@ -2152,7 +2154,7 @@ Das Docker-Image enthält **Playwright + Chromium** für datenschutzfreundliche 
 ```bash
 # Fertiges Image aus der internen Registry
 docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v3.0.0
-docker run -d -p 127.0.0.1:8000:8000 --read-only --tmpfs /tmp --tmpfs /home/appuser --stop-timeout 120 \
+docker run -d -p 127.0.0.1:8000:8000 --read-only --tmpfs /tmp --tmpfs /home/appuser --stop-timeout 320 \
   -e B_API_KEY=<key> $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v3.0.0
 
 # Oder lokal bauen:

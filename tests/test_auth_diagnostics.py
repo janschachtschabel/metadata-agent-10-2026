@@ -111,13 +111,14 @@ def test_missing_repository_credentials_are_flagged():
 
 
 def test_deadlines_beyond_the_ingress_budget_are_flagged():
-    """Deadline + cleanup + preStop must fit the 120 s of ingress and grace period."""
-    upload = _warnings(b_api_key="k", upload_timeout=106, **GUEST)
-    generate = _warnings(b_api_key="k", generate_timeout=111, **GUEST)
+    """Deadline + cleanup + preStop must fit the 320 s of ingress and grace period."""
+    # 320 s since 19.10. (was 120 s): upload + 15 s, generate + 10 s.
+    upload = _warnings(b_api_key="k", upload_timeout=306, **GUEST)
+    generate = _warnings(b_api_key="k", generate_timeout=311, **GUEST)
 
     assert any("METADATA_AGENT_UPLOAD_TIMEOUT" in w for w in upload)
     assert any("METADATA_AGENT_GENERATE_TIMEOUT" in w for w in generate)
     assert (
-        _warnings(b_api_key="k", upload_timeout=105, generate_timeout=110, **GUEST)
+        _warnings(b_api_key="k", upload_timeout=305, generate_timeout=310, **GUEST)
         == []
     )

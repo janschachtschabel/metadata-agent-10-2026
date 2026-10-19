@@ -41,6 +41,7 @@ from ..input_resolver import (
     MAX_CORRECTION_LENGTH,
     resolve_input,
     truncate,
+    truncation_warnings,
     with_correction,
 )
 from .request_body import invalid_body
@@ -334,9 +335,10 @@ async def generate_metadata(request: Request):
         return _timeout_response()
     # Values the caller sends win over those the node already has.
     existing_metadata = {**resolved.fetched_metadata, **existing_metadata}
-    text, source_text = _texts(
+    text, source_text, cut = _texts(
         req, resolved.text, original_source_text, existing_metadata
     )
+    request_warnings += cut
     service = deps.get_metadata_service(
         llm_provider=req.llm_provider, llm_model=req.llm_model
     )
@@ -471,9 +473,9 @@ def _texts(
     resolved_text: str,
     original_source_text: Optional[str],
     existing_metadata: dict[str, Any],
-) -> tuple[str, str]:
+) -> tuple[str, str, list[str]]:
     """
-    (text for the LLM, source text to return).
+    (text for the LLM, source text to return, warning if the source was cut).
 
     Re-extraction: the source, the values extracted so far and the correction
     instruction (req.text). The source is the fetched text, or with text input
@@ -489,9 +491,10 @@ def _texts(
             if req.input_source == InputSource.TEXT
             else resolved_text
         )
-        return with_correction(source, existing_metadata, req.text)
+        text, kept = with_correction(source, existing_metadata, req.text)
+        return text, kept, truncation_warnings(source, kept)
     text = truncate(resolved_text)
-    return text, text
+    return text, text, truncation_warnings(resolved_text, text)
 
 
 def _version_and_schema(req: GenerateRequest) -> tuple[str, str]:

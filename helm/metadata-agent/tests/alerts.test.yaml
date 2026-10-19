@@ -341,9 +341,9 @@ tests:
     exp_alerts: []
 - interval: 1m
   input_series:
-  - series: metadata_agent_http_request_duration_seconds_bucket{namespace="wlo",method="POST",route="/generate",le="90"}
-    values: '0x40'
   - series: metadata_agent_http_request_duration_seconds_bucket{namespace="wlo",method="POST",route="/generate",le="120"}
+    values: '0x40'
+  - series: metadata_agent_http_request_duration_seconds_bucket{namespace="wlo",method="POST",route="/generate",le="300"}
     values: 0+1x40
   - series: metadata_agent_http_request_duration_seconds_bucket{namespace="wlo",method="POST",route="/generate",le="+Inf"}
     values: 0+1x40
@@ -355,8 +355,24 @@ tests:
         severity: warning
         namespace: wlo
       exp_annotations:
-        summary: /generate nähert sich dem Ingress-Timeout
-        description: 95 % der Erschließungen brauchen bis zu über 100 s; ab 120 s bricht das Ingress ab. Modell, Kontingent und METADATA_AGENT_REQUEST_TIMEOUT prüfen.
+        summary: /generate nähert sich seinem Zeitlimit
+        description: 95 % der Erschließungen brauchen bis zu über 270 s; nach 300 s (METADATA_AGENT_GENERATE_TIMEOUT) bricht der Agent mit 504 ab. Modell, Kontingent, Textlänge und METADATA_AGENT_REQUEST_TIMEOUT prüfen.
+# 19.10.: runs of 90-120 s (a long source such as the Goethe article, 126 s)
+# are within the 300 s deadline - no longer an alert (the threshold was 100 s).
+- interval: 1m
+  input_series:
+  - series: metadata_agent_http_request_duration_seconds_bucket{namespace="wlo",method="POST",route="/generate",le="90"}
+    values: '0x40'
+  - series: metadata_agent_http_request_duration_seconds_bucket{namespace="wlo",method="POST",route="/generate",le="120"}
+    values: 0+1x40
+  - series: metadata_agent_http_request_duration_seconds_bucket{namespace="wlo",method="POST",route="/generate",le="300"}
+    values: 0+1x40
+  - series: metadata_agent_http_request_duration_seconds_bucket{namespace="wlo",method="POST",route="/generate",le="+Inf"}
+    values: 0+1x40
+  alert_rule_test:
+  - eval_time: 35m
+    alertname: MetadataAgentGenerateSlow
+    exp_alerts: []
 - interval: 1m
   input_series:
   - series: metadata_agent_http_request_duration_seconds_bucket{namespace="wlo",method="POST",route="/generate",le="20"}

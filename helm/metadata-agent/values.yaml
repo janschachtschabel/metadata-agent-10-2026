@@ -38,8 +38,8 @@ ingress:
   host: metadata-agent.example
   tlsSecretName: ""
   annotations:
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "120"  # /generate takes up to 110 s
-    nginx.ingress.kubernetes.io/proxy-send-timeout: "120"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "320"  # /generate takes up to 300 s
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "320"
     nginx.ingress.kubernetes.io/proxy-body-size: "20m"     # = METADATA_AGENT_MAX_REQUEST_BYTES
 
 env:
@@ -48,9 +48,9 @@ env:
   METADATA_AGENT_B_API_BASE_URL: https://b-api.prod.openeduhub.net
   METADATA_AGENT_REPOSITORY_URL: https://redaktion.openeduhub.net/edu-sharing/rest
   METADATA_AGENT_TEXT_EXTRACTION_API_URL: http://bildungs-api-services-full-text.b-api
-  METADATA_AGENT_REQUEST_TIMEOUT: "90"              # per LLM call, below the ingress 120 s
-  METADATA_AGENT_GENERATE_TIMEOUT: "110"            # whole /generate, below the ingress 120 s
-  METADATA_AGENT_UPLOAD_TIMEOUT: "100"              # /upload, /nodes; + discard + preStop < 120 s
+  METADATA_AGENT_REQUEST_TIMEOUT: "90"              # per LLM call, below the 300 s deadline
+  METADATA_AGENT_GENERATE_TIMEOUT: "300"            # whole /generate, below the ingress 320 s
+  METADATA_AGENT_UPLOAD_TIMEOUT: "100"              # /upload, /nodes; + discard + preStop < 320 s
   METADATA_AGENT_MAX_REQUEST_BYTES: "20971520"      # 20 MB
   METADATA_AGENT_DEBUG_ENDPOINTS: "false"           # /debug/* answers 404
   # false: a deployment that only generates is ready without WLO_GUEST_* in the
@@ -105,8 +105,8 @@ scratchVolumes:
   tmpSizeLimit: 1Gi
   homeSizeLimit: 512Mi
 
-# A running /generate takes up to 110 s; uvicorn finishes it after SIGTERM.
-terminationGracePeriodSeconds: 120
+# A running /generate takes up to 300 s; uvicorn finishes it after SIGTERM.
+terminationGracePeriodSeconds: 320
 
 podSecurityContext:
   runAsNonRoot: true

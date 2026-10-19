@@ -1,14 +1,14 @@
 # Steckbrief: Metadata Agent API
 
 Entstanden aus der ausführlichen Beschreibung unter [UEBERGABE.md](../UEBERGABE.md)
-(Stand 18.10.2026, Version 3.0.0).
+(Stand 19.10.2026, Version 3.0.0).
 
 | | |
 |---|---|
 | **Service** | Metadata Agent API (inkl. Webkomponente `metadata-agent-canvas`) |
 | **Technischer Owner** | **[eintragen]** |
 | **Readiness Status** | Handlungsbedarf |
-| **Offene Punkte** | 9 |
+| **Offene Punkte** | 8 |
 | **Kritische Offene Punkte** | 2 |
 | **Jira** | **[eintragen, z.B. GEN-357]** |
 
@@ -17,12 +17,12 @@ Entstanden aus der ausführlichen Beschreibung unter [UEBERGABE.md](../UEBERGABE
 | Punkt | Text oder Link | Status |
 |---|---|---|
 | Anzeigename und Beschreibung | `Metadata Agent API`: erzeugt aus Text, Webseite oder Repository-Eintrag Metadaten (Titel, Beschreibung, Schlagworte, Bildungsstufe …) und schreibt sie ins WLO-Repository (`info.summary` der Spec) | erfüllt |
-| Repository-Link | GitLab: [metadata-agent](https://scm.edu-sharing.com/edu-sharing/projects/wlo/metaservices/metadata-agent), [metadata-agent-webcomponent](https://scm.edu-sharing.com/edu-sharing/projects/wlo/metaservices/metadata-agent-webcomponent). GitHub (privat, 2.1.1): [metadata-agent-10-2026](https://github.com/janschachtschabel/metadata-agent-10-2026), [metadata-agent-webcomponent-10-2026](https://github.com/janschachtschabel/metadata-agent-webcomponent-10-2026). Zugriff für T6 offen | offen |
+| Repository-Link | GitLab: [metadata-agent](https://scm.edu-sharing.com/edu-sharing/projects/wlo/metaservices/metadata-agent), [metadata-agent-webcomponent](https://scm.edu-sharing.com/edu-sharing/projects/wlo/metaservices/metadata-agent-webcomponent). GitHub (privat, 3.0.0): [metadata-agent-10-2026](https://github.com/janschachtschabel/metadata-agent-10-2026), [metadata-agent-webcomponent-10-2026](https://github.com/janschachtschabel/metadata-agent-webcomponent-10-2026). Zugriff für T6 offen | offen |
 | OpenAPI Spec | `/openapi.json` aus dem Code; 16 Operationen beschrieben; Swagger UI `/docs` ohne Dritt-Server | erfüllt |
-| Pipeline und Git-Tags | GitLab-CI: Branch-Images und Versions-Image je Tag (Variablen: UEBERGABE §1), dazu Prüfung von Chart (`helm lint`) und Alarmregeln (`promtool`). GitHub Actions mit Tests, Chart-Prüfung und Image-Bau. **Kritisch:** 3.0.0 im GitLab-Repo nicht committet, Tag `v3.0.0` fehlt | offen |
-| Endpunkte (öffentliche und Infrastruktur) | Port 8000: API, `/docs`, `/openapi.json`, `/widget/*`. Interner Port (z.B. 9000): `/health`, `/ready`, `/metrics`. `/debug/*` standardmäßig aus (im Chart ausdrücklich), der interne Port ist nicht im Ingress | erfüllt |
+| Pipeline und Git-Tags | GitLab-CI: Branch-Images und Versions-Image je Tag (Variablen: UEBERGABE §1), dazu Prüfung von Chart (`helm lint`) und Alarmregeln (`promtool`). GitHub Actions mit Tests, Chart-Prüfung und Image-Bau; Dependabot schlägt Updates vor (eine Woche Wartezeit, keine Python-Versionssprünge; bei uv-Vorschlägen vor dem Merge `uv lock` + `uv export`, UEBERGABE §8). **Kritisch:** 3.0.0 im GitLab-Repo nicht committet, Tag `v3.0.0` fehlt | offen |
+| Endpunkte (öffentliche und Infrastruktur) | Port 8000: API, `/docs`, `/openapi.json`, `/widget/*`. Interner Port (z.B. 9000): `/health`, `/ready`, `/metrics`; `/ready` verlangt die Repository-Zugangsdaten, abschaltbar mit `METADATA_AGENT_REQUIRE_REPOSITORY=false` (nur Generieren). `/debug/*` standardmäßig aus (im Chart ausdrücklich), der interne Port ist nicht im Ingress | erfüllt |
 | spezielle Header und Content-Types | ein: `Authorization: Bearer` (B-API, `forwardApiKey`), `x-client-trace-id`, B3; aus: `X-Request-ID`. API nur JSON; Widget-Dateien (JS, CSS, `woff2`, HTML) mit Wolli abstimmen | offen |
-| Asynchrone Job-Endpunkte | keine. `/generate` dauert 12–22 s (`gpt-6-luna`), bis 90 s (AcademicCloud) → Timeout ≥ 120 s; Async nur nötig, falls der Proxy das nicht erlaubt | offen |
+| Asynchrone Job-Endpunkte | keine. `/generate` dauert 12–22 s (`gpt-6-luna`), bis 90 s (AcademicCloud), sehr lange Quellen werden auf 150.000 Zeichen gekürzt (Goethe-Artikel, 412.000 Zeichen: 35–42 s statt 126 s); Zeitlimit 300 s → Proxy-Timeout ≥ 310 s empfohlen; Async nur nötig, falls der Proxy auch die 120 s nicht erlaubt | offen |
 
 ## Architektur
 
@@ -46,18 +46,18 @@ Entstanden aus der ausführlichen Beschreibung unter [UEBERGABE.md](../UEBERGABE
 
 | Punkt | Text oder Link | Status |
 |---|---|---|
-| Authentifizierungskonzept | mit B-API (Variante A): Proxy reicht den Key per `forwardApiKey` durch, der Dienst nutzt ihn nur je Anfrage (`B_API_AUTH_MODE`). **Kritisch:** Eintrag in der B-API und Staging-Test fehlen | offen |
-| mit B-API: Routing, virtueller Key, Berechtigungen | Standard `gpt-6-luna` (`b-api-openai`), optional `b-api-router` mit Route oder `provider/modell`. Virtueller Key nötig; Rechte: LLM-Endpunkte (`openai`, `router`), kein `LLM_ROUTE_MANAGE` | erfüllt |
+| Authentifizierungskonzept | mit B-API (Variante A): Proxy reicht den Key per `forwardApiKey` durch, der Dienst nutzt ihn nur je Anfrage (`B_API_AUTH_MODE`: `auto`/`forward`/`static`, gilt für alle B-API-Provider inkl. Router; Kurzinfo: [b-api-kurzinfo.md](b-api-kurzinfo.md)). **Kritisch:** Eintrag in der B-API und Staging-Test fehlen | offen |
+| mit B-API: Routing, virtueller Key, Berechtigungen | Standard `gpt-6-luna` (`b-api-openai`), optional `b-api-router` mit Route oder `provider/modell`. Virtueller Key nötig; Rechte: LLM-Endpunkte (`openai`, `router`), kein `LLM_ROUTE_MANAGE`. Modellwahl pro Anfrage begrenzbar mit `METADATA_AGENT_ALLOWED_LLM_MODELS`. Einrichtung: [b-api-kurzinfo.md](b-api-kurzinfo.md) | erfüllt |
 | ohne B-API: LLM-Keys und Authentifizierung | `B_API_KEY` (wie 2.0.x) oder `OPENAI_API_KEY`; keine eigene Auth-Schicht, Zugang muss ein Proxy absichern | erfüllt |
 | Env-Variablen inklusive Defaults | [ENV-PARAMETER.md](../ENV-PARAMETER.md), `.env.template` und Helm-`values.yaml`, alle per Test mit dem Code abgeglichen | erfüllt |
-| Benötigte Secrets (ohne Werte) | `B_API_KEY` (entfällt im Modus `forward`), `WLO_GUEST_USERNAME`, `WLO_GUEST_PASSWORD`; `OPENAI_API_KEY` nur ohne B-API (dann in `secret.keys` des Charts ergänzen) | erfüllt |
+| Benötigte Secrets (ohne Werte) | `B_API_KEY` (entfällt im Modus `forward`), `WLO_GUEST_USERNAME`, `WLO_GUEST_PASSWORD` (entfallen, wenn nur generiert wird: `METADATA_AGENT_REQUIRE_REPOSITORY=false`); `OPENAI_API_KEY` nur ohne B-API (dann in `secret.keys` des Charts ergänzen) | erfüllt |
 
 ## Monitoring und Betrieb
 
 | Punkt | Text oder Link | Status |
 |---|---|---|
 | Prometheus-Endpunkt | `/metrics` auf dem internen Port | erfüllt |
-| Applikationsmetriken und Alarmregeln | HTTP, LLM-Aufrufe (Ergebnis, Dauer), Erschließungen, Aufrufe an abhängige Dienste, Tokens. Zehn Alarmregeln als `PrometheusRule` im Chart, per promtool getestet; kritisch nur für eigenen Key und konfiguriertes Modell (UEBERGABE §4); Empfänger legt T6 fest | erfüllt |
+| Applikationsmetriken und Alarmregeln | HTTP, LLM-Aufrufe (Ergebnis, Dauer), Erschließungen, Aufrufe an abhängige Dienste, Tokens. Zwölf Alarmregeln als `PrometheusRule` im Chart, per promtool getestet (u. a. 5xx und interne Fehler; langsame Erschließung ab p95 > 270 s); kritisch nur für eigenen Key und konfiguriertes Modell (UEBERGABE §4); Empfänger legt T6 fest | erfüllt |
 | Log-Format und x-client-trace-id | stdout, JSON mit `trace_id` oder Text; Trace-Header gehen an B-API, Textextraktion und Repository, nie an Fremddienste | erfüllt |
 
 ## Ressourcen und Kosten
@@ -72,9 +72,9 @@ Entstanden aus der ausführlichen Beschreibung unter [UEBERGABE.md](../UEBERGABE
 
 | Punkt | Text oder Link | Status |
 |---|---|---|
-| Ansprechperson in T4 | **[Name, Kontakt]**; wer Updates anstößt, ist offen | offen |
+| Ansprechperson in T4 | **[Name, Kontakt]**; Updates stößt Team 4 an (UEBERGABE §8) | offen |
 | Bekannte Einschränkungen und offene Punkte | siehe unten | erfüllt |
-| Links zu Betriebsdokumentation und Nachweisen | [UEBERGABE.md](../UEBERGABE.md), [DEPLOYMENT.md](../DEPLOYMENT.md), [ENV-PARAMETER.md](../ENV-PARAMETER.md), [Helm-Chart](../helm/metadata-agent/README.md), [team6-anforderungen.md](team6-anforderungen.md), [Audit 15.10.2026](audits/2026-10-15-audit.md), [Audit 17.10.2026](audits/2026-10-17-audit-3.0.0.md), [Audit 18.10.2026 nach Korrektur](audits/2026-10-18-audit-3.0.0-nachkorrektur.md), [Finaler Audit 18.10.2026](audits/2026-10-18-audit-3.0.0-final.md), [CHANGELOG](../CHANGELOG.md) | erfüllt |
+| Links zu Betriebsdokumentation und Nachweisen | [UEBERGABE.md](../UEBERGABE.md), [DEPLOYMENT.md](../DEPLOYMENT.md), [ENV-PARAMETER.md](../ENV-PARAMETER.md), [B-API-Kurzinfo](b-api-kurzinfo.md), [Architektur](architektur/README.md), [Helm-Chart](../helm/metadata-agent/README.md), [team6-anforderungen.md](team6-anforderungen.md), [Audit 15.10.2026](audits/2026-10-15-audit.md), [Audit 17.10.2026](audits/2026-10-17-audit-3.0.0.md), [Audit 18.10.2026 nach Korrektur](audits/2026-10-18-audit-3.0.0-nachkorrektur.md), [Finaler Audit 18.10.2026](audits/2026-10-18-audit-3.0.0-final.md), [CHANGELOG](../CHANGELOG.md) | erfüllt |
 
 ## Offene Punkte
 
@@ -84,15 +84,15 @@ Entstanden aus der ausführlichen Beschreibung unter [UEBERGABE.md](../UEBERGABE
 
 **Offen**
 3. Technischer Owner, Ansprechperson T4 und Jira-Ticket eintragen.
-4. Festlegen, wer Updates anstößt (Abhängigkeiten, Patches, Modellwechsel); auf GitHub schlägt Dependabot sie vor, auf GitLab ist keine Automatik eingerichtet, das Alter des Chromium meldet die CI (UEBERGABE §8).
-5. Repo-Zugriff für T6 bestätigen.
-6. Content-Types der Widget-Dateien mit Wolli abstimmen.
-7. Entscheiden, ob Async-Jobs nötig sind.
-8. CPU und RAM unter Last messen.
-9. Abrechnungsweg der B-API klären (Datenresidenz-Aufschlag).
+4. Repo-Zugriff für T6 bestätigen.
+5. Content-Types der Widget-Dateien mit Wolli abstimmen.
+6. Entscheiden, ob Async-Jobs nötig sind (mit dem Textbudget bleiben auch sehr lange Seiten unter 60 s).
+7. CPU und RAM unter Last messen.
+8. Abrechnungsweg der B-API klären (Datenresidenz-Aufschlag).
 
 **Bekannte Einschränkungen**
-- `/generate` braucht bis 90 s und bricht nach 110 s selbst ab (`504`); Proxy und Ingress brauchen ≥ 120 s Timeout und 20 MB Body-Größe.
-- Statuscodes in 3.0.0 vereinheitlicht (Breaking für Clients, CHANGELOG): Abruffehler `502`, unbekannter Node `404`, ungültiger Body `422`.
+- `/generate` braucht meist 12–22 s (`gpt-6-luna`), bis 90 s mit AcademicCloud; sehr lange Quellen werden auf 150.000 Zeichen gekürzt (Rest abgeschnitten, Hinweis in `processing.warnings`) und bleiben so unter 60 s. Nach 300 s bricht der Dienst selbst ab (`504`); Proxy (B-API, edu-sharing) und Ingress brauchen dafür ≥ 310 s Timeout (Chart: 320 s) und 20 MB Body-Größe.
+- Die Webkomponente zeigt den Kürzungshinweis noch nicht an; Webkomponente 3.x braucht Agent 3.x.
+- Statuscodes in 3.0.0 vereinheitlicht (Breaking für Clients, CHANGELOG): Abruffehler `502`, unbekannter Node oder Kontext `404`, ungültiger Body `422`; `/upload` und `/nodes` ohne geschriebenes Ergebnis `422`/`502` statt `200`, `/workflow` `404`/`504`.
 - Das GWDG-Kontingent (AcademicCloud) reicht nicht für Produktivlast; Standard ist daher `gpt-6-luna`.
 - `/screenshot`, `/upload` und `/workflow` prüfen keine Rechte selbst; der Schutz liegt beim B-API-Proxy und der NetworkPolicy des Charts. Lesezugriffe laufen mit dem Service-Konto (Entscheidung offen, UEBERGABE §3).

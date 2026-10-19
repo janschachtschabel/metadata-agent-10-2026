@@ -78,7 +78,7 @@ PREVIEW_MARGIN_SECONDS = 1.0
 
 # The read-back after a finished write runs outside the deadline with this limit
 # of its own: the node is complete, a slow read must not turn it into a 504.
-# Deadline (100 s) + read-back + preStop (5 s) stays below the 120 s of ingress
+# Deadline (100 s) + read-back + preStop (5 s) stays below the 320 s of ingress
 # and grace period; the lookup and discard of a cut-off write never run on
 # the same request.
 READ_BACK_SECONDS = 10.0

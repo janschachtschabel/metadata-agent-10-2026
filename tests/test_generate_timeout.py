@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 
 from src import main
 from src.api import deps
+from src.config import INGRESS_TIMEOUT_SECONDS, Settings
 
 
 class _SlowService:
@@ -96,6 +97,17 @@ def test_the_limit_includes_fetching_the_source(monkeypatch):
     assert source.cancelled
 
 
+def test_the_default_limit_is_five_minutes():
+    # 19.10.: the Goethe article (412k characters) took 126 s; 110 s cut it off.
+    assert Settings(_env_file=None).generate_timeout == 300
+
+
 def test_the_default_limit_stays_below_the_ingress_timeout():
-    # Ingress annotation proxy-read-timeout: 120 (helm/metadata-agent/values.yaml).
-    assert deps.settings.request_timeout < deps.settings.generate_timeout < 120
+    # Ingress annotation proxy-read-timeout (helm/metadata-agent/values.yaml),
+    # 320 s since 19.10. (was 120 s).
+    defaults = Settings(_env_file=None)
+
+    assert INGRESS_TIMEOUT_SECONDS == 320
+    assert (
+        defaults.request_timeout < defaults.generate_timeout < INGRESS_TIMEOUT_SECONDS
+    )

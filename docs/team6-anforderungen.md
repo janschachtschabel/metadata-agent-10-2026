@@ -16,8 +16,8 @@ Checkliste Übergabepaket). Einzelheiten stehen in [UEBERGABE.md](../UEBERGABE.m
 | Zwei Ports (öffentlich / intern) | ✅ | `METADATA_AGENT_INTERNAL_PORT` für `/health`, `/ready`, `/metrics`; `/metrics` nur dort. `/health` und `/ready` zusätzlich auf Port 8000 für bestehende Probes; `/debug/*` standardmäßig aus |
 | Header benannt und begründet | ✅ | ein: `Authorization` (B-API-Proxy), Tracing-Header; aus: `X-Request-ID` |
 | Content-Types | 🟡 | API nur `application/json`. Das Widget liefert JS, CSS, `woff2`, HTML und JSON aus – **mit Wolli abstimmen** |
-| Erwartete Antwortzeiten | ✅ | `/generate` mit `gpt-6-luna` 12–22 s, mit AcademicCloud bis 90 s → Proxy-/Ingress-Timeout mindestens 120 s; übrige Endpunkte wenige Sekunden |
-| Async-Jobs bei mehr als 30 s (Empfehlung) | ❌ | nicht umgesetzt; nächster Schritt, falls 120 s im Proxy nicht gehen |
+| Erwartete Antwortzeiten | ✅ | `/generate` mit `gpt-6-luna` 12–22 s, mit AcademicCloud bis 90 s, sehr lange Quellen länger (bis 300 s, dann `504`) → Proxy-/Ingress-Timeout mindestens ~310 s (seit 19.10., vorher 120 s); übrige Endpunkte wenige Sekunden |
+| Async-Jobs bei mehr als 30 s (Empfehlung) | ❌ | nicht umgesetzt; nächster Schritt, falls ~310 s im Proxy nicht gehen |
 | **2. B-API und Authentifizierung** | | |
 | Variante A: Auth über die B-API | ✅ | keine eigene Auth-Schicht nötig; Dienst nur über die B-API erreichbar machen |
 | Virtueller Key für LLM-Aufrufe | ✅ | weitergereichter `Authorization`-Header wird je Anfrage genutzt (`B_API_AUTH_MODE` `auto` / `forward`), nicht gespeichert oder geloggt |
@@ -58,4 +58,4 @@ Checkliste Übergabepaket). Einzelheiten stehen in [UEBERGABE.md](../UEBERGABE.m
   `/generate` mit Screenshot.
 - **Abstimmen:** die statischen Widget-Dateien mit Wolli (Content-Types).
 - **Entscheiden:** ob Async-Jobs für `/generate` nötig sind, falls im Proxy keine
-  120 s möglich sind.
+  ~310 s möglich sind.

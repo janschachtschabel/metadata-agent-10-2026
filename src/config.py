@@ -48,8 +48,9 @@ PROVIDER_LIMITS: dict[str, dict[str, Any]] = {
 # for the ENV default.
 MAX_WORKERS = 20
 
-# Proxy timeout of the ingress and termination grace period of the Helm chart.
-INGRESS_TIMEOUT_SECONDS = 120
+# Proxy timeout of the ingress and termination grace period of the Helm chart:
+# generate_timeout (300 s) + 10 s for the answer and preStop, plus a buffer.
+INGRESS_TIMEOUT_SECONDS = 320
 
 # provider name -> which budget it draws from
 LIMIT_GROUPS = {
@@ -216,23 +217,25 @@ class Settings(BaseSettings):
     # capped by llm_max_concurrent_requests — asking for more workers than the
     # gateway allows in flight only queues them up.
     default_max_workers: int = MAX_WORKERS
-    # Read timeout of one LLM call. 90 s leaves a buffer below the 120 s the
-    # ingress allows for a whole /generate; long pages need more than 60 s.
+    # Read timeout of one LLM call. 90 s leaves a buffer below the 300 s a
+    # whole /generate may take; long pages need more than 60 s.
     request_timeout: int = 90
 
     # Upper bound for a whole /generate run (all field calls, retries,
     # geocoding), in seconds - and for /detect-content-type and /extract-field.
-    # Below the 120 s of the ingress, so the client gets the agent's 504 with
+    # Below the 320 s of the ingress, so the client gets the agent's 504 with
     # request id instead of a bare one from the proxy, and the field calls stop
-    # instead of running on for nobody.
-    generate_timeout: float = Field(default=110, gt=0)
+    # instead of running on for nobody. 300 s since 19.10.: the Goethe article
+    # (412k characters, 56 LLM calls of 34 s on average) took 126 s. A B-API
+    # proxy or edu-sharing in front needs a timeout of at least ~310 s.
+    generate_timeout: float = Field(default=300, gt=0)
 
     # Upper bound for /upload and /nodes (screenshot, every write request; the
     # read-back of a finished node runs after it with its own 10 s,
     # READ_BACK_SECONDS, on a request that needs no cleanup), in seconds. Lower
     # than generate_timeout: when the limit hits, a node this call created is
     # looked up (if its id never arrived, up to 5 s) and discarded (up to 5 s);
-    # deadline + both + preStop (5 s) must fit into the 120 s of ingress and
+    # deadline + both + preStop (5 s) must fit into the 320 s of ingress and
     # grace period.
     upload_timeout: float = Field(default=100, gt=0)
 
@@ -479,7 +482,7 @@ class Settings(BaseSettings):
                 )
             )
 
-        # Deadline + what runs after it must fit the 120 s of ingress and grace
+        # Deadline + what runs after it must fit the 320 s of ingress and grace
         # period: /upload looks up and discards its node (5 s each), both wait
         # for preStop (5 s); /generate needs its answer and preStop.
         for name, deadline, after in (

@@ -66,9 +66,16 @@ Anforderungen erfüllt sind, steht in
     16.10.2026), mit AcademicCloud bis 90 s (Warteschlange am Gateway).
   - `/extract-field`, `/detect-content-type`: wenige Sekunden.
   - Screenshots: höchstens 90 s.
-  - **Proxy- und Ingress-Timeout für `/generate`: mindestens 120 s.** Der
-    Agent bricht einen Lauf nach `METADATA_AGENT_GENERATE_TIMEOUT` (110 s) selbst
-    ab und antwortet `504` mit `error.code: GENERATION_TIMEOUT` und Request-ID.
+  - Sehr lange Quellen: ein Wikipedia-Artikel mit 412.000 Zeichen (Goethe)
+    brauchte ungekürzt 56 KI-Aufrufe à Ø 34 s, zusammen 126 s (19.10.). Der
+    Quelltext wird seitdem auf 150.000 Zeichen gekürzt (`processing.warnings`
+    sagt es dann); derselbe Artikel braucht so 35–42 s.
+  - **Proxy- und Ingress-Timeout für `/generate`: mindestens ~310 s** – im
+    B-API-Proxy, in edu-sharing und in einem eigenen Ingress (der Chart setzt
+    320 s). Der Agent bricht einen Lauf nach `METADATA_AGENT_GENERATE_TIMEOUT`
+    (300 s) selbst ab und antwortet `504` mit `error.code: GENERATION_TIMEOUT`
+    und Request-ID. Ein kürzeres Timeout davor schneidet lange Erschließungen
+    ab, bevor der Agent fertig ist.
 - **Statuscodes:** `4xx` = die Anfrage ist falsch (fehlender Parameter, Node
   außerhalb des Bearbeitungsfensters `403`, Node, Kontext oder Schema unbekannt
   `404`, Body zu groß `413`, gültiges JSON mit falschem Inhalt `422`, auch
@@ -81,7 +88,7 @@ Anforderungen erfüllt sind, steht in
   noch Teilergebnisse (der Node existiert) und Dubletten; ein Schreiben ohne
   Ergebnis ist `422`/`502`.
 - **Async-Jobs** (Job anlegen, Status abfragen) gibt es nicht. Das wäre der
-  nächste Schritt, falls 120 s im Proxy nicht gehen.
+  nächste Schritt, falls ~310 s im Proxy nicht gehen.
 
 ## 3. B-API
 
@@ -234,7 +241,7 @@ Aufrufer“. Alternativen: Lesezugriffe anonym oder mit dem Ticket des Aufrufers
   | `MetadataAgentGenerationsFailing` | warning | über 50 % `failed` in 30 min (ab 3 Läufen) |
   | `MetadataAgentUpstreamUnanswered` | warning | mehr als 3 Aufrufen ohne Antwort in 10 min (je Dienst, ohne `llm`), 5 min lang – laufende Aufrufe zählen anfangs als unbeantwortet |
   | `MetadataAgentUpstreamServerErrors` | warning | mehr als 5 Antworten mit 5xx in 10 min (je Dienst) |
-  | `MetadataAgentGenerateSlow` | warning | p95 von `/generate` über 100 s, 15 min lang |
+  | `MetadataAgentGenerateSlow` | warning | p95 von `/generate` über 270 s (Zeitlimit 300 s), 15 min lang |
   | `MetadataAgentServerErrors` | warning | mehr als 5 eigenen Antworten mit 5xx in 10 min (je Route, ohne `/health`, `/ready`) |
   | `MetadataAgentInternalError` | critical | einem `500` (`INTERNAL_ERROR`, ein Fehler im Agent selbst) in 10 min, auch dem ersten nach dem Start eines Pods |
 
@@ -293,14 +300,14 @@ Browser ─ edu-sharing ─ B-API-Proxy ─┐
   `WLO_GUEST_USERNAME`, `WLO_GUEST_PASSWORD`. Referenz: `Dockerfile`,
   `docker-compose.yml`. `METADATA_AGENT_REQUEST_TIMEOUT` (Timeout je
   KI-Aufruf, 90 s) und `METADATA_AGENT_GENERATE_TIMEOUT` (ganzes `/generate`,
-  110 s, samt Abruf der Quelle) sind in Code, Compose, Chart und Template
-  einheitlich, ein Puffer unter dem Ingress-Timeout von 120 s. Geocoding:
+  300 s, samt Abruf der Quelle) sind in Code, Compose, Chart und Template
+  einheitlich, ein Puffer unter dem Ingress-Timeout von 320 s. Geocoding:
   höchstens 10 Abfragen je Anfrage.
 
 Helm-Chart: [`helm/metadata-agent/`](helm/metadata-agent/README.md) mit
-Deployment (Probes auf dem internen Port, 120 s Grace-Period für laufende
+Deployment (Probes auf dem internen Port, 320 s Grace-Period für laufende
 Erschließungen), Service, PodDisruptionBudget, NetworkPolicy, Secret,
-`ServiceMonitor` und `PrometheusRule`. Ein Ingress (Annotationen `proxy-read-timeout 120`,
+`ServiceMonitor` und `PrometheusRule`. Ein Ingress (Annotationen `proxy-read-timeout 320`,
 `proxy-body-size 20m`) ist abschaltbar vorhanden, gehört aber nicht vor einen
 Dienst hinter der B-API: Der Proxy ruft den Service im Cluster auf; bei
 aktivem Ingress im Modus `auto` warnt `helm install`.

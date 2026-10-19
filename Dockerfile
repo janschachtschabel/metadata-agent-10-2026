@@ -6,7 +6,7 @@
 #
 # Build:  docker build -t metadata-agent-api .
 # Run:    docker run -d -p 127.0.0.1:8000:8000 --read-only --tmpfs /tmp
-#           --tmpfs /home/appuser --stop-timeout 120 -e B_API_KEY=... metadata-agent-api
+#           --tmpfs /home/appuser --stop-timeout 320 -e B_API_KEY=... metadata-agent-api
 #         (one line; README.md, "Docker")
 # =============================================================================
 

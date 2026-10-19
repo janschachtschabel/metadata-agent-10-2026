@@ -61,7 +61,7 @@ async def take_screenshot(req: ScreenshotRequest):
     if not req.node_id:
         return await _capture_and_store(req)
     # With a node: capture, window check and upload together within
-    # METADATA_AGENT_UPLOAD_TIMEOUT - they could otherwise outlast the 120 s
+    # METADATA_AGENT_UPLOAD_TIMEOUT - they could otherwise outlast the 320 s
     # of ingress and grace period.
     try:
         async with asyncio.timeout(deps.settings.upload_timeout):

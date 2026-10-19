@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient
 
 from src import main
 from src.api import deps
+from src.config import INGRESS_TIMEOUT_SECONDS
 from src.services import repository_metadata as metadata_module
 from src.services import repository_nodes as nodes_module
 from src.services import repository_service as repo_module
@@ -240,9 +241,9 @@ def test_save_node_answers_504_at_its_deadline(monkeypatch):
 
 
 def test_the_default_upload_limit_leaves_room_for_the_cleanup():
-    # 120 s ingress and grace period: deadline + lost-node lookup (5 s)
+    # Ingress and grace period: deadline + lost-node lookup (5 s)
     # + discard (5 s) + preStop (5 s).
-    assert deps.settings.upload_timeout + 15 <= 120
+    assert deps.settings.upload_timeout + 15 <= INGRESS_TIMEOUT_SECONDS
 
 
 # ------------------------------------------------- D-05: preview problems
