@@ -7,7 +7,7 @@ Stand 20.10.2026, Version 3.0.1
 | **Service** | Metadata Agent (metadata-agent inkl. metadata-agent-webcomponent) |
 | **Technischer Owner** | @Jan Schachtschabel |
 | **Readiness Status** | Handlungsbedarf |
-| **Offene Punkte** | 10 |
+| **Offene Punkte** | 6 |
 | **Kritische Offene Punkte** | 2 |
 | **Jira** | DAT-108, wg. Anpassungen SDWLO-1564 |
 
@@ -18,10 +18,10 @@ Stand 20.10.2026, Version 3.0.1
 | Anzeigename und Beschreibung | `Metadata Agent API`: erzeugt aus Text, Webseite oder Repository-Eintrag Metadaten (Titel, Beschreibung, Schlagworte, Bildungsstufe …) und schreibt sie ins WLO-Repository (`info.summary` der Spec) | erfüllt |
 | Repository-Link | GitLab (Produktiv): [metadata-agent](https://scm.edu-sharing.com/edu-sharing/projects/wlo/metaservices/metadata-agent), [metadata-agent-webcomponent](https://scm.edu-sharing.com/edu-sharing/projects/wlo/metaservices/metadata-agent-webcomponent). GitHub (Entwicklung): [metadata-agent-10-2026](https://github.com/janschachtschabel/metadata-agent-10-2026), [metadata-agent-webcomponent-10-2026](https://github.com/janschachtschabel/metadata-agent-webcomponent-10-2026). | erfüllt |
 | OpenAPI Spec | `/openapi.json` aus dem Code; 16 Operationen beschrieben; Swagger UI `/docs` ohne Dritt-Server | erfüllt |
-| Pipeline und Git-Tags | GitLab-CI: Branch-Images und Versions-Image je Tag, dazu Prüfung von Chart (`helm lint`) und Alarmregeln (`promtool`). GitHub Actions grün (1.589 Tests, Stand vor dem Chart). Gitlab Tagg: | erfüllt |
+| Pipeline und Git-Tags | GitLab-CI: Branch-Images und Versions-Image je Tag, dazu Prüfung von Chart (`helm lint`) und Alarmregeln (`promtool`). GitHub Actions grün (2.549 Tests, Chart-Prüfung, Image-Build; Stand 3.0.1). GitLab-Tag `v3.0.1` steht noch aus | erfüllt |
 | Endpunkte (öffentliche und Infrastruktur) | Port 8000: API, `/docs`, `/openapi.json`, `/widget/*`. Interner Port (z.B. 9000): `/health`, `/ready`, `/metrics`; `/ready` verlangt die Repository-Zugangsdaten, abschaltbar mit `METADATA_AGENT_REQUIRE_REPOSITORY=false` (nur Generieren). `/debug/*` standardmäßig aus (im Chart ausdrücklich), der interne Port ist nicht im Ingress | erfüllt |
 | spezielle Header und Content-Types | ein: `Authorization: Bearer` (B-API, `forwardApiKey`), `x-client-trace-id`, B3; aus: `X-Request-ID`. API nur JSON; Widget-Dateien (JS, CSS, `woff2`, HTML) abstimmen | offen |
-| Asynchrone Job-Endpunkte | keine. `/generate` dauert 12–22 s (`gpt-6-luna`), bis 90 s (AcademicCloud), sehr lange Quellen werden auf 150.000 Zeichen gekürzt (Goethe-Artikel, 412.000 Zeichen: 35–42 s statt 126 s); Zeitlimit 300 s → Proxy-Timeout ≥ 310 s empfohlen; Async nur nötig, falls der Proxy auch die 120 s nicht erlaubt | offen |
+| Asynchrone Job-Endpunkte | keine. `/generate` dauert 12–22 s (`gpt-6-luna`), bis 90 s (AcademicCloud), sehr lange Quellen werden auf 150.000 Zeichen gekürzt (Goethe-Artikel, 412.000 Zeichen: 35–42 s statt 126 s); Zeitlimit 300 s → Proxy-Timeout ≥ 310 s empfohlen; Async nur nötig, falls ein Proxy die ≥ 310 s nicht erlaubt | offen |
 
 ## Architektur
 
@@ -89,9 +89,10 @@ Stand 20.10.2026, Version 3.0.1
 4. CPU und RAM unter Last messen
 5. Webkomponente: Tests von Karma auf Vitest (`@angular/build:unit-test`) und den Build auf `@angular/build:application` umstellen, ohne Angular-Update.
    Damit entfallen die 11 `braces`-Befunde der Entwicklungswerkzeuge im CI-Job `audit dev dependencies` (Aufwand ca. 1–2 Tage, 442 Specs).
-6. Hinweis an edu-sharing: Beim Laden des Formulars ist kurz das Texteingabefeld des Widgets zu sehen, meist Millisekunden, während einer Erschließung 1–2 s.
-   Ursache: edu-sharing setzt `layout`, `readonly` usw. erst nach dem Laden der Skripte in einem `setTimeout`; bis dahin zeigt das Widget das Standard-Layout. Am Widget wird dafür nichts geändert, weil es nicht erkennen kann, ob der Host noch Einstellungen nachreicht, und eine Wartezeit jede andere Einbettung verzögern würde.
-   Ergänzung, Lösung in edu-sharing: die Properties im selben Ablauf setzen, der das Element erzeugt (vor dem Einhängen und vor jedem `await`/`setTimeout`), oder als Bindings im Template. Properties, die vor dem Laden von `main.js` gesetzt werden, übernimmt das Widget beim Start. Muster: README der Webkomponente, „Konfiguration vor dem ersten Rendern“. Betraf 2.1.1 genauso.
+6. Hinweis an edu-sharing: kurz sichtbares Texteingabefeld beim Laden des Formulars (meist Millisekunden, während einer Erschließung 1–2 s). Betraf 2.1.1 genauso.
+   - **Ursache:** edu-sharing setzt `layout`, `readonly` usw. erst nach `await initWebComponent()` (im Formular-Editor zusätzlich in einem `setTimeout`); bis dahin zeigt das Widget sein Standard-Layout mit Eingabefeld.
+   - **Lösung:** die Einbindung in edu-sharing anpassen: alle Einstellungen setzen, sobald das Element angelegt ist, und erst danach die Skripte laden (Formular-Editor und Detailansicht). Korrigierter Code: [README der Webkomponente, „Einbettung in edu-sharing“](https://github.com/janschachtschabel/metadata-agent-webcomponent-10-2026#einbettung-in-edu-sharing).
+   - **Widget unverändert:** Es kann nicht erkennen, ob der Host noch Einstellungen nachreicht; eine Wartezeit würde jede andere Einbettung verzögern.
 
 **Bekannte Einschränkungen**
 - `/generate` braucht meist 12–22 s (`gpt-6-luna`), bis 90 s mit AcademicCloud; sehr lange Quellen werden auf 150.000 Zeichen gekürzt (Rest abgeschnitten, Hinweis in `processing.warnings`) und bleiben so unter 60 s. Nach 300 s bricht der Dienst selbst ab (`504`); Proxy (B-API, edu-sharing) und Ingress brauchen dafür ≥ 310 s Timeout (Chart: 320 s) und 20 MB Body-Größe.

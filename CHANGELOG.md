@@ -9,8 +9,8 @@
   `info_outline` sind eingebettete SVGs. edu-sharing lädt `styles.css` nicht,
   und seine Icon-Schrift kennt beide nicht (statt ⊗ stand „ca“ im Chip).
   `widget/dist/fonts/material-icons-outlined.woff2` entfällt (Widget-CHANGELOG).
-- Doku: Einbettung ohne kurz sichtbares Standard-Layout (Widget-README,
-  „Konfiguration vor dem ersten Rendern“), Steckbrief Stand 20.10.
+- Doku: korrigierte Einbindung in edu-sharing ohne kurz sichtbares Standard-Layout
+  (Widget-README, „Einbettung in edu-sharing“), Steckbrief Stand 20.10.
 
 ## 3.0.0 — 2026-10-17 — Neuer Aufbau, Korrekturen aus dem Audit
 

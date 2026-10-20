@@ -26,7 +26,7 @@ Stand: verifiziert gegen das aktuelle `src/static/widget/dist/main.js` und `src/
 
 Priorität der API-URL: `api-url`-Attribut > `window.__ENV.agentUrl` > Herkunft von `main.js` (alles vor `/widget/dist/` in der Script-URL, inkl. Proxy-Präfix wie `/edu-sharing/rest/bapi/api/v1/proxy/metadata-agent-canvas`) > Build-`environment.apiUrl` > Same-Origin.
 
-Schriften: Roboto 300/400/500 und Material Icons (gefüllt + Outlined) liefert der Dienst selbst unter `/widget/dist/fonts/` aus, die `@font-face`-Regeln stehen in `styles.css`. Die Seite bindet nur `styles.css` ein — keine Google-Fonts-Links. `GET /widget/info` meldet deshalb `"fonts": []`. Die Schriften heißen dort `Metadata Agent Roboto` bzw. `Metadata Agent Material Icons …`, und Material-Theme, Schrift und Icon-Klassen gelten nur im Widget und seinem Overlay-Container — Schriften, Icons und `--mat-*`-Tokens der Host-Seite bleiben unberührt.
+Schriften: Roboto 300/400/500 und Material Icons liefert der Dienst selbst unter `/widget/dist/fonts/` aus, die `@font-face`-Regeln stehen in `styles.css`. Die Seite bindet nur `styles.css` ein — keine Google-Fonts-Links. `GET /widget/info` meldet deshalb `"fonts": []`. Die Schriften heißen dort `Metadata Agent Roboto` bzw. `Metadata Agent Material Icons`, und Material-Theme, Schrift und Icon-Klassen gelten nur im Widget und seinem Overlay-Container — Schriften, Icons und `--mat-*`-Tokens der Host-Seite bleiben unberührt.
 
 Werden die Widget-Scripts doppelt geladen, bleibt die erste Registrierung bestehen (kein `NotSupportedError`). Ein fremdes `<app-root>` auf einer Angular-Host-Seite schaltet das Widget nicht in den Standalone-Modus.
 
