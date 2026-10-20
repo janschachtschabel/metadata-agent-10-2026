@@ -115,8 +115,10 @@ def test_styles_define_the_icon_ligatures_google_used_to_provide(styles_source):
     """
     compact = re.sub(r"[\s\"']", "", styles_source)
     assert "metadata-agent-canvas.material-icons," in compact
-    assert "{font-family:MetadataAgentMaterialIcons}" in compact
-    assert "{font-family:MetadataAgentMaterialIconsOutlined!important}" in compact
+    assert "{font-family:MetadataAgentMaterialIcons;" in compact
+    # The chips' remove icon is an inline SVG (edu-sharing loads no styles.css);
+    # no outlined icon font is left to load.
+    assert "Outlined" not in styles_source
     assert "font-feature-settings:liga" in compact
     # A global rule would start right after the previous one: "}.material-icons".
     assert not re.search(r"(^|\})\.material-icons", styles_source)
@@ -137,7 +139,7 @@ def test_demo_pages_with_their_own_icons_bring_the_icon_styles():
 
 def test_every_font_the_stylesheet_names_is_served_as_woff2(styles_source):
     fonts = sorted(set(re.findall(r"url\((fonts/[\w.-]+\.woff2)\)", styles_source)))
-    assert len(fonts) == 8, fonts  # 2 icon fonts + Roboto 300/400/500 x 2 subsets
+    assert len(fonts) == 7, fonts  # 1 icon font + Roboto 300/400/500 x 2 subsets
 
     with TestClient(main.app) as client:
         for font in fonts:

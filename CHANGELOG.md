@@ -1,5 +1,17 @@
 # Änderungen
 
+## 3.0.1 — 2026-10-20 — Webkomponente 3.0.1
+
+> **Update:** keine neuen Einstellungen, API unverändert. Nur das Image tauschen
+> (`v3.0.1`, Helm-Chart 0.3.1).
+
+- Liefert die Webkomponente 3.0.1 aus: Das Entfernen-Symbol der Chips und
+  `info_outline` sind eingebettete SVGs. edu-sharing lädt `styles.css` nicht,
+  und seine Icon-Schrift kennt beide nicht (statt ⊗ stand „ca“ im Chip).
+  `widget/dist/fonts/material-icons-outlined.woff2` entfällt (Widget-CHANGELOG).
+- Doku: Einbettung ohne kurz sichtbares Standard-Layout (Widget-README,
+  „Konfiguration vor dem ersten Rendern“), Steckbrief Stand 20.10.
+
 ## 3.0.0 — 2026-10-17 — Neuer Aufbau, Korrekturen aus dem Audit
 
 > **Update:** Einstellungen und Metriken bleiben; neu sind

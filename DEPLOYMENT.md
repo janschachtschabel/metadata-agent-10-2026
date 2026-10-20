@@ -214,11 +214,11 @@ $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api
 **Verfügbare Tags:**
 - `main` — aktueller Stand von `main`
 - `develop` — aktueller Stand von `develop`
-- `v3.0.0` — spezifische Version (bei Git-Tag `v3.0.0`)
+- `v3.0.1` — spezifische Version (bei Git-Tag `v3.0.1`)
 
 **Pull:**
 ```bash
-docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v3.0.0
+docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v3.0.1
 ```
 
 ---
@@ -233,7 +233,7 @@ docker run -d \
   -e B_API_KEY=<key> \
   -e WLO_GUEST_USERNAME=<user> \
   -e WLO_GUEST_PASSWORD=<pass> \
-  $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v3.0.0
+  $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v3.0.1
 ```
 
 ---
@@ -363,7 +363,7 @@ Response:
 ```json
 {
   "status": "healthy",
-  "version": "3.0.0"
+  "version": "3.0.1"
 }
 ```
 
@@ -567,10 +567,10 @@ Tests. Diese Liste ist die erste Probe im Cluster. Die Ergebnisse gehören ins
 der Ressourcen: der Release-Name, wenn er „metadata-agent“ enthält, sonst
 `<release>-metadata-agent` (die Ausgabe von `helm install` nennt ihn).
 
-1. **Image `v3.0.0` bauen und pushen.** Git-Tag `v3.0.0` setzen; die
+1. **Image `v3.0.1` bauen und pushen.** Git-Tag `v3.0.1` setzen; die
    GitLab-Pipeline baut, startet den Smoke-Test (schreibgeschützt, Chromium),
    scannt mit Trivy und pusht erst danach. Prüfen:
-   `docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v3.0.0`.
+   `docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v3.0.1`.
    Ohne dieses Tag endet `helm install` mit den Defaults in `ImagePullBackOff`.
 2. **Namespaces und Ports ermitteln:**
    - `kubectl get ns -L kubernetes.io/metadata.name` – Namespaces der B-API

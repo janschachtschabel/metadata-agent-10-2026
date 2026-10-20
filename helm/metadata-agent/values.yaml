@@ -4,7 +4,7 @@
 image:
   # Required, e.g. <registry>/projects/wlo/meta-services/metadata-agent-api.
   repository: ""
-  tag: v3.0.0
+  tag: v3.0.1
   pullPolicy: IfNotPresent
 imagePullSecrets: []
 

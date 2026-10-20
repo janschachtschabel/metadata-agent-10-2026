@@ -308,7 +308,7 @@ docker run -d -p 127.0.0.1:8000:8000 --read-only --tmpfs /tmp --tmpfs /home/appu
 
 ```bash
 curl http://localhost:8000/health
-# → {"status": "healthy", "version": "3.0.0"}
+# → {"status": "healthy", "version": "3.0.1"}
 # (Provider und Auth-Modus nennt /health nur auf dem internen Port)
 
 curl -X POST http://localhost:8000/generate \
@@ -1556,7 +1556,7 @@ curl -X POST http://localhost:8000/screenshot \
 #### GET /health, GET /ready
 
 ```json
-{ "status": "healthy", "version": "3.0.0" }
+{ "status": "healthy", "version": "3.0.1" }
 ```
 
 Auf dem internen Port nennt `/health` zusätzlich `llm_provider` und
@@ -2138,7 +2138,7 @@ Unter `/widget/examples/` sind interaktive Beispiele verfügbar:
 
 ## Deployment
 
-> **Bestehendes Deployment auf 3.0.0 aktualisieren:** Vorher
+> **Bestehendes Deployment auf 3.0.x aktualisieren:** Vorher
 > [Update von 2.1.x auf 3.0.0](DEPLOYMENT.md#update-von-21x-auf-300) lesen. Mit
 > dem Helm-Chart müssen die Namespaces und Ports der NetworkPolicy zum Cluster
 > passen (sonst erreicht die B-API den Dienst nicht), und ein eigenes
@@ -2153,9 +2153,9 @@ Das Docker-Image enthält **Playwright + Chromium** für datenschutzfreundliche 
 
 ```bash
 # Fertiges Image aus der internen Registry
-docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v3.0.0
+docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v3.0.1
 docker run -d -p 127.0.0.1:8000:8000 --read-only --tmpfs /tmp --tmpfs /home/appuser --stop-timeout 320 \
-  -e B_API_KEY=<key> $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v3.0.0
+  -e B_API_KEY=<key> $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v3.0.1
 
 # Oder lokal bauen:
 cp .env.template .env

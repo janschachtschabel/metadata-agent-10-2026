@@ -186,7 +186,7 @@ uvicorn src.main:app --host 0.0.0.0 --port 8000
 ```bash
 # Health Check
 curl http://localhost:8000/health
-# → {"status": "healthy", "version": "3.0.0"}
+# → {"status": "healthy", "version": "3.0.1"}
 # (Provider und Auth-Modus nennt /health nur auf dem internen Port)
 
 # Einfacher Test
@@ -231,7 +231,7 @@ cd metadata-agent-api
 docker build -t metadata-agent-api .
 
 # Mit Build-Argumenten
-docker build -t metadata-agent-api:v3.0.0 .
+docker build -t metadata-agent-api:v3.0.1 .
 
 # Build-Cache nutzen (schneller bei Rebuilds)
 docker build --cache-from metadata-agent-api:latest -t metadata-agent-api .
@@ -598,17 +598,17 @@ Navigiere zu **GitLab → Repository → Settings → CI/CD → Variables** und 
 |---|---|---|
 | Push auf `main` | Branch-Slug (`main`) | Automatisch bei jedem Merge/Push |
 | Push auf `develop` | Branch-Slug (`develop`) | Automatisch |
-| Git-Tag `v*` | Tag-Name (z.B. `v3.0.0`) | Für Releases; andere Tags veröffentlichen nichts |
+| Git-Tag `v*` | Tag-Name (z.B. `v3.0.1`) | Für Releases; andere Tags veröffentlichen nichts |
 
 ### 4.4 Release erstellen (neuen Tag pushen)
 
 ```bash
 # Version taggen
-git tag v3.0.0
-git push origin v3.0.0
+git tag v3.0.1
+git push origin v3.0.1
 
 # → GitLab CI baut und pusht:
-# $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v3.0.0
+# $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v3.0.1
 ```
 
 ---
@@ -738,14 +738,14 @@ Die Adresse der Textextraktion steht oben unter *Externe Dienste*
 Das vorgefertigte Image aus der internen Registry verwenden:
 
 ```bash
-docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v3.0.0
+docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v3.0.1
 
 docker run -d \
   --name metadata-agent-api \
   -p 127.0.0.1:8000:8000 \
   --read-only --tmpfs /tmp --tmpfs /home/appuser --stop-timeout 320 \
   -e B_API_KEY=<key> \
-  $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v3.0.0
+  $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v3.0.1
 ```
 
 Vorteile: Playwright/Chromium vorinstalliert, Health Check, einfaches Update, reproduzierbar.

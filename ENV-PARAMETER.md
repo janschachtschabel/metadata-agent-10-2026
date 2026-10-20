@@ -108,7 +108,7 @@ die B-API den Schlüssel annimmt.
   einen Schlüssel.
 
 ```json
-{"version": "3.0.0", "llm_provider": "b-api-openai", "b_api_auth_mode": "auto",
+{"version": "3.0.1", "llm_provider": "b-api-openai", "b_api_auth_mode": "auto",
  "config_warnings": [],
  "checks": {
    "llm": {"url": "https://b-api.prod.openeduhub.net/api/v1/llm/openai/models",
@@ -380,7 +380,7 @@ mit privater Adresse (z.B. Split-Horizon-DNS im Cluster) wird abgelehnt.
 | Variable | Default | Beschreibung |
 |---|---|---|
 | `METADATA_AGENT_APP_NAME` | `Metadata Agent API` | |
-| `METADATA_AGENT_APP_VERSION` | `3.0.0` | |
+| `METADATA_AGENT_APP_VERSION` | `3.0.1` | |
 | `METADATA_AGENT_CORS_ORIGINS` | `*` | Komma-getrennt oder `*` |
 | `METADATA_AGENT_LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING` oder `ERROR` |
 | `METADATA_AGENT_LOG_FORMAT` | `text` | `text`: nur die Meldung, wie bisher. `json`: ein Objekt je Zeile mit `time`, `level`, `logger`, `message` und `trace_id`; auch für die Server- und Zugriffslogs von uvicorn |

@@ -76,7 +76,7 @@ class Settings(BaseSettings):
 
     # API Settings
     app_name: str = "Metadata Agent API"
-    app_version: str = "3.0.0"
+    app_version: str = "3.0.1"
 
     # Logs go to stdout. text: the message alone, as the agent always wrote
     # them; json: one object per line with level, logger, time and trace id.

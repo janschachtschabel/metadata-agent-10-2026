@@ -79,8 +79,8 @@ Noto Color Emoji (Debian fonts-noto-color-emoji)
                              OFL-1.1 (upstream)
 Roboto (@fontsource/roboto 5.3.0, widget: src/static/widget/dist/fonts)
                              OFL-1.1
-Material Icons, Material Icons Outlined (material-icons 1.13.14, widget:
-src/static/widget/dist/fonts)
+Material Icons (material-icons 1.13.14, widget: src/static/widget/dist/fonts;
+two outlined icons inline as SVG in main.js)
                              Apache-2.0 (Copyright Google LLC)
 
 
