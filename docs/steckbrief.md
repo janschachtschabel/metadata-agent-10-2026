@@ -86,7 +86,7 @@ Status: **vorhanden** / **nicht vorhanden** (etwas, das es geben muss),
 
 **Offen**
 
-5. Version 4.0.0 nach GitLab übernehmen und dort taggen: Erst das Tag `v4.0.0` im GitLab-Repository baut das Image. Auf GitHub ist die Version seit dem 15.11.2026 getaggt; der Test auf Staging steht noch aus (Punkte 1 bis 4).
+5. Release-Image bauen: Der Stand liegt seit dem 15.11.2026 im GitLab-Repository auf `main` (Tag `0.1.1`, entspricht dem Entwicklungs-Repository auf GitHub: Tag `v4.0.0` samt der Folge-Commits auf `main`). Die Pipeline baut daraus das Image `main`; ein Image `v4.0.0` entsteht erst mit einem Tag `v4.0.0` in GitLab. Der Test auf Staging steht noch aus (Punkte 1 bis 4).
 6. Entscheiden, ob Async-Jobs nötig sind – nur falls ein Proxy die ≥ 310 s nicht erlaubt.
 7. CPU und RAM unter Last messen; P50/P90 je Endpunkt; komprimierte Image-Größe.
 8. Hinweis an edu-sharing: kurz sichtbarer Eingabebereich beim Laden des Formulars. Ursache ist die späte Konfiguration des Elements; kleinste Korrektur ist ein statisches Attribut im Template (`layout="clean"` im Formular-Editor, `layout="detail"` in der Detailansicht). Am Bundle nachgemessen; Code im README der Webkomponente, [„Einbettung in edu-sharing“](https://github.com/janschachtschabel/metadata-agent-webcomponent-10-2026/blob/main/README.de.md#einbettung-in-edu-sharing).
