@@ -23,6 +23,13 @@ Tag `v4.0.0` zeigt auf den Stand davor.
   Element. Aufgefallen, weil die Browser-Tests erstmals lokal liefen.
 - **Tests:** 4607 bestanden, 1 übersprungen (manueller Netztest), Abdeckung
   95 %, einschließlich der Browser-Tests; `pip-audit` ohne Befund.
+- **Übersetzungen des Widgets Byte für Byte im Repository:** `.gitattributes`
+  schützte nur `src/static/widget/dist/**` vor der Umwandlung von
+  Zeilenenden, `dist/build.json` stempelt aber auch `assets/i18n`. Git schrieb
+  `de.json` und `en.json` beim Commit um, und der Stempel-Test schlug auf dem
+  Linux-Runner fehl – der erste echte CI-Lauf von 4.0.0 hat das gezeigt. Jetzt
+  gilt `-text` auch für `src/static/widget/assets/**`; ein Test prüft, dass
+  jede gestempelte Datei geschützt ist.
 - **Architektur-Map für 4.0.0:** `docs/architektur/metadata-agent-architektur-b-api.*`
   neu gezeichnet (Archify 3.2.0): Rahmen um den Pod des Agenten, interner
   Port als eigener Service, Versionen 4.0.0, Cache-Vorlauf und Haltepunkt in

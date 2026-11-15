@@ -6,6 +6,9 @@
 # unpacks to 1.452.517). FastAPI serves either one, so the delivered widget
 # depended on which file the client happened to get.
 src/static/widget/dist/** -text
+# The translations are part of the same delivery: dist/build.json holds their
+# checksums too (tests/test_widget_bundle_stamp.py).
+src/static/widget/assets/** -text
 # Vendored Swagger UI: byte-identical to the npm package (checksum in its README).
 src/static/docs/*.js -text
 src/static/docs/*.css -text

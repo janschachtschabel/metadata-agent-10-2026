@@ -53,3 +53,27 @@ def test_the_stamp_names_the_widget_and_its_version():
     agent_version = Settings.model_fields["app_version"].default
     assert stamp["version"].split(".")[0] == agent_version.split(".")[0]
     assert stamp["builtAt"].endswith("Z")
+
+
+def test_git_stores_every_stamped_file_byte_for_byte():
+    """
+    The stamp holds checksums of bytes. Without "-text" in .gitattributes git
+    rewrites line endings on commit or checkout (core.autocrlf), and the same
+    delivery has other checksums on another machine. Found on the first CI run
+    of 4.0.0 (15.11.2026): assets/i18n was stamped but only dist/** was
+    protected, so both translation files differed on the Linux runner.
+    """
+    attributes = (WIDGET.parents[2] / ".gitattributes").read_text(encoding="utf-8")
+    protected = [
+        line.split()[0].removesuffix("**")
+        for line in attributes.splitlines()
+        if line.split()[1:] == ["-text"] and line.split()[0].endswith("/**")
+    ]
+    stamp = json.loads(STAMP.read_text(encoding="utf-8"))
+
+    unprotected = sorted(
+        name
+        for name in stamp["files"]
+        if not any(f"src/static/widget/{name}".startswith(p) for p in protected)
+    )
+    assert unprotected == [], f"no '-text' rule covers: {unprotected}"
