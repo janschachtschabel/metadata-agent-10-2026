@@ -3,7 +3,7 @@
 [English](API.md) · **Deutsch**
 
 Referenz für alle, die die Metadata Agent API aufrufen (Dienst-ID
-`metadata-agent`, Version 4.0.0). Was sich für Aufrufer seit dem vorigen
+`metadata-agent`, Version 4.0.1). Was sich für Aufrufer seit dem vorigen
 Release geändert hat, steht unter
 [Änderungen seit Release 3.0.1](#änderungen-seit-release-301).
 
@@ -1924,7 +1924,7 @@ Layout, zwei Attribute, ein Event und drei Beispielseiten.
 ```json
 {
   "name": "metadata-agent-canvas",
-  "version": "4.0.0",
+  "version": "4.0.1",
   "description": "Angular Web Component zur Anzeige und Bearbeitung von Metadaten. Kann als <metadata-agent-canvas> Tag in beliebige Webanwendungen eingebettet werden. Die URLs dieser Antwort sind relativ zur Adresse von /widget/info; {AGENT_URL} in den Snippets steht für die Basis-URL des Dienstes.",
   "dist_base_url": "dist",
   "scripts": {
@@ -2005,7 +2005,7 @@ auch kein `/metrics`. Siehe [DEPLOYMENT](../DEPLOYMENT.de.md) und
 Liveness: Der Prozess antwortet. Über die abhängigen Dienste sagt das nichts.
 
 ```json
-{ "status": "healthy", "version": "4.0.0" }
+{ "status": "healthy", "version": "4.0.1" }
 ```
 
 ```bash

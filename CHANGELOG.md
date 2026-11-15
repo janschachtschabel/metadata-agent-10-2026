@@ -1,9 +1,17 @@
 # Änderungen
 
-## Unveröffentlicht — Abhängigkeiten nach 4.0.0 (15.11.)
+## 4.0.1 — 2026-11-15 — Abhängigkeiten, Korrekturen aus den ersten CI-Läufen, Webkomponente 4.0.1
 
-Nur Abhängigkeiten und ein Test; Verhalten und Schnittstellen wie 4.0.0. Das
-Tag `v4.0.0` zeigt auf den Stand davor.
+Schnittstellen und Einstellungen wie 4.0.0. Entstanden am Tag von 4.0.0: Erst
+mit den öffentlichen Repositories liefen die Pipelines wirklich, und sie
+zeigten drei Stellen, die lokal nicht aufgefallen waren.
+
+- **Webkomponente 4.0.1:** In einem englischen Widget zeigte die
+  Nur-Lese-Ansicht ein Datum mit deutschen Punkten, ein Datum mit Uhrzeit
+  daneben mit Schrägstrichen; jetzt beide englisch. Sieben Specs der
+  Webkomponente hingen an der Browser-Sprache und scheiterten im englischen
+  Chromium der GitLab-Pipeline. Bundle neu gebaut und ausgeliefert
+  (`dist/build.json`).
 
 - **Python-Pakete** auf Stände, die mindestens sieben Tage alt sind: fastapi
   0.162.2, starlette 1.10.0, pydantic 2.14.3, pydantic-settings 2.16.2,
@@ -21,7 +29,7 @@ Tag `v4.0.0` zeigt auf den Stand davor.
   noch die Registrierungs-Meldung in der Konsole, die das Widget seit 4.0.0
   nur im Debug-Modus schreibt. Geprüft wird jetzt die Version am registrierten
   Element. Aufgefallen, weil die Browser-Tests erstmals lokal liefen.
-- **Tests:** 4607 bestanden, 1 übersprungen (manueller Netztest), Abdeckung
+- **Tests:** 4608 bestanden, 1 übersprungen (manueller Netztest), Abdeckung
   95 %, einschließlich der Browser-Tests; `pip-audit` ohne Befund.
 - **Übersetzungen des Widgets Byte für Byte im Repository:** `.gitattributes`
   schützte nur `src/static/widget/dist/**` vor der Umwandlung von

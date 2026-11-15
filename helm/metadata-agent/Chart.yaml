@@ -4,5 +4,5 @@ description: Metadata Agent API - erschließt Bildungsinhalte mit KI (inkl. Webk
 type: application
 # One version for service, image and chart, so values and image always match
 # (tests/test_helm_chart.py). Until 3.0.1 the chart counted on its own: 0.3.1.
-version: 4.0.0
-appVersion: "4.0.0"
+version: 4.0.1
+appVersion: "4.0.1"

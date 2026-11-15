@@ -3,7 +3,7 @@
 [English](DEPLOYMENT.md) · **Deutsch**
 
 Wie die Metadata Agent API (Dienst-ID `metadata-agent`, Image
-`metadata-agent-api`, Version 4.0.0) produktiv läuft: mit Docker oder auf
+`metadata-agent-api`, Version 4.0.1) produktiv läuft: mit Docker oder auf
 Kubernetes, hinter dem B-API-Proxy oder eigenständig.
 
 Verwandte Dokumente:
@@ -215,7 +215,7 @@ $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api
 |---|---|
 | `main` | Jedem Push auf `main` |
 | `develop` | Jedem Push auf `develop` |
-| `v4.0.0` | Dem Git-Tag `v4.0.0`. Ein Release-Tag muss die Form `vX.Y.Z` haben und zur Version in `pyproject.toml` passen; andere Tags veröffentlichen nichts |
+| `v4.0.1` | Dem Git-Tag `v4.0.1`. Ein Release-Tag muss die Form `vX.Y.Z` haben und zur Version in `pyproject.toml` passen; andere Tags veröffentlichen nichts |
 
 Vor dem Push startet die Pipeline das Image schreibgeschützt und ohne
 Schlüssel (`scripts/smoke-image.sh`): Sie wartet auf `/health`, prüft `/ready`,
@@ -228,7 +228,7 @@ ein Jahr aufbewahrt). In der Produktion Versions-Tags verwenden; `main` und
 `develop` wandern.
 
 ```bash
-docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v4.0.0
+docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v4.0.1
 ```
 
 Der GitHub-Spiegel (`.github/workflows/docker-publish.yml`) führt dieselben
@@ -284,7 +284,7 @@ docker run -d \
   -e WLO_GUEST_PASSWORD=<password> \
   -e METADATA_AGENT_B_API_BASE_URL=https://b-api.prod.openeduhub.net \
   -e METADATA_AGENT_REPOSITORY_URL=https://redaktion.openeduhub.net/edu-sharing/rest \
-  $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v4.0.0
+  $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v4.0.1
 ```
 
 | Option | Warum |
@@ -310,7 +310,7 @@ Ein Dienst für die Produktion mit dem Image aus der Registry:
 ```yaml
 services:
   metadata-agent-api:
-    image: ${DOCKER_REGISTRY}/projects/wlo/meta-services/metadata-agent-api:v4.0.0
+    image: ${DOCKER_REGISTRY}/projects/wlo/meta-services/metadata-agent-api:v4.0.1
     ports:
       - "127.0.0.1:8000:8000"   # nur dieser Rechner; andere nur hinter einer Zugangsbeschränkung
     read_only: true
@@ -363,8 +363,8 @@ Client-Adresse einer Anfrage übernimmt.
 ## Kubernetes mit dem Helm-Chart
 
 Der Chart liegt unter [`helm/metadata-agent/`](helm/metadata-agent/README.md).
-Seine Version ist die Version des Dienstes: Chart 4.0.0 deployt das Image-Tag
-`v4.0.0`. Der Chart ist bisher statisch geprüft (`helm lint`, kubeconform,
+Seine Version ist die Version des Dienstes: Chart 4.0.1 deployt das Image-Tag
+`v4.0.1`. Der Chart ist bisher statisch geprüft (`helm lint`, kubeconform,
 Tests), nicht in einem Cluster. Die erste Installation ist die
 [Prüfliste unten](#erste-installation-im-cluster-prüfliste).
 
@@ -393,7 +393,7 @@ kubectl rollout restart deployment/metadata-agent
 | Wert | Default | Was zu tun ist |
 |---|---|---|
 | `image.repository` | leer | **Pflicht.** Ohne ihn scheitert das Rendern |
-| `image.tag` | `v4.0.0` | Das Image muss in der Registry liegen und aus demselben Stand gebaut sein wie der Chart (siehe [Updates](#updates)) |
+| `image.tag` | `v4.0.1` | Das Image muss in der Registry liegen und aus demselben Stand gebaut sein wie der Chart (siehe [Updates](#updates)) |
 | `image.digest` | leer | `sha256:` und 64 Hex-Ziffern legen das Image fest: Es wird als `<repository>@<digest>` geholt, das Tag wird nicht verwendet. Ein Tag lässt sich auf ein anderes Image umsetzen, ein Digest nicht |
 | `secret.existingSecret` | leer | Name des Secrets mit `B_API_KEY`, `WLO_GUEST_USERNAME`, `WLO_GUEST_PASSWORD`. Leer: Der Chart erwartet ein Secret, das wie seine Ressourcen heißt. `B_API_KEY` ist im Modus `forward` nicht nötig |
 | `env.METADATA_AGENT_B_API_BASE_URL`, `env.METADATA_AGENT_REPOSITORY_URL` | Produktion | Für Staging beide setzen. Keine der beiden darf leer sein |
@@ -585,7 +585,7 @@ Einen ausgefallenen oder neu startenden Pod melden die Regeln des Clusters
 
 | Pfad | Antwort | Bedeutung |
 |---|---|---|
-| `/health` | `200` `{"status": "healthy", "version": "4.0.0"}`. Auf dem internen Port zusätzlich `llm_provider` und `b_api_auth_mode` | Der Prozess antwortet. Über die abhängigen Dienste sagt das nichts |
+| `/health` | `200` `{"status": "healthy", "version": "4.0.1"}`. Auf dem internen Port zusätzlich `llm_provider` und `b_api_auth_mode` | Der Prozess antwortet. Über die abhängigen Dienste sagt das nichts |
 | `/ready` | `200` `{"status": "ready"}`, oder `503` mit `status: "not_ready"`, `detail` und `error.code` `NOT_READY`. Auf dem internen Port zusätzlich die Gründe (`problems`) | Die Konfiguration kann arbeiten |
 
 `/ready` antwortet mit `503`, wenn:
@@ -971,11 +971,11 @@ Ziel-Namespace, `<release>` der Release-Name und `<name>` der Name der
 Ressourcen: der Release-Name, wenn er „metadata-agent“ enthält, sonst
 `<release>-metadata-agent` (`helm install` nennt ihn).
 
-1. **Image bauen und pushen.** Das Git-Tag der Version (`v4.0.0`) auf den
+1. **Image bauen und pushen.** Das Git-Tag der Version (`v4.0.1`) auf den
    Commit setzen, aus dem der Chart stammt. Die GitLab-Pipeline baut, startet
    den Smoke-Test (schreibgeschützt, Chromium), scannt mit Trivy und pusht
    erst danach. Prüfen:
-   `docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v4.0.0`.
+   `docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v4.0.1`.
    Ohne dieses Tag in der Registry endet `helm install` mit den Defaults in
    `ImagePullBackOff`.
 2. **Namespaces und Ports ermitteln:**
@@ -1092,8 +1092,8 @@ Der Agent ist zustandslos: Es gibt keine Datenbank und keine Migration.
 
 ### Update von 3.0.x auf 4.0.0
 
-Die Einzelheiten stehen im CHANGELOG unter 4.0.0. Der Chart nennt
-`image.tag: v4.0.0` und braucht das Image dieser Version: Mit
+Die Einzelheiten stehen im CHANGELOG unter 4.0.0 und 4.0.1. Der Chart nennt
+`image.tag: v4.0.1` und braucht das Image dieser Version: Mit
 dem am 20.10.2026 als 3.0.1 veröffentlichten Image funktioniert er nicht (siehe
 „Chart und Image zusammenhalten“ unten).
 
@@ -1113,7 +1113,7 @@ dem am 20.10.2026 als 3.0.1 veröffentlichten Image funktioniert er nicht (siehe
       B-API. Für den Weg über die B-API die Zeile entfernen.
 - [ ] **Chart und Image zusammenhalten.** Der Chart trägt jetzt die Version
       des Dienstes (bisher 0.3.1). Mit einem Image bis zum veröffentlichten
-      4.0.0 funktioniert er nicht: Der Chart lässt die Adresse der
+      3.0.1 funktioniert er nicht: Der Chart lässt die Adresse der
       Textextraktion leer, und das ältere Image liest das als „keine Adresse“.
 - [ ] **Log-Auswertungen anpassen.** In den JSON-Zeilen heißt `time` jetzt
       `timestamp`. `trace_id` ist die B3-Trace-ID; der bisherige Wert steht in
@@ -1252,7 +1252,7 @@ steckt im Image und geht mit zurück.
     --reuse-values --set image.tag=<previous tag> --wait
   ```
   **Nicht auf ein Image bis zum veröffentlichten 3.0.1.** Der aktuelle Chart
-  lässt die Adresse der Textextraktion leer, und erst 4.0.0
+  lässt die Adresse der Textextraktion leer, und erst ab 4.0.0
   liest „leer“ als „über die B-API“. Ein älteres Image ruft dann `/from-url`
   ohne Adresse auf, und die Erschließung aus URLs scheitert. Dafür
   `helm rollback` nehmen (stellt auch die alten Values wieder her) oder

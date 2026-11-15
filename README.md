@@ -7,7 +7,7 @@ with a large language model (LLM). It reads a text, a web page or a repository
 node, returns metadata that follows the
 [WLO/OEH schema](https://wirlernenonline.de), and can write the result to a
 WLO edu-sharing repository. The service is a FastAPI application for
-Python 3.13 (version 4.0.0). It also serves the web component
+Python 3.13 (version 4.0.1). It also serves the web component
 `<metadata-agent-canvas>` that displays and edits the metadata.
 
 ## Contents
@@ -107,7 +107,7 @@ uv run uvicorn src.main:app --reload --port 8000
 
 ```bash
 curl http://localhost:8000/health
-# → {"status":"healthy","version":"4.0.0"}
+# → {"status":"healthy","version":"4.0.1"}
 
 curl -X POST http://localhost:8000/generate \
   -H "Content-Type: application/json" \
@@ -396,11 +396,11 @@ The CI publishes the image `metadata-agent-api` to the internal registry: tag
 `v<version>` for a release tag, `main` and `develop` for the branches.
 
 ```bash
-docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v4.0.0
+docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v4.0.1
 docker run -d --name metadata-agent-api -p 127.0.0.1:8000:8000 \
   --read-only --tmpfs /tmp --tmpfs /home/appuser --stop-timeout 320 \
   -e B_API_KEY=<key> \
-  $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v4.0.0
+  $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v4.0.1
 ```
 
 - The image contains Chromium (the headless shell) for screenshots and the

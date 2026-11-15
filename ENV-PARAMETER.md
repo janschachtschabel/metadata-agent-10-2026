@@ -3,7 +3,7 @@
 **English** · [Deutsch](ENV-PARAMETER.de.md)
 
 The complete reference of every environment variable the Metadata Agent API
-reads, for version 4.0.0; the changes since 3.0.1 are listed in
+reads, for version 4.0.1; the changes since 3.0.1 are listed in
 [CHANGELOG.md](CHANGELOG.md) (German). The source is `src/config.py`.
 `tests/test_env_parameters.py` compares this document with the settings model:
 no variable is missing here, and none is listed that the service does not read.
@@ -105,7 +105,7 @@ never prints a key, only whether `B_API_KEY` is set (`gesetzt` or
 (`https://user:password@host`) are left out of the address lines.
 
 ```text
-Starting Metadata Agent API v4.0.0
+Starting Metadata Agent API v4.0.1
 LLM Provider: b-api-academiccloud
 LLM Model: deepseek-v4-flash
 LLM API Base: https://b-api.staging.openeduhub.net/api/v1/llm/academiccloud
@@ -683,7 +683,7 @@ whether the B-API accepts the key. The time limit per check is 5 s.
   never a key.
 
 ```json
-{"version": "4.0.0", "llm_provider": "b-api-openai", "b_api_auth_mode": "auto",
+{"version": "4.0.1", "llm_provider": "b-api-openai", "b_api_auth_mode": "auto",
  "config_warnings": [],
  "checks": {
    "llm": {"url": "https://b-api.prod.openeduhub.net/api/v1/llm/openai/models",
@@ -706,7 +706,7 @@ whether the B-API accepts the key. The time limit per check is 5 s.
 | Variable | Default | Values | Meaning and use |
 |---|---|---|---|
 | `METADATA_AGENT_APP_NAME` | `Metadata Agent API` | Text | Name in the start log and title of the OpenAPI document. Normally not set |
-| `METADATA_AGENT_APP_VERSION` | `4.0.0` | Text | Version the service reports (`/health`, OpenAPI, `/widget/info`). Do not set it: it changes the reported version only, not the software |
+| `METADATA_AGENT_APP_VERSION` | `4.0.1` | Text | Version the service reports (`/health`, OpenAPI, `/widget/info`). Do not set it: it changes the reported version only, not the software |
 
 No setting chooses the schema: a request names its own `context`, default
 `default` (the value `GET /info/schemata` reports as `default_context`), and

@@ -1,8 +1,9 @@
 # Steckbrief: Metadata Agent
 
-Stand 15.11.2026. Beschrieben ist die Version 4.0.0 (Agent und Webkomponente
-gemeinsam, auf GitHub getaggt am 15.11.2026). Die Änderungen gegenüber 3.0.1
-stehen im [CHANGELOG](../CHANGELOG.md).
+Stand 15.11.2026. Beschrieben ist die Version 4.0.1 (Agent und Webkomponente
+gemeinsam, auf GitHub als `v4.0.1` und auf GitLab als `0.1.2` getaggt am
+15.11.2026). Die Änderungen gegenüber 3.0.1 stehen im
+[CHANGELOG](../CHANGELOG.md).
 
 Status: **vorhanden** / **nicht vorhanden** (etwas, das es geben muss),
 **geprüft** (eine Eigenschaft ist festgestellt), **In Klärung**,
@@ -14,7 +15,7 @@ Status: **vorhanden** / **nicht vorhanden** (etwas, das es geben muss),
 |---|---|---|
 | Service | | Metadata Agent – Dienst-ID `metadata-agent` (mit der Webkomponente `metadata-agent-webcomponent`). Zwei ältere Namen bleiben, weil andere Stellen sie fest verwenden: der Proxy-Eintrag der B-API `metadata-agent-canvas` und das Image `metadata-agent-api` |
 | Funktionalität | | Erzeugt aus Text, Webseite oder Repository-Eintrag Metadaten nach den WLO/OEH-Schemata (Titel, Beschreibung, Schlagworte, Bildungsstufe, Lizenz …), prüft sie und schreibt sie ins WLO-Repository; liefert dazu die Webkomponente zum Anzeigen und Bearbeiten |
-| Stabile Version | **vorhanden** | 4.0.0 (15.11.2026), davor 3.0.1 (20.10.2026). Aufrufer-sichtbare Änderungen stehen im CHANGELOG unter „Vor dem Update prüfen“ |
+| Stabile Version | **vorhanden** | 4.0.1 (15.11.2026; 4.0.0 vom selben Tag ist darin aufgegangen), davor 3.0.1 (20.10.2026). Aufrufer-sichtbare Änderungen stehen im CHANGELOG unter „Vor dem Update prüfen“ |
 | Technischer Owner | | @Jan Schachtschabel (Team 4: Manuel und Jan); Vertretung noch festzulegen |
 | Jira | **vorhanden** | DAT-108, wegen der Anpassungen SDWLO-1564 |
 | Repository | **vorhanden** | GitLab (Produktiv): [metadata-agent](https://scm.edu-sharing.com/edu-sharing/projects/wlo/metaservices/metadata-agent), [metadata-agent-webcomponent](https://scm.edu-sharing.com/edu-sharing/projects/wlo/metaservices/metadata-agent-webcomponent). GitHub (Entwicklung): [metadata-agent-10-2026](https://github.com/janschachtschabel/metadata-agent-10-2026), [metadata-agent-webcomponent-10-2026](https://github.com/janschachtschabel/metadata-agent-webcomponent-10-2026) |
@@ -24,7 +25,7 @@ Status: **vorhanden** / **nicht vorhanden** (etwas, das es geben muss),
 | Endpunkte auf zwei Ports | **vorhanden** | Port 8000: API und Webkomponente. Interner Port (Chart: 9000): `/health`, `/ready`, `/metrics` – nicht im Ingress, im Chart auf einem eigenen Service `<name>-internal`. `/health` und `/ready` antworten auch auf Port 8000 (HEALTHCHECK des Images) |
 | Header / Content-Types | **geprüft** | Ein: `Authorization: Bearer` (von der B-API per `forwardApiKey` durchgereicht), `x-client-trace-id`, `X-Request-ID`, B3 (`x-b3-traceid`, `x-b3-spanid`, `b3`). Aus: `X-Request-ID`, bei Überlast `Retry-After`. API: `application/json` (`/generate` nimmt auch `text/plain`); Webkomponente: JS, CSS, `woff2`, HTML, JSON – im Proxy freizugeben |
 | Asynchrone Job-Endpunkte | **geprüft** | keine, alles synchron. `/generate` dauert meist 9–22 s (`gpt-6-luna`), Frist 300 s, danach Teilergebnis bzw. `504`; `/upload` und `/nodes` Frist 100 s. Proxys davor brauchen ≥ 310 s Timeout und 20 MB Body-Größe |
-| Readiness Status | **In Nacharbeit** | Version 4.0.0 ist lokal geprüft (4579 Tests, Webkomponente 1281 Specs, [Audit vom 14.11.](audits/2026-11-14-audit-3.0.1.md) mit behobenen Befunden). Es fehlen: Test auf Staging, Eintrag und Schlüsselrechte in der B-API, erste Installation des Charts im Cluster – siehe „Offene Punkte“ |
+| Readiness Status | **In Nacharbeit** | Version 4.0.1 ist lokal geprüft (4608 Tests, Webkomponente 1282 Specs, [Audit vom 14.11.](audits/2026-11-14-audit-3.0.1.md) mit behobenen Befunden). Es fehlen: Test auf Staging, Eintrag und Schlüsselrechte in der B-API, erste Installation des Charts im Cluster – siehe „Offene Punkte“ |
 
 ## Architektur
 
@@ -86,7 +87,7 @@ Status: **vorhanden** / **nicht vorhanden** (etwas, das es geben muss),
 
 **Offen**
 
-5. Release-Image bauen: Der Stand liegt seit dem 15.11.2026 im GitLab-Repository auf `main` (Tag `0.1.1`, entspricht dem Entwicklungs-Repository auf GitHub: Tag `v4.0.0` samt der Folge-Commits auf `main`). Die Pipeline baut daraus das Image `main`; ein Image `v4.0.0` entsteht erst mit einem Tag `v4.0.0` in GitLab. Der Test auf Staging steht noch aus (Punkte 1 bis 4).
+5. Release-Image bauen: Der Stand liegt im GitLab-Repository auf `main` (Tag `0.1.2`, inhaltsgleich mit dem Tag `v4.0.1` des Entwicklungs-Repositorys auf GitHub). Die Pipeline baut daraus das Image `main`; ein Image `v4.0.1` entsteht erst mit einem Tag `v4.0.1` in GitLab. Der Test auf Staging steht noch aus (Punkte 1 bis 4).
 6. Entscheiden, ob Async-Jobs nötig sind – nur falls ein Proxy die ≥ 310 s nicht erlaubt.
 7. CPU und RAM unter Last messen; P50/P90 je Endpunkt; komprimierte Image-Größe.
 8. Hinweis an edu-sharing: kurz sichtbarer Eingabebereich beim Laden des Formulars. Ursache ist die späte Konfiguration des Elements; kleinste Korrektur ist ein statisches Attribut im Template (`layout="clean"` im Formular-Editor, `layout="detail"` in der Detailansicht). Am Bundle nachgemessen; Code im README der Webkomponente, [„Einbettung in edu-sharing“](https://github.com/janschachtschabel/metadata-agent-webcomponent-10-2026/blob/main/README.de.md#einbettung-in-edu-sharing).
