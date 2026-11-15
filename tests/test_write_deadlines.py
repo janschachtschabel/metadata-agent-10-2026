@@ -25,6 +25,7 @@ from src.api import deps
 from src.config import INGRESS_TIMEOUT_SECONDS
 from src.services import repository_metadata as metadata_module
 from src.services import repository_nodes as nodes_module
+from src.services import repository_preview_upload as preview_module
 from src.services import repository_service as repo_module
 from src.services.repository_service import RepositoryService
 
@@ -349,15 +350,10 @@ async def test_generate_waits_for_the_screenshot_only_until_its_deadline():
 # --------------------------------------------- API-05: bounded correction
 
 
-def test_a_correction_instruction_has_its_own_length_limit():
-    from fastapi import HTTPException
+def test_a_correction_instruction_comes_last_and_whole():
+    # Its length limit is /generate's (tests/test_correction_gate.py).
+    from src.api.input_resolver import with_correction
 
-    from src.api.input_resolver import MAX_CORRECTION_LENGTH, with_correction
-
-    with pytest.raises(HTTPException) as refused:
-        with_correction("Quelle", {}, "x" * (MAX_CORRECTION_LENGTH + 1))
-
-    assert refused.value.status_code == 400
     text, _ = with_correction("Quelle", {}, "Titel kürzer")
     assert text.endswith("Titel kürzer")
 
@@ -504,7 +500,7 @@ async def _within(coroutine, seconds=2.0):
 @pytest.mark.asyncio
 async def test_a_slow_capture_is_given_up_and_the_node_kept(monkeypatch):
     calls = _use(monkeypatch, _Repository)
-    monkeypatch.setattr(repo_module, "PREVIEW_RESERVE_SECONDS", 0.8)
+    monkeypatch.setattr(preview_module, "PREVIEW_RESERVE_SECONDS", 0.8)
 
     result = await _upload(preview_source=_never, deadline=_deadline(1.0))
 
@@ -598,7 +594,7 @@ async def test_an_unexpected_error_after_the_workflow_keeps_the_node(monkeypatch
     def broken(*args, **kwargs):
         raise RuntimeError("bug after the workflow")
 
-    monkeypatch.setattr(RepositoryService, "_written_result", broken)
+    monkeypatch.setattr(repo_module, "written_result", broken)
 
     result = await _upload()
 
@@ -803,7 +799,7 @@ async def test_a_handed_over_node_in_the_workflow_is_named_after_a_failure(
     def broken(*args, **kwargs):
         raise RuntimeError("bug after the workflow")
 
-    monkeypatch.setattr(RepositoryService, "_written_result", broken)
+    monkeypatch.setattr(repo_module, "written_result", broken)
 
     result = await _upload(node_id=EXISTING_NODE)
 

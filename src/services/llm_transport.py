@@ -6,7 +6,12 @@ import httpx
 from typing import TYPE_CHECKING, Any, Optional
 
 from .llm_auth import b_api_auth, current_auth_source
-from ..metrics import LLM_DURATION, LLM_REQUESTS, count_llm_tokens
+from ..metrics import (
+    LLM_DURATION,
+    LLM_LAST_FAILURE,
+    LLM_REQUESTS,
+    count_llm_tokens,
+)
 from .llm_errors import (
     AUTH_SOURCE_LABELS,
     LLMAuthForbidden,
@@ -53,10 +58,29 @@ def uses_reasoning_parameters(model: str) -> bool:
     ].startswith(_REASONING_MODEL_PREFIXES)
 
 
+# The OpenAI prompt cache in explicit mode (gpt-6 models): a content part
+# marked with it ends a cached prefix, and a request that carries one says so
+# in "prompt_cache_options". Passed on unchanged by the B-API, also through its
+# router (measured 2026-11-15).
+CACHE_BREAKPOINT = {"mode": "explicit"}
+
+
+def has_cache_breakpoint(messages: list[dict[str, Any]]) -> bool:
+    """Whether a content part of these messages is marked as a cache breakpoint."""
+    return any(
+        isinstance(part, dict) and "prompt_cache_breakpoint" in part
+        for message in messages
+        if isinstance(message.get("content"), list)
+        for part in message["content"]
+    )
+
+
 # Upper bound for one wait the gateway asks for. A per-minute quota answers
 # Retry-After: 60 and more; waiting that long per retry would hold the whole
 # request, and the editor in front of it, for minutes.
 _MAX_RETRY_AFTER_SECONDS = 30.0
+# How often a call that ended in a read timeout is sent in all.
+READ_TIMEOUT_ATTEMPTS = 2
 
 
 def retry_after_seconds(response: httpx.Response) -> float:
@@ -104,6 +128,10 @@ def router_failure(status: int, body: str) -> Optional[str]:
 _LASTING_ROUTER_FAILURES = ("route_not_found", "parameters", "misconfigured")
 
 
+def _after(attempts: int) -> str:
+    return "nach 1 Versuch" if attempts == 1 else f"nach {attempts} Versuchen"
+
+
 def _json_object(response: httpx.Response) -> Optional[dict[str, Any]]:
     """The body as a JSON object, or None when it is no JSON object."""
     try:
@@ -140,11 +168,16 @@ class LLMTransportMixin:
 
     async def _call_llm(
         self,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
     ) -> dict[str, Any]:
-        """One LLM answer, counted and timed for /metrics (src/metrics.py)."""
+        """
+        One LLM answer, counted and timed for /metrics (src/metrics.py).
+
+        The time is what the caller waits: for a slot at the provider gate,
+        for the request, its retries and the pauses between them.
+        """
         start = time.monotonic()
         result = "ok"
         # Same rule as the call itself (b_api_auth), read before it is made.
@@ -158,18 +191,24 @@ class LLMTransportMixin:
         except LLMError as e:
             result = e.code
             raise
+        except asyncio.CancelledError:
+            # Stopped at the deadline of the run or because the caller went
+            # away: no answer, so not "ok" (audit 14.11., L-36).
+            result = "cancelled"
+            raise
         except Exception:
             result = "error"
             raise
         finally:
-            LLM_REQUESTS.labels(
-                self.provider, result, auth_source, self.config_origin
-            ).inc()
+            labels = (self.provider, result, auth_source, self.config_origin)
+            LLM_REQUESTS.labels(*labels).inc()
+            if result not in ("ok", "cancelled"):
+                LLM_LAST_FAILURE.labels(*labels).set_to_current_time()
             LLM_DURATION.labels(self.provider).observe(time.monotonic() - start)
 
     async def _send_llm_request(
         self,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         attempts: Optional[int] = None,
@@ -181,60 +220,8 @@ class LLMTransportMixin:
         `attempts` overrides llm_max_retries, e.g. 1 for a call not worth waiting for.
         """
         attempts = attempts or self.max_retries
-        temp = temperature if temperature is not None else self.temperature
-        tokens = max_tokens if max_tokens is not None else self.max_tokens
-
-        request_body: dict[str, Any] = {
-            "model": self.model,
-            "messages": messages,
-        }
-
-        # The explicit style describes the agent's route. Other providers -
-        # also when a request picks one - are told apart by model name.
-        style = (
-            self.settings.llm_request_style
-            if self.provider == "b-api-router"
-            else "auto"
-        )
-        reasoning_body = (
-            uses_reasoning_parameters(self.model)
-            if style == "auto"
-            else style == "reasoning"
-        )
-        if reasoning_body:
-            # Measured against the B-API: these models answer 400 for
-            # 'max_tokens' ("use max_completion_tokens instead") and for any
-            # temperature other than the default, so it is left out entirely.
-            request_body["max_completion_tokens"] = tokens
-            if self.verbosity:
-                request_body["verbosity"] = self.verbosity
-            if self.reasoning_effort:
-                request_body["reasoning_effort"] = self.reasoning_effort
-        else:
-            request_body["temperature"] = temp
-            request_body["max_tokens"] = tokens
-            # Thinking models in a classic route (qwen3.6) need "none", or they
-            # spend the token budget on reasoning and return no text.
-            router_effort = self.settings.b_api_router_reasoning_effort
-            if self.provider == "b-api-router" and router_effort:
-                request_body["reasoning_effort"] = router_effort
-
-        # Build headers based on provider. For the B-API the key is chosen per
-        # request (forwarded caller key or own key, see llm_auth) - never kept
-        # on this shared instance.
-        headers = {"Content-Type": "application/json"}
-        if self.requires_custom_header:
-            auth_headers, auth_source = b_api_auth(self.settings)
-            headers.update(auth_headers)
-        else:
-            auth_source = "openai"
-            headers["Authorization"] = f"Bearer {self.api_key}"
-
-        # Make request
-        api_url = f"{self.api_base}/chat/completions"
-        # The B-API caches word-identical requests, unmarked (b_api_ignore_cache).
-        if self.requires_custom_header and self.settings.b_api_ignore_cache:
-            api_url += "?ignore-caching=true"
+        request_body = self._request_body(messages, temperature, max_tokens)
+        api_url, headers, auth_source = self._request_target()
 
         # Every LLM request in the process passes here — including content-type
         # detection and normalization, which do not go through the parallel
@@ -268,7 +255,7 @@ class LLMTransportMixin:
                 # A configuration error answers the same way on every try.
                 if last_kind in _LASTING_ROUTER_FAILURES:
                     raise self._http_error(
-                        last_status, last_detail, auth_source, last_kind
+                        last_status, last_detail, auth_source, last_kind, attempt + 1
                     )
 
                 # Retry on transient errors (a 200 here had no JSON body)
@@ -284,7 +271,9 @@ class LLMTransportMixin:
                     continue
 
                 # Not retryable: the same request would be refused again
-                raise self._http_error(last_status, last_detail, auth_source)
+                raise self._http_error(
+                    last_status, last_detail, auth_source, attempts=attempt + 1
+                )
 
             except (
                 httpx.TimeoutException,
@@ -292,9 +281,17 @@ class LLMTransportMixin:
                 httpx.ReadError,
                 httpx.RemoteProtocolError,
             ) as e:
-                if attempt < attempts - 1:
+                # A gateway that did not answer within the read timeout is
+                # asked once more, not llm_max_retries times: three waits of
+                # 90 s were 273 s for one field (audit 13.11., P-11).
+                waited_in_vain = isinstance(e, httpx.ReadTimeout)
+                last = attempt >= attempts - 1 or (
+                    waited_in_vain and attempt >= READ_TIMEOUT_ATTEMPTS - 1
+                )
+                if not last:
                     await asyncio.sleep((attempt + 1) * self.settings.llm_retry_delay)
                     continue
+                attempts = attempt + 1
                 # The address stays in the log; clients get no internal hosts
                 # (audit S-06).
                 logger.error(
@@ -302,12 +299,83 @@ class LLMTransportMixin:
                     f"{type(e).__name__}"
                 )
                 raise LLMUnreachable(
-                    f"Keine Verbindung zum KI-Dienst nach {attempts} Versuchen: "
+                    f"Keine Verbindung zum KI-Dienst {_after(attempts)}: "
                     f"{type(e).__name__}",
                     auth_source=auth_source,
                 ) from e
 
-        raise self._http_error(last_status, last_detail, auth_source, last_kind)
+        raise self._http_error(
+            last_status, last_detail, auth_source, last_kind, attempts
+        )
+
+    def _request_body(
+        self,
+        messages: list[dict[str, Any]],
+        temperature: Optional[float],
+        max_tokens: Optional[int],
+    ) -> dict[str, Any]:
+        """The body in the parameter style the model understands."""
+        temp = temperature if temperature is not None else self.temperature
+        tokens = max_tokens if max_tokens is not None else self.max_tokens
+
+        request_body: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+        }
+        # Explicit mode: only the marked prefix is written to the cache. Left
+        # at the default for every other call - their models may not know it.
+        if has_cache_breakpoint(messages):
+            request_body["prompt_cache_options"] = CACHE_BREAKPOINT
+
+        # The explicit style describes the agent's route. Other providers -
+        # also when a request picks one - are told apart by model name.
+        style = (
+            self.settings.llm_request_style
+            if self.provider == "b-api-router"
+            else "auto"
+        )
+        reasoning_body = (
+            uses_reasoning_parameters(self.model)
+            if style == "auto"
+            else style == "reasoning"
+        )
+        if reasoning_body:
+            # Measured against the B-API: these models answer 400 for
+            # 'max_tokens' ("use max_completion_tokens instead") and for any
+            # temperature other than the default, so it is left out entirely.
+            request_body["max_completion_tokens"] = tokens
+            if self.verbosity:
+                request_body["verbosity"] = self.verbosity
+            if self.reasoning_effort:
+                request_body["reasoning_effort"] = self.reasoning_effort
+        else:
+            request_body["temperature"] = temp
+            request_body["max_tokens"] = tokens
+            # Thinking models in a classic route (qwen3.6) need "none", or they
+            # spend the token budget on reasoning and return no text.
+            router_effort = self.settings.b_api_router_reasoning_effort
+            if self.provider == "b-api-router" and router_effort:
+                request_body["reasoning_effort"] = router_effort
+        return request_body
+
+    def _request_target(self) -> tuple[str, dict[str, str], str]:
+        """(URL, headers, auth source) of a request to the provider."""
+        # Build headers based on provider. For the B-API the key is chosen per
+        # request (forwarded caller key or own key, see llm_auth) - never kept
+        # on this shared instance.
+        headers = {"Content-Type": "application/json"}
+        if self.requires_custom_header:
+            auth_headers, auth_source = b_api_auth(self.settings)
+            headers.update(auth_headers)
+        else:
+            auth_source = "openai"
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        api_url = f"{self.api_base}/chat/completions"
+        # The B-API caches word-identical requests, unmarked (b_api_ignore_cache).
+        if self.requires_custom_header and self.settings.b_api_ignore_cache:
+            api_url += "?ignore-caching=true"
+        return api_url, headers, auth_source
 
     def _failure_of(self, response: httpx.Response) -> tuple[str, Optional[str]]:
         """(detail, kind) of an answer that brought no usable result."""
@@ -353,8 +421,15 @@ class LLMTransportMixin:
         detail: str,
         auth_source: str,
         kind: Optional[str] = None,
+        attempts: Optional[int] = None,
     ) -> LLMError:
-        """Typed error for a non-200 answer, worded for the person who has to act."""
+        """
+        Typed error for a non-200 answer, worded for the person who has to act.
+
+        `attempts` is how often the request was really sent: a status that is
+        not retried was reported as "nach 3 Versuchen" after one.
+        """
+        after = _after(attempts or self.max_retries)
         key = AUTH_SOURCE_LABELS.get(auth_source, auth_source)
         suffix = f": {detail}" if detail else ""
         context: dict[str, Any] = {
@@ -389,14 +464,14 @@ class LLMTransportMixin:
             )
         if kind == "no_json":
             return LLMUpstreamError(
-                f"Der KI-Dienst antwortete nach {self.max_retries} Versuchen mit "
+                f"Der KI-Dienst antwortete {after} mit "
                 f"HTTP 200, aber ohne JSON ({detail or 'kein Content-Type'})",
                 **context,
             )
         if kind == "no_deployment":
             return LLMUnreachable(
                 f"Kein Modell der Route '{self.model}' ist erreichbar (HTTP {status}, "
-                f"nach {self.max_retries} Versuchen){suffix}",
+                f"{after}){suffix}",
                 **context,
             )
         if status == 401:
@@ -429,8 +504,7 @@ class LLMTransportMixin:
             )
         if status is not None and status >= 500:
             return LLMUpstreamError(
-                f"Der KI-Dienst antwortete nach {self.max_retries} Versuchen mit "
-                f"HTTP {status}{suffix}",
+                f"Der KI-Dienst antwortete {after} mit HTTP {status}{suffix}",
                 upstream_status=status,
                 auth_source=auth_source,
             )

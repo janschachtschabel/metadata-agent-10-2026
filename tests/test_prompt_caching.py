@@ -15,9 +15,9 @@ import httpx
 import pytest
 
 from src.config import Settings
-from src.services import llm_service as llm_module
 from src.services.llm_service import LLMService, reset_provider_gates
 from src.utils.schema_loader import get_ai_fillable_fields, get_latest_version
+from conftest import use_settings
 
 # Above the primer's minimum length (_PRIMER_MIN_TEXT_CHARS): a shorter prefix
 # stays below the ~1,024-token cache minimum and a primer would only cost a call.
@@ -48,16 +48,26 @@ def _fresh_gates():
     reset_provider_gates()
 
 
-def _service(gateway, monkeypatch, provider="b-api-openai"):
+def _service(gateway, monkeypatch, provider="b-api-openai", model=None, **settings):
     cfg = Settings(
-        _env_file=None, b_api_key="own-key", llm_retry_delay=0, llm_max_retries=1
+        _env_file=None,
+        b_api_key="own-key",
+        llm_retry_delay=0,
+        llm_max_retries=1,
+        **settings,
     )
-    monkeypatch.setattr(llm_module, "get_settings", lambda: cfg)
-    service = LLMService(llm_provider=provider)
+    use_settings(monkeypatch, cfg)
+    service = LLMService(llm_provider=provider, llm_model=model)
     service.http_client = httpx.AsyncClient(
         transport=httpx.MockTransport(gateway.handler)
     )
     return service
+
+
+def _text_part(body):
+    """The one content part of the text message, as gpt-6 models get it."""
+    (part,) = body["messages"][1]["content"]
+    return part
 
 
 def _fields(*ids):
@@ -80,7 +90,7 @@ async def test_every_field_call_carries_the_text_as_a_message_of_its_own(monkeyp
     assert len(field_calls) == 2
     text_messages = {json.dumps(b["messages"][:2], sort_keys=True) for b in field_calls}
     assert len(text_messages) == 1, "system prompt and text must be identical"
-    assert TEXT in field_calls[0]["messages"][1]["content"]
+    assert TEXT in _text_part(field_calls[0])["text"]
     assert all(TEXT not in b["messages"][2]["content"] for b in field_calls)
 
 
@@ -141,7 +151,7 @@ async def test_a_failing_primer_is_not_retried(monkeypatch):
     cfg = Settings(
         _env_file=None, b_api_key="own-key", llm_retry_delay=0, llm_max_retries=3
     )
-    monkeypatch.setattr(llm_module, "get_settings", lambda: cfg)
+    use_settings(monkeypatch, cfg)
     service = LLMService(llm_provider="b-api-openai")
     service.http_client = httpx.AsyncClient(
         transport=httpx.MockTransport(gateway.handler)
@@ -204,3 +214,109 @@ async def test_no_primer_for_a_text_below_the_cache_minimum(monkeypatch):
     await service.extract_fields_parallel(_fields(*TWO_FIELDS), "Kurzer Text. " * 50)
 
     assert [len(b["messages"]) for b in gateway.bodies] == [3, 3]
+
+
+# ------------------- 15.11.: an explicit cache breakpoint after the text
+#
+# Measured through the B-API (gpt-6-luna): without it every field call writes
+# its whole prompt to the cache at 1.25 times the input price - also the field
+# instruction, which no later call reads. With the breakpoint the primer writes
+# the text once (cache_write 3882) and the field calls only read it (cached
+# 3882, cache_write 0).
+
+BREAKPOINT = {"mode": "explicit"}
+
+
+@pytest.mark.asyncio
+async def test_the_text_ends_with_an_explicit_cache_breakpoint(monkeypatch):
+    gateway = _Gateway()
+    service = _service(gateway, monkeypatch)
+
+    await service.extract_fields_parallel(_fields(*TWO_FIELDS), TEXT)
+
+    primer, *field_calls = gateway.bodies
+    assert len(field_calls) == 2
+    for body in gateway.bodies:  # the primer has to write what the fields look up
+        assert body["prompt_cache_options"] == BREAKPOINT
+        part = _text_part(body)
+        assert part["type"] == "text" and TEXT in part["text"]
+        assert part["prompt_cache_breakpoint"] == BREAKPOINT
+    assert primer["messages"] == field_calls[0]["messages"][:2]
+    assert all(isinstance(b["messages"][2]["content"], str) for b in field_calls)
+
+
+@pytest.mark.asyncio
+async def test_the_router_marks_the_text_for_its_openai_model(monkeypatch):
+    gateway = _Gateway()
+    service = _service(gateway, monkeypatch, "b-api-router", "openai/gpt-6-luna")
+
+    await service.extract_fields_parallel(_fields(*TWO_FIELDS), TEXT)
+
+    assert [b.get("prompt_cache_options") for b in gateway.bodies] == [BREAKPOINT] * 3
+
+
+@pytest.mark.parametrize(
+    "provider, model",
+    [
+        # Both answered 400 "prompt_cache_options is not supported on this model".
+        ("b-api-openai", "gpt-4.1-mini"),
+        ("b-api-openai", "gpt-5.4-mini"),
+        ("b-api-academiccloud", None),
+        ("b-api-router", "eine-route"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_no_breakpoint_for_models_that_refuse_it(monkeypatch, provider, model):
+    gateway = _Gateway()
+    service = _service(gateway, monkeypatch, provider, model)
+
+    await service.extract_fields_parallel(_fields(*TWO_FIELDS), TEXT)
+
+    assert gateway.bodies
+    for body in gateway.bodies:
+        assert "prompt_cache_options" not in body
+        assert isinstance(body["messages"][1]["content"], str)
+
+
+@pytest.mark.asyncio
+async def test_the_breakpoint_can_be_switched_off(monkeypatch):
+    gateway = _Gateway()
+    service = _service(gateway, monkeypatch, llm_cache_breakpoint="off")
+
+    await service.extract_fields_parallel(_fields(*TWO_FIELDS), TEXT)
+
+    assert len(gateway.bodies) == 3  # the primer stays: the implicit cache needs it
+    for body in gateway.bodies:
+        assert "prompt_cache_options" not in body
+        assert isinstance(body["messages"][1]["content"], str)
+
+
+@pytest.mark.asyncio
+async def test_the_breakpoint_can_be_forced_for_a_model_the_rule_does_not_know(
+    monkeypatch,
+):
+    gateway = _Gateway()
+    service = _service(
+        gateway, monkeypatch, model="gpt-7-nova", llm_cache_breakpoint="on"
+    )
+
+    await service.extract_fields_parallel(_fields(*TWO_FIELDS), TEXT)
+
+    assert [b.get("prompt_cache_options") for b in gateway.bodies] == [BREAKPOINT] * 3
+
+
+def test_forcing_the_breakpoint_never_reaches_academiccloud(monkeypatch):
+    service = _service(
+        _Gateway(), monkeypatch, "b-api-academiccloud", llm_cache_breakpoint="on"
+    )
+
+    assert isinstance(service._text_messages(TEXT, "de")[1]["content"], str)
+
+
+def test_a_call_without_a_breakpoint_keeps_the_implicit_cache(monkeypatch):
+    # Type detection and normalisation: no marked text, no explicit mode.
+    service = _service(_Gateway(), monkeypatch)
+
+    body = service._request_body([{"role": "user", "content": "x"}], None, None)
+
+    assert "prompt_cache_options" not in body

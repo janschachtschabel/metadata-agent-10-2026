@@ -226,8 +226,8 @@ class _StubRepository:
     def __init__(self):
         self.calls = []
 
-    async def upload_metadata(self, **kwargs):
-        self.calls.append(kwargs)
+    async def write_node(self, job, deadline=None):
+        self.calls.append(vars(job))
         return {
             "success": True,
             "node": {"nodeId": NODE_ID},

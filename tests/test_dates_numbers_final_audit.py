@@ -48,8 +48,10 @@ def test_numbers_as_written_in_german(text, integer, expected):
         ("52.520", False, 52.52),
         ("3.141", False, 3.141),
         ("1.500", False, 1.5),
-        ("1.500", True, 2),
         ("-1.500", False, -1.5),
+        # On an integer field the group is thousands since the audit of 14.11.
+        # (test_dates_numbers_small_items.py): "1.500" was 2 there.
+        ("1.500", True, 1500),
     ],
 )
 def test_a_single_dot_group_is_a_decimal_as_in_2_1_1(text, integer, expected):
@@ -157,3 +159,27 @@ def test_validation_reports_an_impossible_iso_date_time(text):
 
 def test_validation_accepts_a_real_iso_date_time():
     assert _datetime_problem("2024-02-29T23:59:00+01:00") is None
+
+
+# ------------------------------------------------- audit 13.11.2026, L-20
+
+
+@pytest.mark.parametrize(
+    "written", ["28.08.1749", "28. August 1749", "28/08/1749", "August 28, 1749"]
+)
+def test_a_date_before_1900_written_out_in_full_is_a_date(written):
+    """
+    Goethe's birthday in German spelling was "impossible" and dropped, the
+    same day as 1749-08-28 was kept: person.json has schema:birthDate.
+    """
+    assert read_date(written) == "1749-08-28"
+
+
+def test_a_day_that_does_not_exist_stays_impossible_in_any_century():
+    with pytest.raises(ImpossibleDate):
+        read_date("30.02.1749")
+
+
+def test_a_two_digit_year_is_still_read_into_1950_to_2049():
+    assert read_date("28.08.49") == "2049-08-28"
+    assert read_date("28.08.50") == "1950-08-28"

@@ -283,7 +283,7 @@ def test_upload_logs_the_preview_url_without_its_query(monkeypatch, caplog):
             raise RuntimeError("no browser here")
 
     class _Service:
-        async def upload_metadata(self, **kwargs):
+        async def write_node(self, job, deadline=None):
             return {"success": True, "node": {"nodeId": NODE_ID}}
 
     monkeypatch.setattr(deps, "get_repository_service", lambda: _Service())

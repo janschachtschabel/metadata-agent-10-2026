@@ -1,13 +1,17 @@
 [project]
 name = "metadata-agent-api"
-version = "3.0.1"
+version = "4.0.0"
 description = "AI-powered metadata extraction API for educational content"
 # SPDX (PEP 639); full text in LICENSE, third-party components in NOTICE.
 license = "Apache-2.0"
 requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.142.4",
-    "uvicorn[standard]>=0.32.0",
+    # Not uvicorn[standard]: that also installs watchfiles, websockets and
+    # pyyaml, which nothing here uses. The two below are what makes it fast.
+    "uvicorn>=0.32.0",
+    "httptools>=0.6.3",
+    "uvloop>=0.21.0; sys_platform != 'win32'",
     "pydantic>=2.10.0",
     "pydantic-settings>=2.14.2",
     "httpx>=0.28.0",
@@ -24,12 +28,10 @@ dependencies = [
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
-# Ohne das ist `import src...` nur auffindbar, wenn pytest als `python -m pytest`
-# startet — dann legt Python das Arbeitsverzeichnis selbst auf den sys.path. Das
-# Konsolenskript `pytest` (und damit `uv run pytest` in der CI) tut das nicht:
-# es fügt das Verzeichnis der Testdatei hinzu, nicht die Wurzel. Die Folge waren
-# 31 Sammelfehler `ModuleNotFoundError: No module named 'src'` in einem Lauf, der
-# lokal grün war.
+# Without this `import src...` resolves only under `python -m pytest`, which
+# puts the working directory on sys.path. The console script `pytest` (and so
+# `uv run pytest` in CI) adds the directory of the test file instead: every
+# test module fails at collection with ModuleNotFoundError: No module named 'src'.
 pythonpath = ["."]
 markers = [
     # Talks to a network service. Runs only with RUN_NETWORK_TESTS=1 and skips
@@ -80,7 +82,8 @@ dev = [
     "ruff>=0.9",
     "pytest>=8",
     "pytest-asyncio>=0.24",
-    "httpx>=0.28.0",
+    # The tests read the chart, the compose file and the CI definitions.
+    "pyyaml>=6",
     # starlette.testclient prefers it; with httpx alone it warns (deprecated).
     "httpx2>=2.13.1",
     "pytest-cov>=6",

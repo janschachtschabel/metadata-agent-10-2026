@@ -141,7 +141,7 @@ def test_upload_stops_its_screenshot_when_the_upload_fails(monkeypatch):
             cancelled.set()
             raise
 
-    async def failing_upload(**kwargs):
+    async def failing_upload(job, deadline=None):
         await asyncio.wait_for(capturing.wait(), 2)
         raise RuntimeError("repository unreachable")
 
@@ -151,7 +151,7 @@ def test_upload_stops_its_screenshot_when_the_upload_fails(monkeypatch):
     monkeypatch.setattr(
         deps,
         "get_repository_service",
-        lambda: SimpleNamespace(upload_metadata=failing_upload, _auth_header=""),
+        lambda: SimpleNamespace(write_node=failing_upload, _auth_header=""),
     )
     body = {
         "metadata": {"cclom:title": "A resource"},

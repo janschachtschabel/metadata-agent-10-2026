@@ -1,4 +1,8 @@
-"""Liveness, readiness and the debug endpoints on the public port."""
+"""
+Liveness, readiness and the debug endpoints on the public port.
+
+What they answer is built in src/infra.py, which also serves the internal port.
+"""
 
 from fastapi import HTTPException, Request
 

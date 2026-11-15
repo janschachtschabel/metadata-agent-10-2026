@@ -11,7 +11,7 @@ import re
 from fastapi.testclient import TestClient
 
 from src import main
-from src.api.routers import infra
+from src.api.routers import operations
 
 HOST = "https://host.example"
 
@@ -21,7 +21,7 @@ def _boom(settings, **options):
 
 
 def test_an_unexpected_exception_answers_500_with_id_and_cors(monkeypatch):
-    monkeypatch.setattr(infra, "health_payload", _boom)
+    monkeypatch.setattr(operations, "health_payload", _boom)
 
     with TestClient(main.app, raise_server_exceptions=False) as client:
         response = client.get("/health", headers={"Origin": HOST})
@@ -34,11 +34,11 @@ def test_an_unexpected_exception_answers_500_with_id_and_cors(monkeypatch):
     assert response.headers.get("access-control-allow-origin") in ("*", HOST)
     # The cause stays in the log, the client gets the id.
     assert "secret internal detail" not in response.text
-    assert re.fullmatch(r"[0-9a-f]{16}", request_id)
+    assert re.fullmatch(r"[0-9a-f]{32}", request_id)
 
 
 def test_the_failure_is_logged_under_the_request_id(monkeypatch, caplog):
-    monkeypatch.setattr(infra, "health_payload", _boom)
+    monkeypatch.setattr(operations, "health_payload", _boom)
 
     with TestClient(main.app, raise_server_exceptions=False) as client:
         response = client.get("/health")

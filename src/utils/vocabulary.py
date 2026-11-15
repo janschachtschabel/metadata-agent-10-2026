@@ -25,10 +25,3 @@ def is_closed_vocabulary(vocabulary: Any) -> bool:
         and vocabulary.get("type") in CLOSED_VOCABULARY_TYPES
         and bool(vocabulary.get("concepts"))
     )
-
-
-def concept_keys(concepts: list) -> set:
-    """What a value may be: a concept's 'uri', or its 'value' (languages, licences)."""
-    keys = {c.get("uri") for c in concepts if c.get("uri")}
-    keys.update(c.get("value") for c in concepts if c.get("value"))
-    return keys

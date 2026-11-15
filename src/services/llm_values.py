@@ -1,22 +1,31 @@
 """Reading a model answer and fitting each value to its field: JSON, booleans, URLs, coordinates, vocabularies."""
 
 import json
+import math
 import re
 from typing import TYPE_CHECKING, Any, Optional
 
-from ..utils.text_utils import levenshtein_within
-from ..utils.vocabulary import concept_keys, is_closed_vocabulary
+from ..utils.scalar_values import normalize_boolean, normalize_url
+from ..utils.vocabulary import is_closed_vocabulary
+from .vocabulary_matching import match_model_answer
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _between(text: str, opening: str, closing: str) -> str:
+    """From the first `opening` to the last `closing` after it; "" without both."""
+    start = text.find(opening)
+    end = text.rfind(closing)
+    return text[start : end + 1] if 0 <= start < end else ""
 
 
 class ValueNormalizerMixin:
     """
     Normalizing extracted values by field type (part of LLMService).
 
-    Needs DateNumberMixin and PromptMixin; the methods it uses from them are
-    declared below for mypy.
+    Needs DateNumberMixin; the methods it uses from it are declared below for
+    mypy. Vocabularies are matched in vocabulary_matching.
     """
 
     if TYPE_CHECKING:
@@ -25,25 +34,6 @@ class ValueNormalizerMixin:
         def _normalize_date(self, value: Any) -> Optional[str]: ...
         def _normalize_datetime(self, value: Any) -> Optional[str]: ...
         def _normalize_time(self, value: Any) -> Optional[str]: ...
-        def _get_localized(self, obj: dict[str, str], language: str) -> str: ...
-
-    def _is_valid_vocabulary_value(self, value: Any, vocabulary: dict) -> bool:
-        """
-        The answer holds a concept of the closed vocabulary.
-
-        A list counts when at least one entry is a concept; extract_field keeps
-        those and drops the rest. Asking again for a partial match threw its
-        matches away whenever a later attempt matched less (final audit
-        18.10.). A list matching nothing is asked again (audit L-07); an empty
-        list is "no value", nothing to ask again about.
-        """
-        if value is None:
-            return False
-
-        valid_entries = concept_keys(vocabulary.get("concepts", []))
-        if isinstance(value, list):
-            return not value or any(v is not None and v in valid_entries for v in value)
-        return value in valid_entries
 
     def _parse_json_response(self, content: str) -> Optional[dict[str, Any]]:
         """Parse JSON from LLM response, handling various formats."""
@@ -51,7 +41,9 @@ class ValueNormalizerMixin:
             json_str = content.strip()
 
             # Remove markdown code blocks if present
-            code_block_match = re.search(r"```json\s*([\s\S]*?)\s*```", json_str)
+            # The blanks around the block are stripped below, not matched:
+            # between two more quantifiers they cost cubic time (audit P-08).
+            code_block_match = re.search(r"```json([\s\S]*?)```", json_str)
             if code_block_match:
                 json_str = code_block_match.group(1).strip()
 
@@ -63,18 +55,20 @@ class ValueNormalizerMixin:
             except json.JSONDecodeError:
                 pass
 
-            # Try to extract JSON patterns
-            array_match = re.search(r"\[[\s\S]*\]", json_str)
-            object_match = re.search(r"\{[\s\S]*\}", json_str)
+            # JSON inside a sentence: from the first opening to the last closing
+            # bracket. Not a pattern - "\{[\s\S]*\}" was quadratic in a run of
+            # "{" (audit 14.11., L-42).
+            embedded_object = _between(json_str, "{", "}")
+            if embedded_object:
+                return json.loads(embedded_object)
+            embedded_array = _between(json_str, "[", "]")
+            if embedded_array:
+                return {"value": json.loads(embedded_array)}
 
-            if object_match:
-                return json.loads(object_match.group(0))
-            if array_match:
-                return {"value": json.loads(array_match.group(0))}
-
-            # Try to extract string value
+            # A quoted string in a plain sentence. Not in what looks like
+            # JSON: of a broken `{"value": "…` the first quoted text is the key.
             string_match = re.search(r'"([^"]+)"', json_str)
-            if string_match:
+            if string_match and not ("{" in json_str or "[" in json_str):
                 return {"value": string_match.group(1)}
 
             # Check for null
@@ -127,11 +121,11 @@ class ValueNormalizerMixin:
         # dpt:concept is a uri field, and a label answer is matched to its
         # concept URI instead of being kept as a "URL" that no concept has.
         if is_closed_vocabulary(vocabulary):
-            return self._validate_vocabulary(value, vocabulary)
+            return match_model_answer(value, vocabulary)
 
         # Boolean normalization
         if datatype == "boolean":
-            return self._normalize_boolean(value)
+            return normalize_boolean(value)
 
         # Number normalization
         if datatype in ("number", "integer"):
@@ -150,8 +144,8 @@ class ValueNormalizerMixin:
             return self._normalize_time(value)
 
         # URL normalization
-        if datatype in ("uri", "url"):
-            return self._normalize_url(value)
+        if datatype == "uri":
+            return normalize_url(value)
 
         # Geo coordinate validation
         if "latitude" in field_id.lower() or "longitude" in field_id.lower():
@@ -159,26 +153,16 @@ class ValueNormalizerMixin:
 
         # Vocabulary validation
         if vocabulary and vocabulary.get("concepts"):
-            return self._validate_vocabulary(value, vocabulary)
+            return match_model_answer(value, vocabulary)
 
         return value
 
-    def _normalize_boolean(self, value: Any) -> Optional[bool]:
-        """Normalize boolean values."""
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, str):
-            val = value.lower().strip()
-            if val in ("ja", "yes", "wahr", "true", "1"):
-                return True
-            if val in ("nein", "no", "falsch", "false", "0"):
-                return False
-        if isinstance(value, (int, float)):
-            return value != 0
-        return None
-
     def _normalize_geo_coordinate(self, value: Any, field_id: str) -> Optional[float]:
         """Normalize and validate geo coordinates (latitude/longitude)."""
+        # A boolean is no coordinate (True would be 1.0).
+        if isinstance(value, bool):
+            return None
+
         # Already a number
         if isinstance(value, (int, float)):
             return self._validate_geo_range(float(value), field_id)
@@ -202,6 +186,10 @@ class ValueNormalizerMixin:
 
     def _validate_geo_range(self, value: float, field_id: str) -> Optional[float]:
         """Validate geo coordinate range and round to 7 decimal places."""
+        # NaN passes every comparison below and is no JSON number.
+        if not math.isfinite(value):
+            return None
+
         is_latitude = "latitude" in field_id.lower() or "lat" in field_id.lower()
         is_longitude = (
             "longitude" in field_id.lower()
@@ -218,90 +206,3 @@ class ValueNormalizerMixin:
 
         # Round to 7 decimal places (~1cm precision)
         return round(value, 7)
-
-    def _normalize_url(self, value: Any) -> Optional[str]:
-        """Normalize URL, adding protocol if missing."""
-        if not isinstance(value, str):
-            return None
-
-        val = value.strip()
-
-        # Already has protocol
-        if re.match(r"^https?://", val, re.IGNORECASE):
-            return val
-
-        # Add https:// if looks like URL
-        if re.match(r"^[a-zA-Z0-9][a-zA-Z0-9-]*\.[a-zA-Z]{2,}", val):
-            return f"https://{val}"
-
-        return val
-
-    def _validate_vocabulary(self, value: Any, vocabulary: dict) -> Any:
-        """Validate value against vocabulary, return URI or original value."""
-        concepts = vocabulary.get("concepts", [])
-        is_closed = is_closed_vocabulary(vocabulary)
-
-        if not concepts:
-            return value
-
-        value_lower = str(value).lower().strip()
-
-        # Check if already a valid URI or value.
-        # Numeric scales ('0'…'5') and the 'true'/'false' flags come back from the
-        # LLM as JSON numbers and booleans just as often as strings, so compare on
-        # the lowercased string form — str(True) is 'True', not 'true' — and
-        # return the value as the vocabulary spells it.
-        uri_match = next((c for c in concepts if c.get("uri") == value), None)
-        if uri_match:
-            return value
-        value_match = next(
-            (
-                c
-                for c in concepts
-                if c.get("value") is not None and str(c["value"]).lower() == value_lower
-            ),
-            None,
-        )
-        if value_match:
-            return value_match["value"]
-
-        # Find by label (exact match)
-        for concept in concepts:
-            label = self._get_localized(concept.get("label", {}), "de")
-            if label.lower() == value_lower:
-                return concept.get("uri", concept.get("value", label))
-
-            # Check alt labels
-            alt_labels = concept.get("altLabels", [])
-            for alt in alt_labels:
-                if alt.lower() == value_lower:
-                    return concept.get("uri", concept.get("value", label))
-
-        # For closed vocabulary, try fuzzy matching
-        if is_closed:
-            best_match = self._fuzzy_match_vocabulary(value_lower, concepts)
-            if best_match:
-                return best_match
-            return None  # Invalid value for closed vocabulary
-
-        return value  # Open vocabulary: keep original
-
-    def _fuzzy_match_vocabulary(self, value: str, concepts: list) -> Optional[str]:
-        """Fuzzy match value against vocabulary concepts."""
-        # Accept if distance is small (max 30% of string length, 1 to 3 edits)
-        limit = min(3, max(1, int(len(value) * 0.3)))
-        best_match = None
-        best_distance = limit + 1
-
-        for concept in concepts:
-            label = self._get_localized(concept.get("label", {}), "de").lower()
-            distance = levenshtein_within(value, label, limit)
-            if distance is not None and distance < best_distance:
-                best_distance = distance
-                best_match = concept
-
-        if best_match:
-            return best_match.get(
-                "uri", self._get_localized(best_match.get("label", {}), "de")
-            )
-        return None

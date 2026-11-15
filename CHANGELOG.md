@@ -1,5 +1,562 @@
 # Änderungen
 
+## 4.0.0 — 2026-11-15 — Entwicklerleitfaden für Dienste, Audit-Korrekturen, schnellere Erschließung
+
+> **Warum 4.0.0:** Mehrere Änderungen sind für Aufrufer und Betrieb sichtbar
+> (Statuscodes, Helm-Service, Einstellungen, Verhalten der Webkomponente).
+> Agent und Webkomponente tragen dieselbe Version.
+
+> **Update:** neu ist `METADATA_AGENT_SERVICE_NAME` (Default `metadata-agent`).
+> **Für Log-Auswertungen:** In den JSON-Zeilen heißt `time` jetzt `timestamp`,
+> und `trace_id` ist die B3-Trace-ID; der bisherige Wert steht in `request_id`.
+> Das Access-Log von uvicorn entfällt. **Helm:** Das Chart trägt ab jetzt die
+> Version des Dienstes (bisher 0.3.1).
+>
+> **Vor dem Update prüfen:** Textextraktion und Geocoder ruft der Agent jetzt
+> über die B-API auf (`METADATA_AGENT_B_API_SERVICES=auto`). Die Schlüssel der
+> Aufrufer (Nutzer- und Gast-Schlüssel, `B_API_KEY`) brauchen dafür die Rechte
+> für die Proxy-Dienste `text-extraction` und `photon_geocoding`. Fehlt das
+> Recht, scheitert das Erschließen aus einer URL mit
+> `TEXT_EXTRACTION_AUTH_REFUSED`, und Orte bleiben ohne Koordinaten. Der
+> bisherige Weg bleibt mit `METADATA_AGENT_B_API_SERVICES=direct` oder einer
+> gesetzten `METADATA_AGENT_TEXT_EXTRACTION_API_URL`; das Chart nannte bisher
+> den Dienst im Cluster (`http://bildungs-api-services-full-text.b-api`).
+>
+> **Neu seit dem 15.11.:** `METADATA_AGENT_LLM_CACHE_BREAKPOINT` (Default
+> `auto`); `metadata_agent_llm_tokens_total` kennt zusätzlich
+> `kind="cache_write"`.
+>
+> **Vor dem Update prüfen (Korrekturen vom 14.11., Einzelheiten unten):**
+>
+> - `/validate` und `/export/markdown` antworten mit `404`, wenn Kontext,
+>   Version oder Schemadatei unbekannt sind (bisher `200` mit `valid: false`
+>   bzw. einem Markdown „Schema not found“).
+> - Ungültiges JSON ist bei jedem Endpunkt `400`; `/extract-field`,
+>   `/detect-content-type`, `/node` und `/screenshot` antworteten bisher `422`.
+> - `/widget/info` liefert relative Verweise (`dist/main.js`,
+>   `examples/full.html`) statt absoluter URLs; in den Snippets steht der
+>   Platzhalter `{AGENT_URL}`.
+> - `/nodes` lehnt die Optionen von `/upload` mit `422` ab und umgekehrt, ebenso
+>   einen unbekannten Schlüssel neben einem verschachtelten `metadata`.
+> - Einstellungen mit ungültigem Wert beenden den Start (Liste unten).
+>   `METADATA_AGENT_SCREENSHOT_METHOD` und `METADATA_AGENT_DEFAULT_CONTEXT`
+>   gibt es nicht mehr.
+> - Helm: Der interne Port liegt auf einem eigenen Service `<name>-internal`;
+>   der Haupt-Service hat nur noch Port 8000. Wer `/metrics`, `/health` oder
+>   `/ready` über den Haupt-Service auf Port 9000 abruft, stellt auf den neuen
+>   um. Das Chart bricht jetzt bei weiteren unpassenden Werten ab (Liste unten).
+> - Ein angehängter Schrägstrich wird nicht mehr weitergeleitet: `/generate/`
+>   antwortet `404` statt `307`.
+
+- JSON-Logzeilen tragen `timestamp`, `level`, `service`, `logger`, `message`,
+  `trace_id`, `span_id` und `request_id`; dazu `client_trace_id`, wenn der
+  Aufrufer `x-client-trace-id` schickt.
+- Ohne eingehende B3-Header legt der Agent eine Trace-ID an und gibt sie an
+  B-API, Textextraktion und Repository weiter. Die erzeugte Anfrage-ID
+  (`X-Request-ID`, `error.request_id`) ist dann diese Trace-ID, 32 statt 16
+  Hex-Zeichen.
+- Eine Zeile je Anfrage mit Methode, Pfad, Status und Dauer ersetzt das
+  Access-Log von uvicorn, in beiden Formaten: ohne Query-String und Header,
+  `/health` und `/ready` nur auf `DEBUG`.
+- Textextraktion und Geocoder über die Pfade der B-API
+  (`/api/v1/proxy/text-extraction`, `/api/v1/proxy/photon_geocoding`), mit
+  demselben Schlüssel wie die LLM-Aufrufe: Zur Staging-B-API gehören so immer
+  die Staging-Dienste, zur Produktion die der Produktion. Neu ist
+  `METADATA_AGENT_B_API_SERVICES` (`auto`, `proxy`, `direct`). Ohne B-API
+  (`METADATA_AGENT_LLM_PROVIDER=openai`) folgt die Textextraktion der
+  Repository-Adresse; `METADATA_AGENT_TEXT_EXTRACTION_API_URL` ist jetzt leer
+  vorbelegt und überschreibt die Wahl. Neue Fehlercodes:
+  `TEXT_EXTRACTION_AUTH_MISSING`, `TEXT_EXTRACTION_AUTH_REFUSED` (beide `502`),
+  `TEXT_EXTRACTION_NOT_CONFIGURED` (`503`).
+- Eine leere Umgebungsvariable (`VAR=` in einer `.env`, `""` in den
+  Chart-Werten) gilt als nicht gesetzt: Es gilt der Default. Bisher traf das
+  nur auf einzelne zu; ein leeres `METADATA_AGENT_LOG_FORMAT` oder
+  `METADATA_AGENT_LLM_PROVIDER` ließ den Start scheitern. Unverändert bleiben
+  die drei Einstellungen, bei denen „leer“ etwas bedeutet:
+  `METADATA_AGENT_LLM_VERBOSITY` und `METADATA_AGENT_LLM_REASONING_EFFORT`
+  (nicht senden), `METADATA_AGENT_CORS_ORIGINS` (kein Origin).
+- Helm-Chart: Version = Version des Dienstes (ein Test hält Chart, Image-Tag
+  und Dienst gleich); jeder Wert in `values.yaml` hat eine Zeile `## @param`,
+  ebenfalls per Test.
+- Steckbrief: Angaben und begründete Abweichungen nach dem Entwicklerleitfaden
+  (Dienst-ID, Funktionen, b-api, Abhängigkeiten, Kompatibilitätsmatrix).
+- Neue Grafiken für den Betrieb über die B-API
+  (`docs/architektur/*-b-api.*`); die bisherigen zeigen den direkten Betrieb.
+
+Korrekturen aus dem [Audit vom 13.11.2026](docs/audits/2026-11-13-audit-3.0.1.md):
+
+- **Zwei reguläre Ausdrücke konnten den ganzen Pod anhalten** (P-08, P-09;
+  schon in 3.0.1): ein Text `[IST-STAND]` mit vielen Leerzeichen an `/generate`
+  (gemessen 43 s bei 4 KB) und ein Datumswert mit vielen Leerzeichen an
+  `/validate` (102 s bei 2 KB). Die Marker werden jetzt ohne Regex getrennt,
+  Datumswerte über 100 Zeichen sind kein Datum.
+- **Geocoder über die B-API:** Lehnt die B-API den Schlüssel ab oder drosselt
+  sie (401, 403, 429), steht das einmal in `processing.warnings` („Orte bleiben
+  ohne Koordinaten …“), und die übrigen Orte der Anfrage werden nicht mehr
+  einzeln versucht. Neue Alarmregel `MetadataAgentUpstreamKeyRefused` für
+  abgelehnte Schlüssel an Textextraktion und Geocoder (13 Regeln).
+- **Ein Schlüssel, eine B-API:** `METADATA_AGENT_B_API_SERVICES=auto` nutzt die
+  B-API für Textextraktion und Geocoder nur, wenn auch die LLM-Aufrufe an
+  `METADATA_AGENT_B_API_BASE_URL` gehen. Mit einer eigenen LLM-Basisadresse
+  wären die Schlüssel sonst an eine zweite B-API gegangen; der Agent warnt
+  beim Start und ruft beide Dienste direkt auf.
+- `input_source=node_url`: Ein abgelehnter oder fehlender Schlüssel und eine
+  fehlende Textextraktion werden nicht mehr durch den Rückfall auf Titel und
+  Beschreibung verdeckt; die Anfrage endet mit dem Fehlercode.
+- B3: Eine `x-b3-traceid`, die keine ist (16 oder 32 Hex-Zeichen), beginnt
+  eine neue Trace und wird nicht mehr zur Anfrage-ID der Antwort. Ein `b3`, das
+  nur die Sampling-Entscheidung trägt, geht als `x-b3-sampled` bzw.
+  `x-b3-flags` weiter.
+- Die Textextraktion wird ohne B-API nur noch für OpenEduHub-Repositorys
+  abgeleitet; ein fremder Host mit „staging“ im Namen bekommt sie nicht mehr.
+- Logs: Zusatzfelder können `message`, `level` und die IDs nicht überschreiben;
+  der Pfad der Anfragezeile wird nach 2.000 Zeichen abgeschnitten; der Start per
+  `python -m src.main` schreibt kein Access-Log mehr.
+- Der interne Port weist den Screenshot-Browser ab wie Port 8000; der Browser
+  nimmt keine Downloads mehr an.
+- Abhängigkeiten: `certifi` 2026.10.23 (PYSEC-2026-4320) und
+  `opentelemetry-api` 1.45.2 (CVE-2026-126360).
+- `/debug/dependencies` prüft Textextraktion und Geocoder über die B-API mit
+  dem Schlüssel der Anfrage und meldet fehlende Rechte (`authorized: false`);
+  neu ist der Eintrag `geocoder`.
+- Korrekturlauf (`existing_metadata` mit Anweisung): Der Block der bisherigen
+  Werte ist begrenzt (je Wert 2.000, zusammen 30.000 Zeichen). Bisher ging er
+  unbegrenzt in jeden Feld-Prompt und verdrängte den Quelltext.
+- Eine an der Tokengrenze abgeschnittene LLM-Antwort (`finish_reason: length`)
+  zählt als gescheitertes Feld (`LLM_ANSWER_TRUNCATED`); aus einem halben
+  JSON-Objekt wurde bisher der Wert „value“.
+- `/upload`, `/nodes`, `/upload/verify`: `metadataset`, `schemaVersion`,
+  `contextName` und `_schema` werden vor dem Schreiben geprüft (`422`). Bisher
+  wurde der Node geschrieben, und die Antwort scheiterte danach mit `500`.
+  `metadataset` darf wie bei `/validate` die URI des Inhaltstyps sein.
+- Screenshot-Browser: Auf die Antwort auf einen POST einer Seite wartet er
+  höchstens 15 s; eine Antwort über 5 MB erreicht die Seite nicht. Geprüft wird
+  seit dem 14.11. auch die tatsächliche Länge, nicht nur die angekündigte
+  (S-41); gelesen hat der Browser-Treiber die Antwort dann schon.
+- Helm: Eine Zahl ohne Anführungszeichen unter `env` wird als Zahl gerendert
+  (bisher `"4.194304e+07"`); `sharedLlmLimit.requestsPerMinute: 0` bricht ab.
+- CI: Ein Release-Tag muss `vX.Y.Z` heißen und zur Version in `pyproject.toml`
+  passen; GitHub veröffentlicht nur `main` und Tags; GitLab lintet mit dem ruff
+  aus `uv.lock` (0.17.0), ruff- und kubeconform-Image per Digest.
+- **Teilergebnis statt 504:** Feld-Aufrufe, die 5 s vor dem Zeitlimit noch
+  laufen, werden beendet; was bis dahin erschlossen ist, kommt als `partial`
+  zurück, die späten Felder stehen in `processing.errors`. Ein Lese-Timeout
+  des KI-Diensts wird nur noch einmal wiederholt (bisher bis zu 273 s für ein
+  einzelnes Feld).
+- **Getrennte Verbindung:** Schließt der Aufrufer die Verbindung (etwa ein
+  Proxy nach seinem eigenen Timeout), stoppen `/generate`, `/extract-field`
+  und `/detect-content-type` ihre KI-Aufrufe. Im Log und in den Metriken steht
+  dafür der Status `499`.
+- Neu: `METADATA_AGENT_MAX_CONCURRENT_GENERATIONS` (Default leer = keine
+  Grenze). Darüber antwortet `/generate` sofort mit `503`
+  `TOO_MANY_GENERATIONS` und `Retry-After`.
+- Schreibpfad: Sammlungsverweise entstehen erst direkt vor dem Workflow, nach
+  Extended Data und Vorschau. Ein Abbruch davor ließ einen Verweis auf einen
+  verworfenen Node in der Sammlung zurück.
+- Ein Node, den das Repository nicht hat oder nicht zeigt, ist bei `/generate`,
+  `/extract-field` und `/detect-content-type` jetzt `404` (bisher `502`); ein
+  nicht freigegebenes `llm_model` wird vor dem Abruf der Quelle abgelehnt.
+- Textextraktion: Drosselung ist `503` `TEXT_EXTRACTION_RATE_LIMITED`, eine
+  Antwort ohne JSON `502` `TEXT_EXTRACTION_FAILED`.
+- `/generate`: `_origins` und `_source_text` falscher Art sind `422`, `NaN` und
+  `Infinity` im Body `400` (bisher `500`, beim `NaN` erst nach dem ganzen Lauf).
+- `/extract-field` gibt ein Feld in derselben Form zurück wie `/generate`:
+  Koordinaten für `schema:location`, Tageskürzel bei Öffnungszeiten.
+- `/validate` und `/export/markdown` beachten `context`, `version`,
+  `schema_file` und `include_empty` auch, wenn sie in der flachen Form neben
+  den Feldern stehen.
+- Deutsch geschriebene Daten vor 1900 (`28.08.1749`) werden gelesen wie
+  `1749-08-28`.
+- OpenAPI: Jeder Pfadparameter hat Beschreibung und Beispiel.
+- Logs: Im Textformat steht jede Meldung auf einer Zeile (ein Zeilenumbruch in
+  einem Wert aus der Anfrage begann bisher eine eigene Zeile). Orte, Adressen,
+  Koordinaten und Feldwerte stehen nicht mehr im Log ab `INFO`, nur noch Anzahl
+  und Feld-IDs; die Einzelheiten gibt es bei `DEBUG`.
+- Image: `uvicorn` ohne das Extra `standard`. `watchfiles`, `websockets` und
+  `pyyaml` werden nicht mehr installiert, `httptools` und `uvloop` bleiben.
+  `.dockerignore` schließt `__pycache__`, `*.pyc` und `*.log` in allen
+  Verzeichnissen aus.
+- OpenAPI: `/validate` und `/export/markdown` zeigen ihre Optionen im Schema
+  des Bodys (bisher `{"type": "object"}`).
+- Intern: `/generate`, `/detect-content-type` und `/extract-field` teilen sich
+  den Block der Eingangsquelle (`InputSourceRequest`); die OpenAPI ist dadurch
+  unverändert. Unbenutzte Tageskürzel-Abbildung im `FieldNormalizer` entfernt.
+- **Webkomponente neu gebaut** (weiter 3.0.1, Korrekturen aus dem Audit; siehe
+  deren CHANGELOG). Für Einbettende ändert sich: weniger `metadataChange`
+  (keines mit leerem Datensatz beim Start, eines je Import), Objektfelder
+  behalten `@type` und fremde Schlüssel, geleerte Felder melden `null`,
+  Ja/Nein-Felder `true`/`false`, `schemaVersion` nennt die echte Version
+  (`v2.0.0` statt `vlatest`), `readonly` sperrt die Wahl des Inhaltstyps,
+  Vorschaubilder nur von `data:image/…`, `https:` oder dem eigenen Host.
+  Warnungen des Agents (`processing.warnings`) erscheinen als Hinweis.
+- **Schneller und günstiger erschließen (15.11.):** drei Änderungen, jede
+  zuerst gegen die B-API geprüft (`gpt-6-luna`).
+  - Der Seitentext endet mit einem ausdrücklichen Cache-Haltepunkt
+    (`prompt_cache_options.mode: "explicit"`, `prompt_cache_breakpoint`).
+    Die Feld-Aufrufe lesen den Text nur noch aus dem Cache und schreiben
+    ihre Feldanweisung nicht mehr hinein (1,25-facher Eingabepreis). Je
+    Lauf werden 3.000 statt 53.300 Tokens in den Cache geschrieben, die
+    Kosten sinken um rund 15 %. `METADATA_AGENT_LLM_CACHE_BREAKPOINT`:
+    `auto` (nur Modelle `gpt-6…`; andere antworten `400`), `on`, `off`.
+  - Preis des Haltepunkts: Derselbe Text, kurz danach wortgleich erneut
+    erschlossen, kostet mit Haltepunkt so viel wie beim ersten Mal (0,0065 $
+    statt 0,0018 $). Über die B-API fängt deren eigener Cache das ab; sonst
+    `METADATA_AGENT_LLM_CACHE_BREAKPOINT=off`.
+  - Der Cache-Vorlauf läuft gleichzeitig mit der Erkennung der Inhaltsart
+    statt danach (`LLMService.text_cache_primer`), außer die Anfrage bringt
+    schon Metadaten mit. Endet der Lauf vorher, wird der Vorlauf gestoppt.
+  - `metadata_agent_llm_tokens_total` zählt `kind="cache_write"`.
+  - Gemessen mit einem Text von 4.400 Zeichen (47 Felder): 9,2–9,5 s
+    vorher, jetzt im Median 5,2 s; 0,0083 $ vorher, 0,0070 $ jetzt.
+    Einzelheiten in `UEBERGABE.md` §7.
+  - Unverändert bleiben die 20 gleichzeitigen Aufrufe und `max_workers` von
+    1 bis 20. Die B-API beantwortete 60 und 100 Aufrufe im selben Moment
+    ohne `429`, 60 Worker brachten aber nur 4,6 s statt 5,2 s.
+- **Steckbrief im neuen Schema (15.11.):** `docs/steckbrief.md` folgt dem
+  gemeinsamen Schema für die Übergabe von Diensten (Stammdaten, Architektur,
+  Deployment und Infrastruktur, Security und Konfiguration, Monitoring und
+  Betrieb, Ressourcen und Kosten; Status „vorhanden“, „geprüft“, „In
+  Klärung“, „In Nacharbeit“). `UEBERGABE.md` zeigt die Grafiken für den
+  Betrieb über die B-API und nennt in §7 die Kontrollmessung der Kosten und
+  den Stand des Prompt-Cachings.
+- **Doku neu gegliedert, Englisch als Standard (14.11.):** `README.md`,
+  `INSTALL.md`, `DEPLOYMENT.md` und `ENV-PARAMETER.md` sind englisch, die
+  deutschen Fassungen heißen `….de.md` und haben denselben Aufbau. Die README
+  ist eine Einstiegsseite; die API-Referenz steht in `docs/API.md` /
+  `docs/API.de.md`. Übergabe-Dokumente (UEBERGABE, Steckbrief, B-API-Kurzinfo,
+  die Referenzen) und dieser CHANGELOG bleiben deutsch und verweisen auf die
+  deutschen Fassungen. Die Update-Hinweise 2.0.x → 2.1.0 stehen jetzt in
+  `docs/update-2.0-auf-2.1.md`. Die Tests zu den Dokumenten prüfen beide
+  Sprachen.
+- OpenAPI-Texte berichtigt: Feldzahlen bei `/upload` (Schema 2.0.0: 26 / 33 /
+  40), der Name `WLO_GUEST_USERNAME` bei `/workflow`, `source_url` ist bei
+  `node_url` optional.
+- Doku: Steckbrief nennt drei weitere Abweichungen vom Leitfaden (Textlogs als
+  Standard, `/debug/*` auf Port 8000, `503` für fehlende Einrichtung);
+  `docs/team6-anforderungen.md` ist als historisch markiert; die Beispiele für
+  AcademicCloud nennen 0,16 Anfragen je Sekunde.
+
+Korrekturen aus dem [Audit vom 14.11.2026](docs/audits/2026-11-14-audit-3.0.1.md):
+
+**Aufrufer: Statuscodes und Grenzen**
+
+- `/validate`, `/export/markdown`: Unbekannter Kontext, unbekannte Version oder
+  Schemadatei ist `404` `NOT_FOUND` (bisher `200`); ein Body über 2 MiB ist
+  `413` `REQUEST_TOO_LARGE`. Eine unbekannte Inhaltstyp-URI bleibt `400`.
+- Ungültiges JSON, `NaN`/`Infinity`, ungültiges UTF-8, zu tiefe Verschachtelung
+  und ein Body, der kein Objekt ist, sind bei jedem Endpunkt mit Body `400`
+  (bisher je nach Endpunkt `422` oder `500`).
+- Die Liste in `detail` einer `422`-Antwort nennt je Eintrag nur noch `loc`,
+  `msg` und `type`, nicht mehr den gesendeten Wert.
+- Längengrenzen, darüber `422`: `context` 64, `version` 32, `schema_file` 300,
+  `field_id` 200, `language` 8, `url`/`source_url`/`preview_url` 8.192 Zeichen,
+  Einträge von `collection_id`, `workflow_steps` und `steps` 200. Dasselbe gilt
+  für die Marker im Datensatz und für Pfadparameter (`/widget/i18n/{lang}.json`
+  über 8 Zeichen: `422` statt `404`).
+- Ein angehängter Schrägstrich wird nicht weitergeleitet: `/generate/` und
+  `/widget/info/` antworten `404` statt `307`.
+- Ein Node ohne Text (`node_id`, `node_url`) ist `422` statt `502`.
+- `/generate`: `screenshot_method` nimmt nur `playwright` und `pageshot`,
+  anderes ist `422`. Eine Korrekturanweisung über 10.000 Zeichen ist auch bei
+  URL- und Node-Quelle `400`.
+- `/generate`: Kopfschlüssel (`contextName`, `schemaVersion`, `metadataset`,
+  `language`, `exportedAt`, `processing` …) in `existing_metadata` und in den
+  Metadaten eines gelesenen Nodes entfallen und kommen nicht mehr als Feld
+  zurück.
+- `/screenshot` mit `node_id` ohne Repository-Zugang: `503` vor der Aufnahme
+  (bisher `200` mit `preview_uploaded: false` nach ihr). Ein vom Repository
+  abgelehnter Vorschau-Upload bleibt `200` mit `preview_uploaded: false` und
+  `error`.
+- Geht der Aufrufer, bevor der Request-Body vollständig ist, steht `499` in Log
+  und Metrik.
+- CORS: `Retry-After` ist für Seiten anderer Herkunft lesbar. Ein
+  `x-request-id` mit 65 bis 128 Zeichen wird nicht mehr weitergereicht; an
+  seine Stelle tritt die Anfrage-ID.
+
+**Aufrufer: Schreiben ins Repository (`/upload`, `/nodes`, `/upload/verify`)**
+
+- `/nodes` lehnt die Optionen ab, die es nur bei `/upload` gibt, und umgekehrt
+  (`422`, bisher still ignoriert oder als Feld abgelegt). Neben einem
+  verschachtelten `metadata` ist jeder unbekannte Schlüssel `422`.
+- Ein `metadataset`, dessen Schema sich nicht laden lässt, ist `422`
+  `SCHEMA_UNAVAILABLE` mit `step: "schema"`, vor der ersten Anfrage ans
+  Repository. Bisher galt still nur `core.json`. `schemaVersion: null` steht
+  für die Standardversion.
+- Neu in der Antwort: `skipped_fields` nennt die gesendeten Felder, die auf
+  keine Property geschrieben wurden; `fields_skipped` zählt sie jetzt.
+- Zeitlimit während der Sammlungsverknüpfung: Der Node bleibt bestehen. Die
+  `504`-Antwort nennt ihn in `node` (kein `discarded_node`) und in
+  `collections` je Sammlung: verknüpft, „Verknüpfung nicht bestätigt“ oder
+  „Verknüpfung nicht versucht“.
+- Die Vorschau lässt den Anfragen nach ihr mehr Zeit: 15 s für die erste
+  Sammlung oder den ersten Workflow-Schritt, 5 s für jede weitere, höchstens
+  45 s; folgt nichts, 1 s (bisher immer 15 s).
+- Dublettenprüfung: zusätzlich zur Suche werden die 25 neuesten Nodes des
+  Eingangsordners gelesen; Prüfung und Anlegen laufen je URL nacheinander (je
+  Prozess). Ein Treffer ohne Titel ist eine Dublette
+  (`URL existiert bereits: Node <id>`).
+- Geht die Antwort auf das Anlegen verloren, wird ein Node nur verworfen, wenn
+  er sicher der eigene ist (unverändert, nur die Felder des Anlegens). Sonst
+  meldet `error` „möglicherweise wurde trotzdem ein Node angelegt“.
+- Lizenz: `CC BY-SA`, `cc-by-sa` und `CC0` werden als `CC_BY_SA` bzw. `CC_0`
+  geschrieben. Ein portierter CC-Link (`/3.0/de/`) behält `ccm:custom_license`
+  neben Schlüssel und Version. Als Vokabular-URI gilt nur noch eine Adresse
+  unter `http(s)://w3id.org/openeduhub/vocabs/`, alles andere ist `CUSTOM`.
+- Werte auf der Leitung: Wahrheitswerte als `"true"`/`"false"`, verschachtelte
+  Listen flach, Werte nur aus Leerzeichen werden nicht geschrieben; ein
+  übergebenes `cm:name` wird bereinigt.
+- Sammlungen: Antwortet das Repository mit `409` (schon verknüpft), gilt die
+  Sammlung als verknüpft.
+- `extended_text` wird auf 150.000 Zeichen gekürzt (Hinweis in `error`).
+  `ccm:oeh_extendedData` enthält die Metadatenfelder ohne Umschlag und ohne
+  die Schlüssel `ccm:oeh_extended*`.
+- Node als Quelle: Übernommen werden nur Properties, die ein Schema des
+  Kontexts führt, nie `ccm:oeh_extended*`; `ccm:oeh_lrt` steht unter
+  `oeh:new_lrt`, wo das Schema es so nennt. Der gespeicherte Text wird auf
+  150.000 Zeichen gekürzt (Warnung); `403`/`404` beim Textabruf heißt „kein
+  gespeicherter Text“.
+- `/upload/verify`: Die flache und die beiden verschachtelten Formen ergeben
+  denselben Vergleich, Optionen zählen nicht als Felder. Ein CC-Link gilt als
+  Schlüssel plus Version, `oeh:new_lrt` wird gegen `ccm:oeh_lrt` geprüft,
+  abgeleitete Properties stehen nicht in `extra_in_repo`. Groß-/Kleinschreibung
+  zählt bei Freitext, nicht bei Vokabularfeldern und Lizenzschlüssel.
+- `/upload/verify`, Beschreibung in `/docs` und `docs/API.de.md` berichtigt:
+  `not_written` heißt „wird nie geschrieben“ – das Feld ist kein
+  Repository-Feld des Schemas, weder unter seinem Namen noch unter dem, unter
+  dem es geschrieben wird (`oeh:new_lrt` zählt als `ccm:oeh_lrt`), oder es ist
+  ein `virtual:`-Feld. `summary.unresolved` zählt die verglichenen Felder,
+  deren Wert das Repository nicht auflöst; ein solches Feld kann zugleich
+  `match` sein.
+- `METADATA_AGENT_REPOSITORY_URL` gilt mit und ohne `/rest` am Ende.
+
+**Aufrufer: Prüfen, Exportieren, Widget**
+
+- `/validate`: höchstens 20 Befunde je Feld und Prüfung plus ein
+  Schlusseintrag, höchstens 500 Fehler und 500 Warnungen (danach ein Eintrag
+  mit `field_id: "_limit"`); zitierte Werte sind auf 200 Zeichen gekürzt.
+- `/validate`: `[""]`, Werte nur aus Leerzeichen und `{}` füllen kein
+  Pflichtfeld. Zahlen und Wahrheitswerte werden in geschlossenen Vokabularen
+  nach ihrer Textform verglichen; `0` und `false` werden geprüft.
+- `/validate` prüft Vokabularwerte mit demselben Abgleich wie die Erschließung
+  (`services/vocabulary_matching.py`). Einen Vorschlag (`Did you mean '…'?`)
+  gibt es damit auch für Vokabulare, deren Schlüssel ein `value` ist (`Deutsh`
+  ergibt `de`), für ein Label, eine andere Groß-/Kleinschreibung und das Ende
+  einer URI (`460`); nach Ähnlichkeit erst ab vier Zeichen. Vorgeschlagen wird
+  immer der Schlüssel des Konzepts.
+- `/export/markdown`: Jedes gefüllte Feld steht genau einmal da, Felder
+  nicht deklarierter Gruppen unter „Weitere Angaben“ / „Further details“;
+  `[0]` und `[false]` sind Werte. Titel ist der Name des Inhaltstyps,
+  `schema_used` nennt die Datei.
+- `GET /info/schemas/…`: `label` ist der Name des Inhaltstyps (`Veranstaltung`
+  statt des Dateinamens; `core.json` behält den Dateinamen).
+- `GET /widget/info`: `dist_base_url`, Script-, Style- und Beispieladressen
+  sind relative Verweise (`dist`, `dist/main.js`, `examples/full.html`), die
+  Snippets nennen `{AGENT_URL}`. Der Dienst baut keine Adresse mehr aus der
+  Anfrage; hinter einem Proxy mit Pfad-Präfix stimmten die URLs bisher nicht.
+- `/detect-content-type`, `/extract-field`: Eine Kürzung des Texts auf 150.000
+  Zeichen steht in den Warnungen.
+- `/extract-field` meldet in `processing.warnings` dieselben Hinweise wie
+  `/generate`, im selben Wortlaut: ein Datum des Modells, das nicht übernommen
+  wurde, weitere Einträge einer Liste in einem Einzelfeld, Einträge ohne
+  Objektform und Orte, deren Geokodierung scheitert.
+- `/docs` zeigt zu jeder der 16 Operationen eine Beispielantwort (`200`), bei
+  `/generate` und `/upload` je zwei benannte: vollständiges Ergebnis und
+  Teilergebnis, geschriebener Datensatz und Dublette (Audit vom 13.11.,
+  API-15). Es ist dasselbe JSON wie nach „Antwort `200`“ in `docs/API.de.md`
+  und `docs/API.md`; ein Test hält beides gleich und prüft jedes Beispiel
+  gegen das Antwortmodell. Die Beispiele lassen Felder ohne Wert (`null`) weg,
+  in der Referenz jetzt auch bei `/detect-content-type`, `/upload/verify` und
+  `/screenshot`. Sonst ist das OpenAPI-Dokument unverändert.
+
+**Erschließung**
+
+- Vokabulare: Aus einer Modellantwort wird immer der Schlüssel, nie das Label
+  („Deutsh“ und „German“ ergeben `de`); zugeordnet wird über Schlüssel, Label
+  und Alternativlabel in jeder Sprache, nach Ähnlichkeit nur bei geschlossenem
+  Vokabular und erst ab vier Zeichen. Werte des Aufrufers werden nur exakt
+  zugeordnet, Unbekanntes bleibt stehen.
+- Ein einzelner Wert in einem Listenfeld wird zur Liste mit einem Eintrag. Eine
+  Liste in einem Einzelfeld behält den ersten Eintrag; `processing.warnings`
+  nennt die übrigen („Feld nimmt einen Wert auf: N weitere Wert(e) nicht
+  übernommen.“).
+- Neue Einträge in `processing.warnings`: ein Datum des Modells, das es in der
+  Lesart Tag/Monat/Jahr nicht gibt (`03/15/2025`), entfällt; Einträge ohne
+  Objektform in `schema:eventSchedule` und
+  `schema:openingHoursSpecification` entfallen; Orte, deren Geokodierung
+  scheitert, bleiben unverändert.
+- `/generate` ohne ein Feld, das zu erschließen wäre, antwortet `200` mit dem
+  unveränderten Datensatz und `fields_extracted: 0` (bisher `500`).
+- `_origins` nennt `ai` auch für ein Feld, nach dem das Modell gefragt wurde
+  und das leer blieb (bisher `user`).
+- Ein Feld, das `core.json` und der Inhaltstyp beide führen, wird einmal
+  erschlossen und einmal gezählt: `fields_total` für `event.json` ist 47
+  (bisher 48).
+- Ein Pflichtfeld ohne Wert kostet genau einen weiteren KI-Aufruf, bei
+  geschlossenem Vokabular keinen (bisher bis zu
+  `METADATA_AGENT_LLM_MAX_RETRIES` weitere).
+- Der bisherige Wert eines Felds steht höchstens mit 2.000 Zeichen im Prompt.
+- Zahlen: `1.500` ist in einem Ganzzahlfeld 1500 (bisher 2); `1_000` und „ein“
+  sind keine Zahlen. Wahrheitswerte: nur `1` und `0` gelten als `true` und
+  `false`, jede andere Zahl nicht.
+- Datum: „März 15, 2025“ und „1. Sept. 2025“ werden gelesen.
+- Wochentage: Aufzählungen in einem Text („Mo, Mi, Fr“, „Mo-Do, Sa“, „Montag
+  und Mittwoch“) werden aufgelöst, wenn jeder Teil ein Tag oder Bereich ist;
+  `mon` bis `sun` zählen; ein Eintrag über 200 Zeichen bleibt, wie er ist.
+- Geokodierung: Eine Adresse als Text wird nachgeschlagen, Breitengrad 0 ist
+  eine Koordinate, ein Fehler betrifft nur den einen Ort. An Photon geht nur
+  die Sprache `de`, `en` oder `fr`, sonst keine.
+- `/detect-content-type` nennt als Grund, wenn die Antwort des KI-Diensts an
+  der Tokengrenze abgeschnitten wurde.
+
+**Betrieb: Einstellungen**
+
+- Ein ungültiger Wert beendet den Start, statt still ersetzt zu werden:
+  `METADATA_AGENT_LLM_VERBOSITY` (nur `low`, `medium`, `high`, leer),
+  `METADATA_AGENT_LLM_REASONING_EFFORT` (`none`, `low`, `medium`, `high`,
+  leer), Temperatur außerhalb 0 bis 2, `METADATA_AGENT_LLM_MAX_TOKENS` und
+  `METADATA_AGENT_REQUEST_TIMEOUT` unter 1,
+  `METADATA_AGENT_LLM_MAX_CONCURRENT_REQUESTS` unter 1 (bisher als 1 gezählt),
+  eine negative Rate, Screenshot-Breite außerhalb 320 bis 3840, -Höhe
+  außerhalb 200 bis 2160, -Wartezeit außerhalb 0 bis 10000 ms und eine
+  `METADATA_AGENT_ALLOWED_LLM_MODELS` nur aus Kommas und Leerzeichen.
+- Entfernt: `METADATA_AGENT_SCREENSHOT_METHOD` und
+  `METADATA_AGENT_DEFAULT_CONTEXT`. Die Methode und den Kontext nennt die
+  Anfrage; beide Variablen werden ignoriert.
+- Neu: `METADATA_AGENT_GRACE_PERIOD_SECONDS` (leer = 320 s angenommen). Daran
+  misst die Startwarnung, ob `METADATA_AGENT_GENERATE_TIMEOUT` (+ 10 s) und
+  `METADATA_AGENT_UPLOAD_TIMEOUT` (+ 15 s) in die Zeit passen, die ein Pod
+  beim Beenden bekommt. Das Chart setzt sie aus
+  `terminationGracePeriodSeconds`.
+- URL-Einstellungen (B-API, OpenAI-Basis, Repository, Textextraktion) werden
+  vereinheitlicht: ohne Leerzeichen und Schrägstrich am Ende, Schema und Host
+  klein, ohne Standardport. In den Startzeilen fehlen Nutzer und Passwort
+  einer URL.
+- Neue Startwarnungen: Provider `openai` ohne `OPENAI_API_KEY`; Provider
+  `openai` mit `METADATA_AGENT_B_API_SERVICES=proxy` ohne `B_API_KEY`.
+- uvicorn lauscht auf der Adresse aus `UVICORN_HOST` (im Image `0.0.0.0`);
+  `--host` steht nicht mehr im Startbefehl. Lässt sich der interne Port nicht
+  binden (belegt oder Adresse unbekannt), steht das im Log, und die API läuft
+  ohne ihn weiter.
+
+**Betrieb: Chart, Image, Compose, CI**
+
+- Chart: Der interne Port liegt auf einem eigenen Service `<name>-internal`
+  (immer `ClusterIP`); der Haupt-Service hat nur Port 8000, der ServiceMonitor
+  wählt den neuen.
+- Chart, neue Werte: `image.digest` (Image per Digest statt Tag),
+  `listenHost` (Default `0.0.0.0`; setzt `UVICORN_HOST` und
+  `METADATA_AGENT_INTERNAL_HOST`, `"::"` für IPv6) und
+  `env.METADATA_AGENT_WLO_INBOX_ID`. Das Label `app.kubernetes.io/version`
+  trägt die `appVersion` statt des Image-Tags.
+- Chart bricht ab bei: leerer B-API- oder Repository-Adresse, `UVICORN_HOST`,
+  `METADATA_AGENT_INTERNAL_HOST` oder `METADATA_AGENT_GRACE_PERIOD_SECONDS`
+  unter `env`, einem `image.digest`, der kein `sha256:`-Digest ist,
+  `service.internalPort` außerhalb 1 bis 65535, einer Ingress-Annotation
+  `proxy-body-size`, die nicht zu `METADATA_AGENT_MAX_REQUEST_BYTES` passt,
+  und einem geteilten Limit, das je Pod auf 0 rundet.
+- Image: `tini` ist Init-Prozess (ENTRYPOINT) und räumt die Prozesse eines
+  beendeten Chromium ab; installiert ist nur noch die Headless-Shell
+  (`playwright install --only-shell chromium`); uvicorn hält Verbindungen 75 s
+  offen (`--timeout-keep-alive 75`).
+- Compose: `METADATA_AGENT_LLM_VERBOSITY`, `METADATA_AGENT_LLM_REASONING_EFFORT`
+  und `METADATA_AGENT_CORS_ORIGINS` stehen als `${VAR-default}`, damit ein leer
+  gesetzter Wert leer ankommt.
+- CI: Geplante Prüfungen ohne Push – in GitLab die Jobs
+  `scheduled dependency checks` und `scheduled image scan` (Pipeline-Schedule
+  in der Oberfläche anlegen), auf GitHub `scheduled-checks.yml` täglich:
+  `pip-audit`, Alter des Chromium, Trivy über das neueste Release-Image.
+- CI: Mit `REQUIRE_BROWSER_AGE=1` (in beiden CIs gesetzt) scheitert die
+  Altersprüfung des Chromium auch, wenn sich das Alter nicht bestimmen lässt.
+  Zu jedem Versions-Tag entsteht in GitLab eine Stückliste `sbom.cdx.json`
+  (CycloneDX). kubeconform prüft gegen Kubernetes 1.33.0.
+- Der Smoke-Test des Images prüft zusätzlich `/ready`, den internen Port
+  (`/ready`, `/metrics`) und `tini` als PID 1.
+- `NOTICE` nennt zusätzlich FFmpeg und das Node.js des Playwright-Treibers;
+  `colorama`, das nicht im Image liegt, ist gestrichen.
+
+**Betrieb: Metriken, Alarme, Logs**
+
+- `metadata_agent_generations_total` kennt zusätzlich `cancelled` (Aufrufer hat
+  die Verbindung geschlossen, bisher `failed`) und `refused` (`503`
+  `TOO_MANY_GENERATIONS`). Ein Fehler der Quelle zählt nur ab `500` als
+  `failed`.
+- `metadata_agent_llm_requests_total`: Ein am Zeitlimit oder durch den
+  Aufrufer beendeter Aufruf hat `result="cancelled"` (bisher `ok`).
+- `metadata_agent_http_request_duration_seconds` hat zusätzliche Buckets bei
+  150, 180, 210, 240 und 270 s. `metadata_agent_upstream_responses_total` führt für
+  den Dienst `other` nur die Statusklasse (`2xx`, `4xx` …).
+- Neu: `metadata_agent_llm_last_failure_timestamp_seconds` (Labels des
+  LLM-Zählers; Unix-Zeit des letzten KI-Aufrufs, der mit einem Fehler endete)
+  und `metadata_agent_http_last_internal_error_timestamp_seconds` (nach
+  `route`; Unix-Zeit der letzten Antwort `500`).
+- Die drei kritischen Alarmregeln (`MetadataAgentLlmKeyRefused`,
+  `MetadataAgentLlmRouteMisconfigured`, `MetadataAgentInternalError`) lesen
+  neben dem Zähler diese beiden Metriken und lösen aus, solange der letzte
+  Fehler weniger als 10 Minuten her ist: beim ersten Fehler, und ohne dass eine
+  Abruflücke einen alten Fehler erneut meldet (bisher ein Rückblick über
+  Zeitreihen, die im Fenster neu waren). Die Uhren von Pod und Prometheus
+  müssen dafür auf deutlich weniger als 10 Minuten übereinstimmen. Ein Pod
+  eines älteren Images hat die Metriken nicht; bei ihm entscheidet allein der
+  Zähler.
+- `metadata_agent_llm_request_duration_seconds`: Der Hilfetext nennt, was
+  gemessen wird – die Zeit, die der Aufrufer eines KI-Aufrufs wartet: auf einen
+  freien Platz innerhalb der LLM-Grenzen, die Anfrage, ihre Wiederholungen und
+  die Pausen dazwischen.
+- `MetadataAgentGenerateSlow` löst aus, wenn über 5 % der Läufe länger als
+  270 s brauchen (bisher p95, zwischen 120 und 300 s interpoliert).
+  `MetadataAgentGenerationsFailing` zählt nur beendete Läufe,
+  `MetadataAgentServerErrors` nicht die `503` `TOO_MANY_GENERATIONS`,
+  `MetadataAgentUpstreamUnanswered` liest die Antworten aus dem Histogramm.
+- Logs: Fehlerantworten mit eigenem Fehlercode stehen bei `4xx` auf `INFO`,
+  `TOO_MANY_GENERATIONS` auf `WARNING` (bisher beide `ERROR`). Im Textformat sind Steuerzeichen entfernt;
+  Python-Warnungen erscheinen als Logger `py.warnings`.
+
+**Intern**
+
+- Umbau großer Module ohne Änderung der API; das OpenAPI-Dokument ist davor
+  und danach gleich. Wer mit Skripten, eigenen Tests oder Log-Filtern auf
+  Interna zugreift, prüft:
+  - **Geteilte Module.** `models/schemas.py` ist eine Fassade über
+    `models/common.py`, `extraction.py`, `validation.py`, `schema_info.py`,
+    `screenshot.py` und `repository.py`; `from src.models.schemas import X`
+    gilt weiter. Aus `services/repository_service.py` herausgelöst sind
+    `repository_write.py`, `repository_edit_window.py`,
+    `repository_preview_upload.py` und `repository_cut_off.py`, die
+    Ergebnisse eines Schreibvorgangs stehen in `repository_result.py`. Die
+    Formprüfung der Objektfelder steht in `services/object_shapes.py` (bisher
+    `field_normalizer.py`), das Lesen einer `/generate`-Anfrage in
+    `api/generate_request.py`, ihre Texte für `/docs` in
+    `api/routers/generate_docs.py`. `services/lifecycle.py` schließt die
+    HTTP-Clients beim Beenden.
+  - **Umbenannt:** `src.api.routers.infra` heißt `src.api.routers.operations`,
+    ohne Weiterleitung. `src/infra.py` bleibt.
+  - **Ein Settings-Objekt.** `config.get_settings()` liefert das eine Objekt
+    des Prozesses, ohne Cache: `get_settings.cache_clear()` gibt es nicht
+    mehr. `deps.settings` ist eine Sicht auf dieses Objekt und steht nicht
+    mehr in `deps.__all__`. Tests setzen ein anderes mit `use_settings` aus
+    `tests/conftest.py`.
+  - **Schreibweg und Lauf.** `RepositoryService.write_node(job, deadline)` ist
+    der eine Schreibweg von `/upload` und `/nodes`; die Router bauen den
+    Auftrag (`NodeWrite`). `upload_metadata` und `save_node` nehmen weiter
+    Schlüsselwörter. `MetadataService.generate_metadata` nimmt
+    `GenerationOptions`; die bisherigen Schlüsselwörter gelten weiter.
+  - **Logger-Namen verschobener Zeilen:** `src.services.object_shapes` statt
+    `src.services.field_normalizer` (Formprüfung);
+    `src.services.repository_preview_upload` (Vorschau),
+    `src.services.repository_cut_off` (abgeschnittener Schreibvorgang) und
+    `src.services.repository_edit_window` (Bearbeitungsfenster) statt
+    `src.services.repository_service`.
+  - **Sonst:** Alle ausgehenden Clients teilen sich einen TLS-Kontext
+    (`utils/tls_context.py`), auch die der Repository-Aufrufe, der
+    Textextraktion und von `/debug/dependencies`. Die Bereinigung eines
+    Eingabetexts läuft nur noch über die ersten 600.000 Zeichen; der Rest
+    wird ohnehin abgeschnitten (ein Body von 19 MB kostete 406 ms).
+  - **Tests:** 4579 bestanden, 29 übersprungen, Abdeckung 94,00 %
+    (Untergrenze 87 %). 28 der übersprungenen sind Browser-Tests; sie brauchen
+    ein Chromium und laufen in der CI, wo ein fehlender Browser als Fehler
+    zählt (`REQUIRE_BROWSER=1`). Der eine weitere ist ein Netzwerktest, der
+    nur von Hand gestartet wird.
+
 ## 3.0.1 — 2026-10-20 — Webkomponente 3.0.1
 
 > **Update:** keine neuen Einstellungen, API unverändert. Nur das Image tauschen
@@ -654,7 +1211,7 @@ verschoben, nicht umgeschrieben (Plan und Nachweise:
 > **Update bestehender Deployments:** keine Änderung nötig; vorher prüfen, ob
 > andere Programme als das Widget die API aufrufen (Fehler kommen jetzt als
 > HTTP-Fehler) und ob ein Proxy einen fremden `Authorization`-Header mitschickt.
-> Einzelheiten: [DEPLOYMENT.md](DEPLOYMENT.md#update-von-20x-auf-210).
+> Einzelheiten: [docs/update-2.0-auf-2.1.md](docs/update-2.0-auf-2.1.md).
 
 Anlass: In Prod antwortete die B-API auf jeden KI-Aufruf mit `403`. `/generate`
 meldete trotzdem `success: true` mit 0 von 50 Feldern und ordnete die Ressource

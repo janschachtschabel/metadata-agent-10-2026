@@ -1,121 +1,184 @@
-# Metadata Agent API — Installationsanleitung
+# Metadata Agent API — Installation
 
-Vollständige Anleitung zur Installation, Konfiguration und zum Betrieb der Metadata Agent API — lokal, im Docker-Container und mit automatisiertem CI/CD über GitLab CI.
+**English** · [Deutsch](INSTALL.de.md)
 
----
+How to get the Metadata Agent API (version 4.0.0) running and how to check that
+it works: locally with uv or pip, in Docker, and with Docker Compose.
 
-## Inhaltsverzeichnis
+Production topics — Kubernetes and Helm, proxies, scaling, updates, rollback,
+monitoring — are in [DEPLOYMENT.md](DEPLOYMENT.md). Every setting is listed in
+[ENV-PARAMETER.md](ENV-PARAMETER.md), the endpoints in
+[docs/API.md](docs/API.md), an overview of the service in
+[README.md](README.md).
 
-- [1. Voraussetzungen](#1-voraussetzungen)
-- [2. Lokale Installation (ohne Docker)](#2-lokale-installation-ohne-docker)
-- [3. Docker-Container](#3-docker-container)
-- [4. GitLab CI — Automatischer Docker-Build](#4-gitlab-ci--automatischer-docker-build)
-- [5. Umgebungsvariablen — Vollständige Referenz](#5-umgebungsvariablen--vollständige-referenz)
-- [6. Deployment-Varianten](#6-deployment-varianten)
-- [7. Troubleshooting](#7-troubleshooting)
+The examples use a POSIX shell (Linux, macOS, WSL, Git Bash).
 
----
+## Contents
 
-## 1. Voraussetzungen
+- [Prerequisites](#prerequisites)
+- [Run locally with uv](#run-locally-with-uv)
+- [Run locally with pip](#run-locally-with-pip)
+- [Screenshot browser](#screenshot-browser)
+- [Docker](#docker)
+- [Docker Compose](#docker-compose)
+- [Minimal configuration](#minimal-configuration)
+- [Verify the installation](#verify-the-installation)
+- [Run the tests](#run-the-tests)
+- [Troubleshooting](#troubleshooting)
+- [Further documents](#further-documents)
 
-### Minimale Systemanforderungen
+## Prerequisites
 
-| Komponente | Minimum | Empfohlen |
+Choose one path:
+
+| Path | Needs | Suited for |
 |---|---|---|
-| CPU | 1 Core | 2+ Cores |
-| RAM | 512 MB | 1 GB+ (Playwright/Chromium benötigt ~300 MB) |
-| Disk | 500 MB | 1 GB (inkl. Chromium-Browser) |
-| OS | Linux (x64/ARM64), Windows 10+, macOS 12+ | Linux (Docker) |
+| [Local with uv](#run-locally-with-uv) | Python 3.13 or newer, uv 0.7.13 or newer, Git | Development, running the tests |
+| [Local with pip](#run-locally-with-pip) | Python 3.13 or newer, pip, Git | Hosts without uv |
+| [Docker](#docker) | Docker 24 or newer | A container that already contains Chromium |
+| [Docker Compose](#docker-compose) | Docker Compose 2.24 or newer | The same container with the runtime options preset |
 
-### Software-Voraussetzungen
+uv 0.7.13 is the version that wrote `uv.lock`; the `Dockerfile` and both CI
+pipelines pin it. Local runs work on Linux, macOS and Windows (on Windows
+without `uvloop`). The container image is a Linux image.
 
-| Software | Version | Zweck |
+Every path also needs:
+
+- **A key for the LLM calls:** `B_API_KEY` for the B-API of OpenEduHub (the
+  default; the WLO team issues the keys) or `OPENAI_API_KEY` for OpenAI or any
+  OpenAI-compatible endpoint. See [Minimal configuration](#minimal-configuration).
+- **Outgoing HTTPS** to the services the configuration names:
+
+| Target | Default | Used for |
 |---|---|---|
-| Python | 3.13+ | Runtime |
-| uv | 0.5+ | Paketmanager |
-| Docker | 24+ | Container-Betrieb (optional) |
-| Docker Compose | v2.24+ | Multi-Container (optional; `env_file` mit `required: false`) |
-| Git | 2.x | Quellcode |
+| B-API | `https://b-api.staging.openeduhub.net` | LLM calls; text extraction for URL input and the geocoder through its proxy paths |
+| Repository (edu-sharing) | `https://repository.staging.openeduhub.net/edu-sharing/rest` | Reading nodes, `/upload`, `/nodes` |
+| Only with provider `openai` | `https://api.openai.com/v1`, `https://text-extraction.staging.openeduhub.net`, `https://photon.komoot.io/api` | LLM calls, text extraction, geocoder — called directly instead of through the B-API |
+| Public web pages | — | Screenshots, taken by the local Chromium |
+| During installation | PyPI and the Playwright download server; for `docker build` also Docker Hub, `ghcr.io` and the Debian package mirrors | Python packages, Chromium, base images, system libraries |
 
-### API-Keys (mindestens einer erforderlich)
+Nobody measured the resource needs of a local installation. As a guide: the
+Helm chart requests 500m CPU and 512Mi memory and limits the container to
+2 CPUs and 2Gi — estimates from `helm/metadata-agent/values.yaml`.
 
-| Key | Quelle | Beschreibung |
-|---|---|---|
-| B-API Key | OpenEduHub / WLO-Team | Standard-Provider für LLM-Zugriff (OpenAI via B-API oder AcademicCloud) |
-| OpenAI API Key | https://platform.openai.com | Alternativer direkter OpenAI-Zugriff |
-
----
-
-## 2. Lokale Installation (ohne Docker)
-
-### 2.1 Python-Umgebung einrichten
+## Run locally with uv
 
 ```bash
-# Repository klonen
-git clone <repo-url>
-cd metadata-agent-api
+# Get the code
+git clone <repo-url> metadata-agent
+cd metadata-agent
 
-# Virtual Environment erstellen und Dependencies installieren
+# Create .venv and install the versions pinned in uv.lock
 uv sync
+
+# Chromium for screenshots (optional, see "Screenshot browser")
+uv run playwright install chromium
+
+# Configuration: copy the template, then enter B_API_KEY in .env
+cp .env.template .env
+
+# Start with auto-reload, reachable from this machine only
+uv run uvicorn src.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-### 2.2 Dependencies installieren
+Then continue with [Verify the installation](#verify-the-installation).
+
+- **Dependencies:** `uv sync` installs the runtime packages and the development
+  tools (pytest, ruff, mypy). `uv sync --no-dev` leaves the tools out.
+  `uv sync --locked` also fails when `uv.lock` and `pyproject.toml` do not
+  match.
+- **Working directory:** start from the repository root. The app is addressed
+  as `src.main:app` and is not installed as a package, and the service reads
+  `.env` from the working directory.
+- **`--reload`** restarts the server when a source file changes. Leave it out
+  otherwise. On Windows, screenshots need a start without `--reload` (see
+  [Troubleshooting](#troubleshooting)).
+- **Other machines:** `--host 0.0.0.0` opens the port on every interface. The
+  API checks no credentials itself: whoever reaches the port runs extractions
+  on your `B_API_KEY`. Only do this behind an access restriction
+  ([DEPLOYMENT.md](DEPLOYMENT.md)).
+- **One worker per process:** do not use `--workers`. With
+  `METADATA_AGENT_INTERNAL_PORT` every worker would claim the internal port,
+  and metrics count per process. Scale with more instances
+  ([DEPLOYMENT.md](DEPLOYMENT.md)).
+
+## Run locally with pip
+
+`requirements.txt` is the export of `uv.lock`: the same exact versions, each
+with hashes, runtime packages only.
 
 ```bash
-uv sync
-```
+# Virtual environment with Python 3.13 or newer
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
 
-Enthaltene Pakete (pyproject.toml):
+# Install exactly the locked versions; pip checks every hash
+python -m pip install --require-hashes -r requirements.txt
 
-| Paket | Version | Zweck |
-|---|---|---|
-| fastapi | ≥0.142.4 | Web-Framework |
-| uvicorn[standard] | ≥0.32.0 | ASGI-Server |
-| pydantic | ≥2.10.0 | Datenvalidierung |
-| pydantic-settings | ≥2.14.2 | Umgebungsvariablen |
-| httpx | ≥0.28.0 | HTTP-Client (async), auch für die KI-Aufrufe |
-| playwright | ≥1.49.0 | Browser-Automatisierung für Screenshots |
-| prometheus-client | ≥0.26.0 | Metriken (`/metrics` auf dem internen Port) |
-
-Dazu kommen Mindestversionen für Pakete, die nur indirekt installiert werden,
-wegen bekannter Sicherheitslücken in älteren Versionen: starlette ≥1.3.1,
-anyio ≥4.14.2, idna ≥3.15, python-dotenv ≥1.2.2 (kommt über
-pydantic-settings bzw. uvicorn). uv liest sie aus `[tool.uv] constraint-dependencies`
-in `pyproject.toml`. Installiert wird, was `uv.lock` festlegt — `uv sync
---locked` prüft, dass Lock und `pyproject.toml` zusammenpassen. Für pip ist
-`requirements.txt` der Export dieses Locks mit exakten Versionen und Hashes
-(`pip install --require-hashes -r requirements.txt`); nach jeder Änderung an
-`uv.lock` neu erzeugen mit
-`uv export --frozen --no-dev --format requirements-txt --no-emit-project > requirements.txt`
-(`tests/test_requirements_in_step.py` prüft das).
-
-### 2.3 Playwright installieren
-
-Playwright wird für die datenschutzfreundliche Screenshot-Funktion (`screenshot_method=playwright`, ebenso der Legacy-Alias `pageshot`) benötigt. Die Screenshots werden lokal mit einem headless Chromium-Browser erstellt — keine Daten werden an externe Services gesendet.
-
-> **Hinweis:** Playwright ist nur für Screenshots nötig. Ohne Chromium gibt es keine Screenshots — einen externen Screenshot-Service nutzt der Agent nicht mehr; `pageshot` nimmt ebenfalls lokal auf.
-
-**Schritt 1: Python-Paket installieren** (bereits in pyproject.toml — wird via `uv sync` installiert)
-
-**Schritt 2: Chromium-Browser herunterladen**
-
-```bash
-# Nur Chromium installieren (empfohlen — spart ~500 MB gegenüber allen Browsern)
+# Chromium for screenshots (optional, see "Screenshot browser")
 playwright install chromium
 
-# Alternativ: Alle Browser (Chromium, Firefox, WebKit) — nicht nötig
-# playwright install
+# Configuration: copy the template, then enter B_API_KEY in .env
+cp .env.template .env
+
+# Start, reachable from this machine only
+uvicorn src.main:app --host 127.0.0.1 --port 8000
 ```
 
-**Schritt 3: System-Dependencies installieren (Linux)**
+The notes of the uv path on working directory, host and workers apply here as
+well. The test tools are not part of `requirements.txt`; use the uv path to
+[run the tests](#run-the-tests).
 
-Auf Linux-Systemen benötigt Chromium zusätzliche Systembibliotheken:
+After every change of `uv.lock`, regenerate the file with the command in its
+header (`tests/test_requirements_in_step.py` checks that both agree):
 
 ```bash
-# Automatisch alle benötigten Systembibliotheken installieren (Ubuntu/Debian)
-playwright install-deps chromium
+uv export --frozen --no-dev --format requirements-txt --no-emit-project -o requirements.txt
+```
 
-# Oder manuell (minimale Liste):
+### Installed packages
+
+Both paths install the same versions; `uv.lock` names them. The minimum
+versions come from `pyproject.toml`:
+
+| Package | Minimum | Purpose |
+|---|---|---|
+| fastapi | 0.142.4 | Web framework |
+| uvicorn | 0.32.0 | ASGI server, without the extra `standard` |
+| httptools | 0.6.3 | Fast HTTP parser for uvicorn |
+| uvloop | 0.21.0 | Fast event loop for uvicorn; not installed on Windows |
+| pydantic | 2.10.0 | Data validation |
+| pydantic-settings | 2.14.2 | Settings from environment variables and `.env` |
+| httpx | 0.28.0 | HTTP client, also for every LLM call (there is no OpenAI SDK) |
+| playwright | 1.63.0 | Drives Chromium for screenshots and fixes its version |
+| prometheus-client | 0.26.0 | Metrics (`/metrics` on the internal port) |
+| starlette | 1.3.1 | Middlewares and responses, imported directly |
+
+Three packages that arrive only indirectly have minimum versions because of
+known vulnerabilities in older ones: anyio 4.14.2, idna 3.15 and python-dotenv
+1.2.2 (`[tool.uv] constraint-dependencies` in `pyproject.toml`). uv applies
+them when it writes the lock; pip gets them through the pinned versions in
+`requirements.txt`.
+
+## Screenshot browser
+
+Screenshots (`POST /screenshot`, preview images of nodes) are taken by a local
+headless Chromium that Playwright drives. No data goes to an external
+screenshot service; the method `pageshot` is a legacy alias for the same local
+capture. Without Chromium everything else works, and screenshot requests
+answer `502`.
+
+| Environment | What to do |
+|---|---|
+| Docker image, Docker Compose | Nothing: Chromium and its system libraries are part of the image |
+| Windows, macOS | `uv run playwright install chromium` (pip path: without `uv run`) |
+| Linux | The same, plus the system libraries: `uv run playwright install-deps chromium` (needs root rights) |
+
+On Debian 13 you can install the system libraries by hand instead. This is the
+list the image uses (`Dockerfile`); other distributions name some packages
+differently, so use `playwright install-deps` there.
+
+```bash
 sudo apt-get update && sudo apt-get install -y --no-install-recommends \
     libnss3 libnspr4 libdbus-1-3 libatk1.0-0 libatk-bridge2.0-0 \
     libcups2 libdrm2 libxkbcommon0 libatspi2.0-0 libxcomposite1 \
@@ -123,201 +186,135 @@ sudo apt-get update && sudo apt-get install -y --no-install-recommends \
     libcairo2 libasound2 libx11-xcb1 fonts-liberation fonts-noto-color-emoji
 ```
 
-> **Windows & macOS:** Keine zusätzlichen System-Dependencies nötig — `playwright install chromium` reicht.
-
-**Schritt 4: Installation prüfen**
+Check that the browser starts (no page is loaded):
 
 ```bash
-# Prüfen ob Playwright korrekt installiert ist
-python -c "from playwright.async_api import async_playwright; print('Playwright OK')"
-
-# Chromium-Pfad anzeigen
-python -c "from playwright._impl._driver import compute_driver_executable; print(compute_driver_executable())"
+uv run python -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); b = p.chromium.launch(headless=True); print('Chromium', b.version); b.close(); p.stop()"
 ```
 
-**Playwright-Probleme beheben:**
+- The `playwright` package fixes the Chromium version. After an update of
+  `playwright`, run `playwright install chromium` again.
+- `uv run python scripts/check_browser_age.py` prints the bundled Chromium
+  version and exits with 1 when it is more than two major versions behind the
+  stable Chrome. It asks Google's version service; without a connection it
+  only prints the version. With `REQUIRE_BROWSER_AGE=1` (set in both CI
+  pipelines) it then takes the upload date of the locked `playwright` from
+  `uv.lock` instead and fails when that is more than 90 days ago or cannot be
+  read.
+- The settings `METADATA_AGENT_SCREENSHOT_*` are described in
+  [ENV-PARAMETER.md](ENV-PARAMETER.md).
 
-| Problem | Lösung |
-|---|---|
-| `playwright._impl._errors.Error: Executable doesn't exist` | `playwright install chromium` ausführen |
-| `Host system is missing dependencies to run browsers` | `playwright install-deps chromium` (Linux) |
-| Screenshot-Timeout | `METADATA_AGENT_SCREENSHOT_DELAY=5000` erhöhen |
-| Chromium startet nicht im Container | System-Dependencies prüfen (siehe Dockerfile) |
+## Docker
 
-### 2.4 Konfiguration (.env)
+The image contains the service, the Webkomponente and Chromium.
+
+### Build and run
 
 ```bash
-# Template kopieren
-cp .env.template .env
-```
-
-Minimale Konfiguration — nur B-API Key eintragen:
-
-```env
-# Pflicht: LLM-Zugriff
-B_API_KEY=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-METADATA_AGENT_LLM_PROVIDER=b-api-openai
-
-# Externe Dienste (Default: Staging — für Prod URLs anpassen)
-# METADATA_AGENT_B_API_BASE_URL=https://b-api.staging.openeduhub.net
-# METADATA_AGENT_TEXT_EXTRACTION_API_URL=https://text-extraction.staging.openeduhub.net
-
-# Optional: Repository-Upload
-# WLO_GUEST_USERNAME=upload-user
-# WLO_GUEST_PASSWORD=upload-password
-```
-
-Alle verfügbaren Variablen sind in [Abschnitt 5](#5-umgebungsvariablen--vollständige-referenz) dokumentiert.
-
-### 2.5 API starten
-
-```bash
-# Entwicklungsmodus (mit Auto-Reload)
-uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
-
-# Produktionsmodus (ein Worker je Container; skaliert wird über Replicas.
-# Mit METADATA_AGENT_INTERNAL_PORT ist nur ein Worker möglich, weil jeder
-# Worker den internen Port belegen würde; Metriken zählen je Prozess.)
-uvicorn src.main:app --host 0.0.0.0 --port 8000
-```
-
-### 2.6 Installation testen
-
-```bash
-# Health Check
-curl http://localhost:8000/health
-# → {"status": "healthy", "version": "3.0.1"}
-# (Provider und Auth-Modus nennt /health nur auf dem internen Port)
-
-# Einfacher Test
-curl -X POST http://localhost:8000/generate \
-  -H "Content-Type: application/json" \
-  -d '{"text": "Workshop KI in der Bildung am 15. März 2026 in Berlin"}'
-
-# Screenshot-Test (Playwright)
-curl -X POST http://localhost:8000/screenshot \
-  -H "Content-Type: application/json" \
-  -d '{"url": "https://example.com", "method": "playwright"}'
-
-# API-Dokumentation
-# → http://localhost:8000/docs (Swagger UI, vom Agenten selbst ausgeliefert)
-```
-
----
-
-## 3. Docker-Container
-
-### 3.1 Übersicht
-
-Das Docker-Image ist ein Multi-Stage Build auf Basis von `python:3.13-slim`
-(Debian 13 „trixie“, per Digest gepinnt) und enthält:
-
-- Python 3.13 Runtime
-- Die Python-Pakete aus `uv.lock` (FastAPI, uvicorn, httpx, Playwright, prometheus-client
-  u. a.; kein OpenAI-SDK – alle KI-Aufrufe gehen per httpx)
-- Playwright + Chromium für datenschutzfreundliche Screenshots
-- System-Bibliotheken für headless Chromium
-- Non-Root User (`appuser`, UID 1000) für Sicherheit
-- Health Check über `/health`-Endpoint
-
-**Image-Größe:** ~800 MB (davon ~400 MB Chromium + System-Libs)
-
-### 3.2 Docker-Image bauen
-
-```bash
-cd metadata-agent-api
-
-# Standard-Build
+# Build the image
 docker build -t metadata-agent-api .
 
-# Mit Build-Argumenten
-docker build -t metadata-agent-api:v3.0.1 .
-
-# Build-Cache nutzen (schneller bei Rebuilds)
-docker build --cache-from metadata-agent-api:latest -t metadata-agent-api .
-
-# Ohne Cache (sauberer Build)
-docker build --no-cache -t metadata-agent-api .
-
-# Build-Fortschritt anzeigen
-docker build --progress=plain -t metadata-agent-api .
-```
-
-### 3.3 Container starten
-
-```bash
-# Minimal (mit einzelnen Env-Vars)
+# Start with the settings from .env
 docker run -d \
   --name metadata-agent-api \
   -p 127.0.0.1:8000:8000 \
-  --read-only --tmpfs /tmp --tmpfs /home/appuser --stop-timeout 320 \
-  -e B_API_KEY=your-api-key \
-  metadata-agent-api
-
-# Mit .env-Datei (empfohlen)
-docker run -d \
-  --name metadata-agent-api \
-  -p 127.0.0.1:8000:8000 \
-  --read-only --tmpfs /tmp --tmpfs /home/appuser --stop-timeout 320 \
+  --read-only --tmpfs /tmp --tmpfs /home/appuser \
+  --stop-timeout 320 \
   --env-file .env \
   --restart unless-stopped \
   metadata-agent-api
+```
 
-# Mit allen Optionen
+Without a `.env` file, pass single settings with `-e`:
+
+```bash
 docker run -d \
   --name metadata-agent-api \
   -p 127.0.0.1:8000:8000 \
-  --read-only --tmpfs /tmp --tmpfs /home/appuser --stop-timeout 320 \
-  --env-file .env \
-  --restart unless-stopped \
-  --memory 1g \
-  --cpus 2 \
-  --health-cmd "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\"" \
-  --health-interval 30s \
-  --health-timeout 10s \
-  --health-retries 3 \
+  --read-only --tmpfs /tmp --tmpfs /home/appuser \
+  --stop-timeout 320 \
+  -e B_API_KEY=<key> \
+  -e METADATA_AGENT_REQUIRE_REPOSITORY=false \
   metadata-agent-api
 ```
 
-### 3.4 Docker Compose (empfohlen)
+| Option | Why |
+|---|---|
+| `-p 127.0.0.1:8000:8000` | Reachable from this machine only. The API checks no credentials itself: whoever reaches the port runs extractions on `B_API_KEY`. To serve other hosts, put a proxy with an access restriction in front ([DEPLOYMENT.md](DEPLOYMENT.md)) |
+| `--read-only --tmpfs /tmp --tmpfs /home/appuser` | Read-only root filesystem, as in the Helm chart. Chromium writes its profile and caches to these two directories |
+| `--stop-timeout 320` | A running `/generate` may take up to 300 s (`METADATA_AGENT_GENERATE_TIMEOUT`). Docker's default of 10 s would cut it off on every stop or restart |
+| `--env-file .env` | Passes the settings as environment variables; the image contains no `.env`. Docker takes each line literally: write values without quotes |
+| `--restart unless-stopped` | Restarts the container after a crash or a reboot |
 
-Die mitgelieferte `docker-compose.yml` enthält die empfohlene Konfiguration:
+Build variants:
+
+| Command | Effect |
+|---|---|
+| `docker build --build-arg VERSION=v4.0.0 --build-arg REVISION=$(git rev-parse HEAD) -t metadata-agent-api:v4.0.0 .` | Writes version and commit into the image labels (defaults: `dev`, `unknown`) |
+| `docker build --no-cache -t metadata-agent-api .` | Rebuilds every layer |
+| `docker build --progress=plain -t metadata-agent-api .` | Shows the full build output |
+
+The CI pipelines publish images to the internal registry (tags `main`,
+`develop` and release tags such as `v4.0.0`). Pulling and running them is
+described in [DEPLOYMENT.md](DEPLOYMENT.md).
+
+### What the image contains
+
+| Property | Value |
+|---|---|
+| Base | `python:3.13-slim` (Debian 13 "trixie"), pinned by digest |
+| Build | Two stages: the builder installs the packages with uv 0.7.13 (`uv sync --locked --no-install-project --no-dev`); the final image receives only the finished `.venv`, no build tools |
+| Contents | The packages from `uv.lock`, Chromium's headless shell in `/opt/playwright-browsers` (`playwright install --only-shell chromium`) with 20 system packages, `tini` as init process, `src/` including the Webkomponente (`src/static/widget/`), `LICENSE` and `NOTICE` |
+| User | `appuser` (UID 1000), not root. `/app` belongs to root: the process can read its code but not change it |
+| Port | 8000 |
+| Start command | `tini -- uvicorn src.main:app --port 8000 --timeout-keep-alive 75` (one worker). uvicorn listens on the address in `UVICORN_HOST`, which the image sets to `0.0.0.0`; idle connections stay open for 75 s |
+| Health check | Built in: `/health` every 30 s, timeout 10 s, 3 retries, start period 5 s |
+| State | None; no volume is needed |
+| Labels | `org.opencontainers.image.version` and `.revision` from the build arguments `VERSION` and `REVISION` |
+
+`.dockerignore` keeps `.git`, `.env` and `.env.*` (except `.env.template`),
+`*.md`, `.venv`, caches and logs out of the build context.
+
+### Manage the container
 
 ```bash
-# .env-Datei vorbereiten
-cp .env.template .env
-# B_API_KEY eintragen
-
-# Starten
-docker compose up -d
-
-# Logs anzeigen
-docker compose logs -f
-
-# Stoppen
-docker compose down
-
-# Neubauen und starten (nach Code-Änderungen)
-docker compose up -d --build
-
-# Nur neubauen ohne zu starten
-docker compose build
+docker logs -f metadata-agent-api                                       # follow the log
+docker inspect --format='{{.State.Health.Status}}' metadata-agent-api   # result of the health check
+docker stats metadata-agent-api                                         # CPU and memory
+docker exec -it metadata-agent-api bash                                 # shell in the container
+docker stop metadata-agent-api && docker rm metadata-agent-api          # stop and remove
 ```
 
-Die Datei braucht **Docker Compose 2.24 oder neuer** (`docker compose version`):
-Ältere Versionen kennen die Langform `env_file: [{path: .env, required: false}]`
-nicht und brechen ab. Damit erreicht jede Einstellung aus einer vorhandenen
-`.env` den Container; ohne `.env` gelten die Defaults aus `environment`.
+`scripts/smoke-image.sh` checks a built image the way the CI does. It starts
+the image read-only and without a key as container `metadata-agent-smoke`,
+waits up to 60 s for `/health`, checks `/ready` on port 8000, `/ready` and
+`/metrics` on the internal port (9000, inside the container) and that `tini`
+runs as init process, lets Chromium start once and removes the container. It
+needs `wget` and a free port 8000, which it publishes on every interface while
+it runs.
 
-`docker-compose.yml` (Auszug):
+```bash
+sh scripts/smoke-image.sh metadata-agent-api
+```
+
+## Docker Compose
+
+```bash
+cp .env.template .env           # then enter B_API_KEY in .env
+docker compose up -d            # build and start
+docker compose logs -f          # follow the log
+docker compose up -d --build    # rebuild and restart after a code change
+docker compose down             # stop and remove
+```
+
+`docker-compose.yml` sets the same runtime options as the `docker run` example
+above (excerpt; the file also holds the list of settings and the health check):
 
 ```yaml
 services:
   metadata-agent-api:
     build: .
     container_name: metadata-agent-api
-    # Like the Helm chart: only locally reachable, read-only root filesystem,
-    # 320 s to finish a running /generate on stop (audit OPS-15).
     ports:
       - "127.0.0.1:8000:8000"
     read_only: true
@@ -325,495 +322,270 @@ services:
       - /tmp
       - /home/appuser
     stop_grace_period: 320s
-    # The whole .env, if there is one (needs Docker Compose 2.24+)
     env_file:
       - path: .env
         required: false
-    environment:
-      # LLM Provider
-      - METADATA_AGENT_LLM_PROVIDER=b-api-openai
-      - B_API_KEY=${B_API_KEY:-}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-
-      # Externe Dienste (Default: Staging — für Prod URLs anpassen)
-      - METADATA_AGENT_B_API_BASE_URL=${METADATA_AGENT_B_API_BASE_URL:-https://b-api.staging.openeduhub.net}
-      - METADATA_AGENT_TEXT_EXTRACTION_API_URL=${METADATA_AGENT_TEXT_EXTRACTION_API_URL:-https://text-extraction.staging.openeduhub.net}
-
-      # Repository Upload (optional)
-      - WLO_GUEST_USERNAME=${WLO_GUEST_USERNAME:-}
-      - WLO_GUEST_PASSWORD=${WLO_GUEST_PASSWORD:-}
-
-      # Worker Settings
-      - METADATA_AGENT_DEFAULT_MAX_WORKERS=20
-      - METADATA_AGENT_REQUEST_TIMEOUT=90
-
-      # App Settings
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
 ```
 
-### 3.5 Dockerfile-Aufbau im Detail
+- **Compose version:** the file needs Docker Compose 2.24 or newer
+  (`docker compose version`). Older versions do not know the long form of
+  `env_file` with `required` and abort.
+- **Settings:** put them in `.env`; do not edit the list in the file. Compose
+  reads `.env` twice: to fill the `${VAR:-default}` entries of the
+  `environment` list, and as `env_file` for every setting the list does not
+  name. Without a `.env` the defaults of the list apply. Three entries have
+  the form `${VAR-default}`, so an empty value in `.env` stays empty instead
+  of becoming the default: `METADATA_AGENT_LLM_VERBOSITY`,
+  `METADATA_AGENT_LLM_REASONING_EFFORT` and `METADATA_AGENT_CORS_ORIGINS`.
+- **Health check:** it calls `/health`. The container therefore stays up when
+  `/ready` answers `503`, for example without the repository account.
+- **Internal port:** not set in the file. To use it, set
+  `METADATA_AGENT_INTERNAL_PORT=9000` in `.env` and add
+  `"127.0.0.1:9000:9000"` to `ports` (see
+  [Verify the installation](#verify-the-installation)).
 
-Das Dockerfile nutzt einen Multi-Stage Build für optimale Image-Größe:
-
-```
-┌─────────────────────────────────────────────┐
-│ Stage 1: builder (python:3.13-slim)         │
-│                                             │
-│  uv sync --locked --no-install-project      │
-│    --no-dev                                 │
-│  → Installiert alle Python-Pakete in .venv  │
-│  → Wird am Ende verworfen (nur .venv        │
-│    wird kopiert)                            │
-└─────────────────────────────────────────────┘
-                    │
-                    ▼
-┌─────────────────────────────────────────────┐
-│ Stage 2: production (python:3.13-slim)      │
-│                                             │
-│  1. System-Dependencies (apt-get)           │
-│     → libnss3, libgbm1, fonts, etc.         │
-│     → Benötigt für headless Chromium        │
-│                                             │
-│  2. .venv (COPY --from=builder)             │
-│     → Fertige virtuelle Umgebung            │
-│                                             │
-│  3. Non-Root User (appuser, UID 1000) und   │
-│     Playwright Chromium in einer Ebene      │
-│     → Lädt Chromium-Browser herunter        │
-│                                             │
-│  4. App-Code (COPY src/ ./src/)             │
-│     → Inklusive static/widget/ falls        │
-│       vorhanden                             │
-│                                             │
-│  5. USER appuser, Healthcheck, CMD          │
-│                                             │
-│  6. OCI-Labels (Version, Commit)            │
-└─────────────────────────────────────────────┘
-```
-
-**Warum Multi-Stage?**
-- Build-Tools (uv, gcc, etc.) landen nicht im finalen Image
-- Kleinere Angriffsfläche (kein Compiler im Produktionsimage)
-- Bessere Layer-Caching-Effizienz
-
-### 3.6 Playwright im Docker-Container
-
-Im Docker-Image wird Playwright vollständig vorinstalliert:
-
-- **Python-Paket** — via `pyproject.toml` / `uv sync` im Builder-Stage
-- **Chromium-Browser** — via `playwright install chromium` im Dockerfile
-- **System-Dependencies** — via `apt-get install` (20 Pakete)
-
-Wichtige System-Bibliotheken für Chromium:
-
-| Paket | Zweck |
-|---|---|
-| `libnss3`, `libnspr4` | Network Security Services |
-| `libdbus-1-3` | D-Bus Message Bus |
-| `libatk1.0-0`, `libatk-bridge2.0-0` | Accessibility Toolkit |
-| `libcups2` | CUPS Printing |
-| `libdrm2` | DRM Rendering |
-| `libxkbcommon0` | Keyboard |
-| `libatspi2.0-0` | Accessibility |
-| `libxcomposite1`, `libxdamage1`, `libxfixes3`, `libxrandr2` | X11 Extensions |
-| `libgbm1` | Generic Buffer Management |
-| `libpango-1.0-0`, `libcairo2` | Text/Grafik-Rendering |
-| `libasound2` | Audio (wird benötigt, aber nicht genutzt) |
-| `libx11-xcb1` | X11/XCB |
-| `fonts-liberation`, `fonts-noto-color-emoji` | Schriften |
-
-**Screenshot-Test im Container:**
-
-```bash
-# Testen ob Playwright im Container funktioniert
-docker exec metadata-agent-api python -c "
-from playwright.sync_api import sync_playwright
-with sync_playwright() as p:
-    browser = p.chromium.launch(headless=True)
-    page = browser.new_page()
-    page.goto('https://example.com')
-    print(f'Title: {page.title()}')
-    browser.close()
-    print('Playwright OK')
-"
-
-# Screenshot über API
-curl -X POST http://localhost:8000/screenshot \
-  -H "Content-Type: application/json" \
-  -d '{"url": "https://example.com", "method": "playwright"}'
-```
-
-### 3.7 Container-Management
-
-```bash
-# Status prüfen
-docker ps
-docker inspect metadata-agent-api
-
-# Logs
-docker logs metadata-agent-api
-docker logs -f metadata-agent-api          # Live-Logs
-docker logs --tail 100 metadata-agent-api  # Letzte 100 Zeilen
-
-# Health Check manuell
-docker inspect --format='{{.State.Health.Status}}' metadata-agent-api
-
-# Container neustarten
-docker restart metadata-agent-api
-
-# Container stoppen und entfernen
-docker stop metadata-agent-api && docker rm metadata-agent-api
-
-# Shell im Container
-docker exec -it metadata-agent-api bash
-
-# Ressourcenverbrauch
-docker stats metadata-agent-api
-```
-
-### 3.8 Volumes und Persistenz
-
-Die API ist stateless — kein persistenter Speicher nötig. Optional können Konfigurationsdateien gemountet werden:
+To compare providers side by side, the file holds two more services, commented
+out: AcademicCloud on port 8001 and native OpenAI on port 8002. Remove the
+comment signs to start them, for example:
 
 ```yaml
-# docker-compose.yml Ergänzung
-services:
-  metadata-agent-api:
-    # ...
-    volumes:
-      # Eigene .env-Datei (statt environment-Block)
-      - ./.env:/app/.env:ro
-
-      # Optional: Eigene Schemata einbinden
-      # - ./custom-schemata:/app/src/schemata/custom:ro
-```
-
-### 3.9 Multi-Container-Setup (mehrere LLM-Provider)
-
-Die `docker-compose.yml` enthält auskommentierte Beispiele für parallele Container mit unterschiedlichen LLM-Providern:
-
-```yaml
-services:
-  # Standard: B-API OpenAI (Port 8000)
-  metadata-agent-api:
-    build: .
-    ports: ["127.0.0.1:8000:8000"]
-    read_only: true
-    tmpfs: [/tmp, /home/appuser]
-    stop_grace_period: 320s
-    environment:
-      - METADATA_AGENT_LLM_PROVIDER=b-api-openai
-      - B_API_KEY=${B_API_KEY}
-
-  # Alternativ: B-API AcademicCloud / DeepSeek (Port 8001)
   metadata-agent-api-academiccloud:
     build: .
-    ports: ["127.0.0.1:8001:8000"]
+    container_name: metadata-agent-api-academiccloud
+    ports:
+      - "127.0.0.1:8001:8000"
     read_only: true
     tmpfs: [/tmp, /home/appuser]
     stop_grace_period: 320s
     environment:
       - METADATA_AGENT_LLM_PROVIDER=b-api-academiccloud
-      - B_API_KEY=${B_API_KEY}
-
-  # Alternativ: Natives OpenAI (Port 8002)
-  metadata-agent-api-openai:
-    build: .
-    ports: ["127.0.0.1:8002:8000"]
-    read_only: true
-    tmpfs: [/tmp, /home/appuser]
-    stop_grace_period: 320s
-    environment:
-      - METADATA_AGENT_LLM_PROVIDER=openai
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - METADATA_AGENT_OPENAI_MODEL=gpt-4o-mini
+      - B_API_KEY=${B_API_KEY:-}
+      - METADATA_AGENT_DEFAULT_MAX_WORKERS=10
 ```
 
-### 3.10 Docker-Image optimieren
+These two services receive only the variables listed for them (no `env_file`).
+Their `/ready` answers `503` until you add the repository account or
+`METADATA_AGENT_REQUIRE_REPOSITORY=false`.
 
-Die `.dockerignore` liegt im Repository (u. a. `.git`, `.env*` außer
-`.env.template`, `*.md`, `.venv`, Caches).
+## Minimal configuration
 
-**Layer-Caching:** Die Reihenfolge im Dockerfile hält die großen Ebenen stabil:
+All paths read the same variables: a local start from `.env` in the working
+directory and from the environment, a container from its environment
+variables. `.env.template` lists the common ones with comments; the full
+reference is [ENV-PARAMETER.md](ENV-PARAMETER.md).
 
-1. `pyproject.toml` + `uv.lock` (Builder) → nur bei Abhängigkeitsänderungen neu
-2. System-Dependencies → nur bei Änderungen der Paketliste neu
-3. Benutzer `appuser` + `playwright install chromium` + Rechte in einer Ebene → nur
-   bei neuer Playwright-Version neu
-4. `COPY src/` → bei jeder Code-Änderung, klein
-5. OCI-Labels zuletzt → ein neuer Commit ändert nur Metadaten
+- Secrets carry no prefix (`B_API_KEY`, `OPENAI_API_KEY`,
+  `WLO_GUEST_USERNAME`, `WLO_GUEST_PASSWORD`). Every other variable starts
+  with `METADATA_AGENT_`.
+- An environment variable wins over the same entry in `.env`. An empty
+  variable counts as not set: the default applies (except for the three
+  settings where empty is a value, see [Docker Compose](#docker-compose)).
+  Unknown variables are ignored, so a typo in a name goes unnoticed. A value
+  a setting does not allow stops the start.
+- Leave a key empty until you have a real one. `/ready` only checks that a key
+  is set; a placeholder would make the service report ready.
 
-### 3.11 Troubleshooting Docker
+### LLM mode
 
-| Problem | Ursache | Lösung |
-|---|---|---|
-| `playwright install chromium` schlägt fehl | Netzwerkproblem | `docker build --network host` |
-| Container startet, aber Health Check schlägt fehl | Port nicht exposed | `docker run -p 127.0.0.1:8000:8000` prüfen (von außen: Reverse Proxy davor) |
-| `permission denied` im Container | Root-User nötig | Im Dockerfile: Non-Root User prüfen |
-| Image zu groß (>2 GB) | Kein Multi-Stage Build | Dockerfile prüfen, `.dockerignore` anlegen |
-| Chromium-Crash im Container | Zu wenig Shared Memory | `docker run --shm-size=256m` |
-| `Error: Could not find expected browser` | Playwright nicht installiert | `playwright install chromium` im Dockerfile prüfen |
-| Container OOM (Out of Memory) | Chromium benötigt RAM | `--memory 1g` oder mehr |
+`METADATA_AGENT_LLM_PROVIDER` selects the mode. The default needs nothing but
+the key:
 
----
+```env
+METADATA_AGENT_LLM_PROVIDER=b-api-openai
+B_API_KEY=<key>
+```
 
-## 4. GitLab CI — Automatischer Docker-Build
+| Mode | `METADATA_AGENT_LLM_PROVIDER` | Key | Default model | Also set |
+|---|---|---|---|---|
+| B-API, OpenAI models (default) | `b-api-openai` | `B_API_KEY` | `gpt-6-luna` | — |
+| B-API, AcademicCloud models | `b-api-academiccloud` | `B_API_KEY` | `deepseek-v4-flash` | — |
+| B-API router | `b-api-router` | `B_API_KEY` | `openai/gpt-6-luna` | `METADATA_AGENT_B_API_ROUTER_MODEL`: a route defined in the B-API, or `provider/model` |
+| OpenAI directly, or a compatible endpoint | `openai` | `OPENAI_API_KEY` | `gpt-4o-mini` | For another endpoint: `METADATA_AGENT_OPENAI_API_BASE` (default `https://api.openai.com/v1`) and `METADATA_AGENT_OPENAI_MODEL` |
 
-### 4.1 Workflow-Übersicht
+- **Rights of the B-API key:** the LLM endpoints and the proxy services
+  `text-extraction` and `photon_geocoding`. With a B-API provider the agent
+  calls text extraction and geocoder through the B-API, with the same key
+  (`METADATA_AGENT_B_API_SERVICES`, default `auto`). Without these rights
+  extraction from a URL fails with `TEXT_EXTRACTION_AUTH_REFUSED`, and places
+  stay without coordinates.
+- **Which key carries the calls:** `METADATA_AGENT_B_API_AUTH_MODE`, default
+  `auto`. A key that the B-API proxy forwards (`Authorization: Bearer`) is
+  used; otherwise `B_API_KEY`. An installation that is called directly, not
+  through the proxy, therefore needs `B_API_KEY`. `forward` accepts only
+  forwarded keys (a direct call answers `502` with `LLM_AUTH_MISSING`);
+  `static` uses only `B_API_KEY`. Details: [ENV-PARAMETER.md](ENV-PARAMETER.md)
+  and [docs/b-api-kurzinfo.md](docs/b-api-kurzinfo.md) (German).
+- **AcademicCloud:** the defaults allow 2 requests in flight and 2 per second.
+  The quota of the gateway is tighter; see
+  [ENV-PARAMETER.md](ENV-PARAMETER.md) before real use.
+- **Router:** with a route name (a value without `/`), also set
+  `METADATA_AGENT_LLM_REQUEST_STYLE` to `reasoning` or `classic`. Otherwise the
+  agent warns at start and sends `classic`.
+- **Provider `openai`:** any endpoint works that serves `/chat/completions`
+  and accepts a Bearer token. Text extraction then follows the repository
+  address (OpenEduHub staging or production), and the geocoder is
+  `photon.komoot.io`. With another repository, set
+  `METADATA_AGENT_TEXT_EXTRACTION_API_URL`; otherwise extraction from a URL
+  answers `503`.
 
-Der Workflow `.gitlab-ci.yml` führt folgende Stages aus:
+### Repository account and `/ready`
 
-| Stage | Jobs | Beschreibung |
-|---|---|---|
-| `build` | `Ruff Check`, `Ruff Format`, `helm binary` | Code-Qualität; `helm` für die Chart-Tests |
-| `test` | `run tests` | pytest mit Coverage-Untergrenze, Browser-Tests (`REQUIRE_BROWSER=1`), Chart-Tests (`REQUIRE_HELM=1`), Alter des Chromium (`scripts/check_browser_age.py`), mypy – auf dem Debian 13 des Images |
-| `test` | `pip audit`, `pip audit dev` | Bekannte Schwachstellen in `requirements.txt` (blockierend) und in den Entwicklungswerkzeugen (nur gemeldet) |
-| `test` | `helm lint`, `kubeconform`, `alert rules` | Chart, gerenderte Manifeste, Alarmregeln mit promtool |
-| `test` | `check docker image in merge requests` | Image bauen, read-only starten (`scripts/smoke-image.sh`), Trivy |
-| `deploy` | `build and push …` | Image bauen, prüfen, in die interne Registry pushen (`main`, `develop`, Tags `v*`) |
-
-### 4.2 CI/CD-Variablen einrichten
-
-Navigiere zu **GitLab → Repository → Settings → CI/CD → Variables** und stelle sicher, dass folgende Variablen als Gruppen- oder Projekt-Variablen gesetzt sind:
-
-| Variable | Zweck |
+| Variable | Effect |
 |---|---|
-| `DOCKER_REGISTRY` | URL der internen Docker-Registry |
-| `DOCKER_USERNAME` | Registry-Benutzername |
-| `DOCKER_PASSWORD` | Registry-Passwort |
-| `DIND_IMAGE` | Docker-in-Docker Image |
-| `DIND_HOST` | Docker-Host für DinD |
-| `DIND_DRIVER` | Docker Storage Driver |
-| `DIND_TLS_CERTDIR` | TLS-Zertifikat-Verzeichnis |
+| `WLO_GUEST_USERNAME`, `WLO_GUEST_PASSWORD` | The service account for reading and writing in the repository. Without it `/upload` and `/nodes` answer `503`, and so does `/ready` |
+| `METADATA_AGENT_REQUIRE_REPOSITORY=false` | For an installation that only generates metadata: `/ready` answers `200` without the account; `/upload` and `/nodes` still answer `503` |
 
-### 4.3 Workflow-Trigger
+`/generate` from a text works in both cases.
 
-| Trigger | Tag | Beschreibung |
-|---|---|---|
-| Push auf `main` | Branch-Slug (`main`) | Automatisch bei jedem Merge/Push |
-| Push auf `develop` | Branch-Slug (`develop`) | Automatisch |
-| Git-Tag `v*` | Tag-Name (z.B. `v3.0.1`) | Für Releases; andere Tags veröffentlichen nichts |
+### Staging or production
 
-### 4.4 Release erstellen (neuen Tag pushen)
-
-```bash
-# Version taggen
-git tag v3.0.1
-git push origin v3.0.1
-
-# → GitLab CI baut und pusht:
-# $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v3.0.1
-```
-
----
-
-## 5. Umgebungsvariablen — Vollständige Referenz
-
-Alle Variablen können in `.env`, als System-Umgebungsvariablen oder als Docker-Environment gesetzt werden. Prefix: `METADATA_AGENT_` (außer API-Keys).
-
-### API-Keys (ohne Prefix)
-
-| Variable | Erforderlich | Beschreibung |
-|---|---|---|
-| `B_API_KEY` | ✅¹ | B-API Key für OpenEduHub LLM-Zugriff |
-| `OPENAI_API_KEY` | ✅¹ | OpenAI API Key (nur für `provider=openai`) |
-| `WLO_GUEST_USERNAME` | für `/upload` | WLO Repository Upload-Benutzername |
-| `WLO_GUEST_PASSWORD` | für `/upload` | WLO Repository Upload-Passwort |
-
-> Das Ziel-Repository wird über `METADATA_AGENT_REPOSITORY_URL` gesetzt (unten
-> unter *Externe Dienste*) — es gibt keinen zweiten Schalter dafür.
-
-> ¹ Mindestens einer der LLM-Keys ist erforderlich.
-
-### LLM-Provider
-
-| Variable | Default | Beschreibung |
-|---|---|---|
-| `METADATA_AGENT_LLM_PROVIDER` | `b-api-openai` | `b-api-openai`, `b-api-academiccloud`, `b-api-router`, `openai` |
-| `METADATA_AGENT_LLM_TEMPERATURE` | `0.3` | Kreativität (0.0–1.0) |
-| `METADATA_AGENT_LLM_MAX_TOKENS` | `2000` | Max Tokens pro LLM-Aufruf |
-| `METADATA_AGENT_LLM_MAX_RETRIES` | `3` | Versuche je KI-Aufruf (`1` = keine Wiederholung) und zusätzliche Aufrufe bei ungültigem Feldwert; mindestens `1` |
-| `METADATA_AGENT_LLM_RETRY_DELAY` | `1.0` | Wartezeit zwischen Retries (Sek.) |
-
-### Externe Dienste (B-API, Text-Extraction, Repository)
-
-Die API nutzt mehrere externe Dienste, die je nach Umgebung (Staging / Prod) unterschiedliche URLs haben. Jede URL ist einzeln konfigurierbar. Defaults sind Staging-URLs.
-
-| Variable | Default (Staging) | Prod-Wert | Beschreibung |
-|---|---|---|---|
-| `METADATA_AGENT_B_API_BASE_URL` | `https://b-api.staging.openeduhub.net` | `https://b-api.prod.openeduhub.net` | B-API Basis-URL (LLM-Zugriff). Endpoint-Pfade (`/api/v1/llm/openai`, `/api/v1/llm/academiccloud`) werden automatisch abgeleitet. |
-| `METADATA_AGENT_TEXT_EXTRACTION_API_URL` | `https://text-extraction.staging.openeduhub.net` | `https://text-extraction.prod.openeduhub.net` | Text-Extraction API (Volltext aus URLs extrahieren). |
-| `METADATA_AGENT_REPOSITORY_URL` | `https://repository.staging.openeduhub.net/edu-sharing/rest` | `https://redaktion.openeduhub.net/edu-sharing/rest` | Repository-URL (Metadaten-Abruf & Upload). |
-| `METADATA_AGENT_WLO_INBOX_ID` | `21144164-30c0-4c01-ae16-264452197063` | — | Inbox-ID für Uploads. |
-
-**Beispiel — Umschalten auf Produktion:**
+All addresses default to staging. For production set both:
 
 ```env
 METADATA_AGENT_B_API_BASE_URL=https://b-api.prod.openeduhub.net
-METADATA_AGENT_TEXT_EXTRACTION_API_URL=https://text-extraction.prod.openeduhub.net
 METADATA_AGENT_REPOSITORY_URL=https://redaktion.openeduhub.net/edu-sharing/rest
 ```
 
-**Docker:**
+At start the agent warns when the addresses point to different environments.
+The request parameter `repository` is ignored; only the variable selects the
+repository.
+
+## Verify the installation
+
+**1. Read the start log.** The agent prints version, provider, model and the
+addresses of B-API, text extraction, geocoder and repository, then one line
+for every configuration problem it sees (a missing key, a missing repository
+account, addresses from different environments). Afterwards it writes one line
+per request; `/health` and `/ready` appear only with
+`METADATA_AGENT_LOG_LEVEL=DEBUG`.
+
+**2. Call the endpoints.**
 
 ```bash
-docker run -d \
-  --name metadata-agent-api \
-  -p 127.0.0.1:8000:8000 \
-  --read-only --tmpfs /tmp --tmpfs /home/appuser --stop-timeout 320 \
-  -e B_API_KEY=your-api-key \
-  -e METADATA_AGENT_B_API_BASE_URL=https://b-api.prod.openeduhub.net \
-  -e METADATA_AGENT_TEXT_EXTRACTION_API_URL=https://text-extraction.prod.openeduhub.net \
-  -e METADATA_AGENT_REPOSITORY_URL=https://redaktion.openeduhub.net/edu-sharing/rest \
-  metadata-agent-api
+# The process answers
+curl http://localhost:8000/health
+
+# The configuration is complete
+curl -i http://localhost:8000/ready
+
+# A first extraction (needs a working LLM key)
+curl -X POST http://localhost:8000/generate \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Workshop KI in der Bildung am 15. März 2026 in Berlin"}'
+
+# A screenshot (needs Chromium)
+curl -X POST http://localhost:8000/screenshot \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com"}'
 ```
 
-> **Hinweis:** Werden diese Variablen nicht gesetzt, verwenden alle Dienste die **Staging-URLs** als Default.
->
-> Der Request-Parameter `repository` in `/generate` und `/upload` ist **deprecated** und wird ignoriert. Die Repository-URL wird ausschließlich über die Umgebungsvariable gesetzt.
-
-### Provider-spezifische Einstellungen
-
-| Variable | Default | Beschreibung |
+| Check | Expected | Otherwise |
 |---|---|---|
-| `METADATA_AGENT_B_API_OPENAI_BASE` | *(abgeleitet aus `B_API_BASE_URL`)* | Überschreibt den abgeleiteten OpenAI-Endpoint |
-| `METADATA_AGENT_B_API_OPENAI_MODEL` | `gpt-6-luna` | Modell für B-API OpenAI |
-| `METADATA_AGENT_LLM_VERBOSITY` | `low` | Nur GPT-5/GPT-6 und o-Modelle |
-| `METADATA_AGENT_LLM_REASONING_EFFORT` | `low` | Nur GPT-5/GPT-6 und o-Modelle |
-| `METADATA_AGENT_B_API_ACADEMICCLOUD_BASE` | *(abgeleitet aus `B_API_BASE_URL`)* | Überschreibt den abgeleiteten AcademicCloud-Endpoint |
-| `METADATA_AGENT_B_API_ACADEMICCLOUD_MODEL` | `deepseek-v4-flash` | Modell für B-API AcademicCloud |
-| `METADATA_AGENT_OPENAI_API_BASE` | `https://api.openai.com/v1` | Beliebiger OpenAI-kompatibler Endpunkt (Azure, vLLM, Gateway) |
-| `METADATA_AGENT_OPENAI_MODEL` | `gpt-4o-mini` | Modell für natives OpenAI |
-| `METADATA_AGENT_OPENAI_TEMPERATURE` | folgt `LLM_TEMPERATURE` | Nur nötig, wenn nativ OpenAI abweichen soll |
+| `GET /health` | `{"status":"healthy","version":"4.0.0"}` | The process is not running or listens elsewhere. `/health` says nothing about keys or dependencies |
+| `GET /ready` | `200` with `{"status":"ready"}` | `503` with `error.code` `NOT_READY`: the configuration is incomplete. The reasons are in the log (`Nicht bereit: …`) and on the internal port, not in this answer. See [Repository account and `/ready`](#repository-account-and-ready) |
+| `/docs` in a browser | Swagger UI, served by the agent itself without a CDN; the specification is at `/openapi.json` | — |
+| `POST /generate` | JSON with `contextName`, `schemaVersion` and `metadataset`, the extracted fields under their field ids, and `processing` with `status` (`success` or `partial`), `llm_provider` and `llm_model` | `502` with an `error.code` such as `LLM_AUTH_MISSING`: see [Troubleshooting](#troubleshooting). A run makes many LLM calls (about one per field) and ends after 300 s at the latest (`METADATA_AGENT_GENERATE_TIMEOUT`) |
+| `POST /screenshot` | `"success": true` and the image in `image_base64` | `502`: Chromium is missing or the page did not load. `400`: the address is not public |
+| `/widget/examples/default.html` in a browser | An example page with the Webkomponente | — |
 
-### Worker & Durchsatz
+**3. Optional: the internal port.** With `METADATA_AGENT_INTERNAL_PORT` the
+agent serves `/health`, `/ready` and `/metrics` on a second port. There
+`/health` also names provider and auth mode, and `/ready` lists its reasons
+under `problems`.
 
-| Variable | Default | Beschreibung |
-|---|---|---|
-| `METADATA_AGENT_DEFAULT_MAX_WORKERS` | `20` | Parallele LLM-Aufrufe, auch für `/generate` ohne `max_workers`; gedeckelt auf die Grenze des Providers |
-| `METADATA_AGENT_LLM_MAX_CONCURRENT_REQUESTS` | providerabhängig | Gleichzeitige Requests. Leer = Default des Providers (`b-api-openai`/`openai`: 20, `b-api-academiccloud`: 2) |
-| `METADATA_AGENT_LLM_MAX_REQUESTS_PER_SECOND` | providerabhängig | Requests pro Sekunde. Leer = Default des Providers (`b-api-academiccloud`: 2, sonst keine Grenze), `0` = aus |
-| `METADATA_AGENT_REQUEST_TIMEOUT` | `90` | Timeout je KI-Aufruf (Sekunden) |
-
-Vollständige Liste aller Umgebungsvariablen: [ENV-PARAMETER.md](ENV-PARAMETER.md).
-
-### Schema
-
-| Variable | Default | Beschreibung |
-|---|---|---|
-| `METADATA_AGENT_DEFAULT_CONTEXT` | `default` | Standard-Kontext (`default`, `mds_oeh`) |
-
-### Crawler & Text-Extraction
-
-Die Adresse der Textextraktion steht oben unter *Externe Dienste*
-(`METADATA_AGENT_TEXT_EXTRACTION_API_URL`); weitere Einstellungen gibt es nicht.
-
-### Screenshot
-
-| Variable | Default | Beschreibung |
-|---|---|---|
-| `METADATA_AGENT_SCREENSHOT_METHOD` | `playwright` | Immer lokal (Chromium); `pageshot` ist ein Legacy-Alias und nimmt ebenfalls lokal auf |
-| `METADATA_AGENT_SCREENSHOT_WIDTH` | `1920` | Viewport-Breite |
-| `METADATA_AGENT_SCREENSHOT_HEIGHT` | `1080` | Viewport-Höhe |
-| `METADATA_AGENT_SCREENSHOT_DELAY` | `2000` | Wartezeit vor Aufnahme (ms) |
-
-### Sonstiges
-
-| Variable | Default | Beschreibung |
-|---|---|---|
-| `METADATA_AGENT_CORS_ORIGINS` | `*` | CORS-Origins (kommasepariert oder `*`) |
-
----
-
-## 6. Deployment-Varianten
-
-### 6.1 Docker Hub (empfohlen für Kubernetes)
-
-Das vorgefertigte Image aus der internen Registry verwenden:
+```env
+METADATA_AGENT_INTERNAL_PORT=9000
+METADATA_AGENT_INTERNAL_HOST=127.0.0.1
+```
 
 ```bash
-docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v3.0.1
-
-docker run -d \
-  --name metadata-agent-api \
-  -p 127.0.0.1:8000:8000 \
-  --read-only --tmpfs /tmp --tmpfs /home/appuser --stop-timeout 320 \
-  -e B_API_KEY=<key> \
-  $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v3.0.1
+curl http://localhost:9000/ready
+curl http://localhost:9000/metrics
 ```
 
-Vorteile: Playwright/Chromium vorinstalliert, Health Check, einfaches Update, reproduzierbar.
+The internal port listens on `0.0.0.0` by default, independent of `--host`;
+the second line limits it to this machine for a local start. In a container
+leave `METADATA_AGENT_INTERNAL_HOST` unset and publish the port for this
+machine only (`-p 127.0.0.1:9000:9000`). Monitoring is described in
+[DEPLOYMENT.md](DEPLOYMENT.md).
 
-### 6.2 Kubernetes
+**4. Optional: check the dependencies.** With
+`METADATA_AGENT_DEBUG_ENDPOINTS=true`, `GET /debug/dependencies` reports
+whether B-API, text extraction, geocoder and repository can be reached and
+whether the B-API accepts the key. Switch it off again afterwards
+([ENV-PARAMETER.md](ENV-PARAMETER.md)).
 
-Für Kubernetes gibt es einen Helm-Chart unter
-[`helm/metadata-agent/`](helm/metadata-agent/README.md) (Deployment, Service,
-Secret, ServiceMonitor, Alarmregeln; kein Ingress hinter der B-API). Kurzform:
+## Run the tests
 
 ```bash
-kubectl create secret generic metadata-agent \
-  --from-literal=B_API_KEY='<B_API_KEY>' \
-  --from-literal=WLO_GUEST_USERNAME='<WLO_GUEST_USERNAME>' \
-  --from-literal=WLO_GUEST_PASSWORD='<WLO_GUEST_PASSWORD>'
-helm install metadata-agent helm/metadata-agent \
-  --set image.repository=$DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api \
-  --set secret.existingSecret=metadata-agent
+uv sync                               # also installs the test tools
+uv run playwright install chromium    # for the browser tests
+uv run pytest -q -rs                  # whole suite; -rs lists skipped tests with their reason
+uv run pytest -q -rs --cov            # as in CI: with the coverage floor from pyproject.toml
 ```
 
-**Ressourcen-Empfehlung:**
+The suite runs offline and needs no keys. `tests/conftest.py` removes the
+`METADATA_AGENT_*` variables and the keys from the environment, ignores
+`.env`, and refuses every connection that does not go to this machine.
 
-| Ressource | Request | Limit |
+| Variable | Effect |
+|---|---|
+| `REQUIRE_BROWSER=1` | Without Chromium or the widget bundle the browser tests fail instead of being skipped (set in both CI pipelines) |
+| `REQUIRE_HELM=1` | The same for the tests that render the Helm chart; they need `helm` in the `PATH` |
+| `RUN_NETWORK_TESTS=1` | Lifts the offline guard and runs the tests marked `slow` against real services |
+
+Lint and type check as in CI: `uv run ruff check`, `uv run ruff format --check`
+and `uv run mypy`.
+
+Both CI pipelines (`.gitlab-ci.yml`, `.github/workflows/docker-publish.yml`)
+run these commands, then build the image and check it with
+`scripts/smoke-image.sh` and a vulnerability scan. A scheduled run (a GitLab
+pipeline schedule, `.github/workflows/scheduled-checks.yml`) repeats the
+dependency audit, the browser age check and the scan of the newest release
+image. Pipeline variables and publishing are described in
+[UEBERGABE.md](UEBERGABE.md) (German) and [DEPLOYMENT.md](DEPLOYMENT.md).
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
 |---|---|---|
-| CPU | 500m | 2000m |
-| Memory | 512Mi | 2Gi |
+| `uvicorn: command not found`, `playwright: command not found` | The tools are installed in `.venv` | Put `uv run` in front, or activate the virtual environment |
+| `ModuleNotFoundError: No module named 'src'` | Started outside the repository root | Start from the directory that contains `src/` |
+| The start aborts with a validation error that names a setting | A variable holds a value outside its allowed set or range, for example an unknown `METADATA_AGENT_LLM_PROVIDER` or `METADATA_AGENT_LLM_VERBOSITY`, a temperature above 2, or `METADATA_AGENT_LLM_MAX_CONCURRENT_REQUESTS=0` | Correct the value; allowed values and bounds are in [ENV-PARAMETER.md](ENV-PARAMETER.md) |
+| Log: `Interner Port … ist belegt oder nicht verfügbar` | The internal port is taken, more than one worker runs, or `METADATA_AGENT_INTERNAL_HOST` names an address the host does not have (`::` without IPv6) | Free the port, run one worker, correct the address. The API keeps running without the internal port |
+| A request with a trailing slash (`/generate/`, `/docs/`) answers `404` | The agent redirects no path | Call the path without the slash |
+| `/ready` answers `503` (`NOT_READY`) | The repository account is missing; or `B_API_KEY` in mode `static`; or `OPENAI_API_KEY` with provider `openai` | Set the missing values, or `METADATA_AGENT_REQUIRE_REPOSITORY=false` for an installation that only generates |
+| `/generate` answers `502` with `LLM_AUTH_MISSING` | No key for the B-API: `B_API_KEY` is empty and no key was forwarded | Set `B_API_KEY`; in mode `forward` call through the B-API proxy |
+| `502` with `LLM_AUTH_REJECTED` or `LLM_AUTH_FORBIDDEN` | The B-API does not accept the key, or the key lacks the right for the call | Check the key, and that `METADATA_AGENT_B_API_BASE_URL` names the B-API (staging or production) it belongs to |
+| Extraction from a URL answers `502` with `TEXT_EXTRACTION_AUTH_REFUSED` | The key lacks the right for the proxy service `text-extraction` | Have the right added, or set `METADATA_AGENT_B_API_SERVICES=direct` |
+| Extraction from a URL answers `503` with `TEXT_EXTRACTION_NOT_CONFIGURED` | No B-API provider, and the repository is neither OpenEduHub staging nor production | Set `METADATA_AGENT_TEXT_EXTRACTION_API_URL` |
+| LLM calls time out; `/generate` answers `504` with `GENERATION_TIMEOUT` | One call took longer than `METADATA_AGENT_REQUEST_TIMEOUT` (90 s), or the whole run longer than `METADATA_AGENT_GENERATE_TIMEOUT` (300 s) | Raise `METADATA_AGENT_REQUEST_TIMEOUT`; how the limits fit together is in [ENV-PARAMETER.md](ENV-PARAMETER.md) |
+| CORS error in the browser | The calling origin is not allowed | Set `METADATA_AGENT_CORS_ORIGINS` to the origins, comma-separated, or to `*` (the default) |
+| `/screenshot` answers `502`; log: `Executable doesn't exist` | Chromium is not installed, or `playwright` was updated since | `uv run playwright install chromium`. In the image Chromium is in `/opt/playwright-browsers` (`PLAYWRIGHT_BROWSERS_PATH`); do not override the variable |
+| Log: `Host system is missing dependencies to run browsers` | System libraries for Chromium are missing (Linux) | `uv run playwright install-deps chromium` |
+| Windows: `/screenshot` answers `500` after a start with `--reload` | With `--reload`, uvicorn uses an event loop on Windows that cannot start the browser process | Start without `--reload` |
+| The screenshot is empty or white | The page needs longer to load | Raise `delay` in the request (milliseconds, up to 10000) or `METADATA_AGENT_SCREENSHOT_DELAY` |
+| A screenshot or a URL input answers `400` | Only public http(s) targets are allowed. The check resolves DNS where the service runs; a host name that resolves to a private address there (split-horizon DNS) is refused as well | Use a publicly reachable address |
+| Chromium crashes in the container | Too little memory | Raise the memory limit of the container. `--shm-size` does not help: Playwright starts Chromium with `--disable-dev-shm-usage` |
+| `docker compose` aborts at `env_file` | Docker Compose older than 2.24 | Update Docker Compose |
+| `docker build` fails at `playwright install --only-shell chromium` or at a package download | The build has no network access | Check network and proxy of the build; `docker build --network host` can help |
+| The container runs, but another host cannot reach the port | The port is published on `127.0.0.1` only, on purpose | Put a proxy with an access restriction in front ([DEPLOYMENT.md](DEPLOYMENT.md)). Locally, check the mapping with `docker ps` |
+| The container restarts again and again | The start fails | Read the reason: `docker logs metadata-agent-api` |
+| `Read-only file system` or `Permission denied` in the container | The root filesystem is read-only and `/app` belongs to root; only `/tmp` and `/home/appuser` are writable | Start with both `--tmpfs` options; write only to these two directories |
+| `docker stop` takes minutes | Docker waits up to 320 s for a running `/generate` | Intended; an idle container stops at once |
+| Windows: browser tests fail with `EPERM … playwright-artifacts` | Chromium cannot write to the temporary directory | In PowerShell set `TEMP` and `TMP` to a directory in your workspace. Do not change `TEMP` in Git Bash: MSYS rewrites the path, and pytest then creates `pytest-of-*/` in the repository |
 
-> Das Image enthält Playwright + Chromium (~400 MB). Screenshots werden immer im Container aufgenommen — auch mit dem Legacy-Alias `pageshot`.
+## Further documents
 
----
-
-## 7. Troubleshooting
-
-### Allgemein
-
-| Problem | Lösung |
+| Document | Content |
 |---|---|
-| `ModuleNotFoundError: No module named 'src'` | Aus dem richtigen Verzeichnis starten (`metadata-agent-api/`) |
-| `502` mit `error.code` `LLM_AUTH_MISSING` | Kein Schlüssel für die B-API: `B_API_KEY` in `.env` setzen, oder im Modus `forward` den Schlüssel über den B-API-Proxy durchreichen (`METADATA_AGENT_B_API_AUTH_MODE`) |
-| CORS-Fehler im Browser | `METADATA_AGENT_CORS_ORIGINS` auf die Domain setzen oder `*` |
-| Timeout bei LLM-Aufrufen | `METADATA_AGENT_REQUEST_TIMEOUT` erhöhen |
-| Felder werden nicht extrahiert | Schema prüfen: `ai_fillable: true` im Schema? |
-
-### Playwright / Screenshots
-
-| Problem | Lösung |
-|---|---|
-| `Executable doesn't exist` | `playwright install chromium` ausführen |
-| `Host system is missing dependencies` | `playwright install-deps chromium` (Linux) |
-| Screenshot ist leer/weiß | `screenshot_delay` erhöhen (Seite braucht Ladezeit) |
-| Chromium-Crash (SIGTERM) | `--shm-size=256m` bei Docker, oder RAM erhöhen |
-| Screenshot schlägt fehl, Chromium fehlt | Chromium installieren (`playwright install chromium`) — `pageshot` nimmt ebenfalls lokal auf und ist kein Ausweg |
-| Screenshot oder URL-Eingabe wird mit `400` abgelehnt | Nur öffentliche http(s)-Ziele sind erlaubt. Die Prüfung löst DNS im Container auf — ein Hostname, der dort auf eine private Adresse zeigt (Split-Horizon-DNS), wird ebenfalls abgelehnt |
-
-### Docker
-
-| Problem | Lösung |
-|---|---|
-| Build schlägt bei `playwright install` fehl | Netzwerkzugriff im Build prüfen, `--network host` |
-| Container startet, Port nicht erreichbar | `docker ps` → Port-Mapping prüfen |
-| Container-Restart-Loop | `docker logs metadata-agent-api` → Fehlermeldung prüfen |
-| `permission denied` auf Dateien | User-Ownership im Dockerfile prüfen |
-| Sehr langsamer Build | `.dockerignore` erstellen (`.git`, `node_modules`, `venv`) |
-
-### GitLab CI
-
-| Problem | Lösung |
-|---|---|
-| Push zu Registry schlägt fehl | `DOCKER_REGISTRY`, `DOCKER_USERNAME`, `DOCKER_PASSWORD` in CI/CD-Variablen prüfen |
-| Build-Cache funktioniert nicht | Log des Jobs `run tests` prüfen (Cache-Schlüssel ist `uv.lock` – committed?) |
-| DinD-Verbindungsfehler | `DIND_HOST`, `DIND_IMAGE` Variablen prüfen |
+| [README.md](README.md) | Overview of the service |
+| [DEPLOYMENT.md](DEPLOYMENT.md) | Production: Kubernetes, proxies, scaling, updates, rollback, monitoring |
+| [ENV-PARAMETER.md](ENV-PARAMETER.md) | Every environment variable with default and effect |
+| [docs/API.md](docs/API.md) | Endpoints, request and response formats |
+| [helm/metadata-agent/README.md](helm/metadata-agent/README.md) (German) | Helm chart for Kubernetes |
+| [UEBERGABE.md](UEBERGABE.md) (German) | Handover to operations: CI, ports, metrics, alerts |
+| [docs/steckbrief.md](docs/steckbrief.md) (German) | Service profile: status, open points |
+| [docs/b-api-kurzinfo.md](docs/b-api-kurzinfo.md) (German) | B-API routing and authentication in brief |
+| [CHANGELOG.md](CHANGELOG.md) (German) | Changes per version, including the unreleased ones |

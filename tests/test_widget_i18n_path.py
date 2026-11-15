@@ -12,8 +12,14 @@ def test_the_shipped_languages_are_served(lang):
     assert TestClient(main.app).get(f"/widget/i18n/{lang}.json").status_code == 200
 
 
-@pytest.mark.parametrize("lang", ["fr", "..%5C..%5Cpyproject", "..%5Cde", "DE"])
-def test_anything_else_is_not_found_without_touching_the_filesystem(lang, monkeypatch):
+# A name of more than 8 characters is refused as a parameter (audit 14.11., S-34).
+@pytest.mark.parametrize(
+    "lang, status",
+    [("fr", 404), ("..%5C..%5Cpyproject", 422), ("..%5Cde", 404), ("DE", 404)],
+)
+def test_anything_else_is_refused_without_touching_the_filesystem(
+    lang, status, monkeypatch
+):
     # On Windows a backslash in the path parameter would walk out of the folder.
     touched = []
     monkeypatch.setattr(
@@ -22,5 +28,5 @@ def test_anything_else_is_not_found_without_touching_the_filesystem(lang, monkey
 
     response = TestClient(main.app).get(f"/widget/i18n/{lang}.json")
 
-    assert response.status_code == 404
+    assert response.status_code == status
     assert touched == []

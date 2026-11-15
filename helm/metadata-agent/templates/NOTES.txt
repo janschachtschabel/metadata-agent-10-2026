@@ -1,7 +1,7 @@
 Metadata Agent {{ .Values.image.tag }} ({{ .Values.replicaCount }} Replicas).
 
 API:      http://{{ include "metadata-agent.fullname" . }}:{{ .Values.service.port }}/docs
-Intern:   Port {{ .Values.service.internalPort }} - /health, /ready, /metrics (nicht ins Ingress)
+Intern:   http://{{ include "metadata-agent.internalName" . }}:{{ .Values.service.internalPort }} - /health, /ready, /metrics (eigener ClusterIP-Service, nicht ins Ingress)
 {{- if .Values.ingress.enabled }}
 Ingress:  https://{{ .Values.ingress.host }}
 {{- end }}

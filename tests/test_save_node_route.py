@@ -147,6 +147,7 @@ def test_creating_a_node_answers_with_the_written_node(client):
         "step": None,
         "fields_written": body["fields_written"],
         "fields_skipped": 0,
+        "skipped_fields": [],
         "schema_used": "learning_material.json",
         "repo_fields_available": body["repo_fields_available"],
         "field_errors": None,

@@ -17,8 +17,10 @@ from ...models.schemas import (
 
 from fastapi import APIRouter
 
+from ..params import NodeId
+
 from ..responses import SAVE_NODE_ERROR_STATUS, upload_timeout_response
-from .request_body import invalid_body
+from ..request_body import JsonObjectRoute, invalid_body
 
 from .. import deps
 from ..deps import (
@@ -26,9 +28,11 @@ from ..deps import (
     parse_json_object,
     require_repository_service,
 )
+from .repository_docs import CREATE_NODE_RESPONSES, WORKFLOW_RESPONSES
 
 
-router = APIRouter()
+# The body is read like that of the raw-request endpoints (request_body.py).
+router = APIRouter(route_class=JsonObjectRoute)
 
 
 # ============================================================================
@@ -39,6 +43,7 @@ router = APIRouter()
 @router.post(
     "/node",
     response_model=CreateNodeResponse,
+    responses=CREATE_NODE_RESPONSES,
     tags=["Repository"],
     summary="Node anlegen, ohne Metadaten zu schreiben",
     description="""
@@ -123,6 +128,7 @@ async def create_node(req: CreateNodeRequest):
 @router.post(
     "/workflow/{node_id}",
     response_model=WorkflowResponse,
+    responses=WORKFLOW_RESPONSES,
     summary="Prüf-Workflow eines Nodes schrittweise weiterführen",
     description="""Setzt die Workflow-Status eines bereits hochgeladenen Nodes — Schritt für Schritt.
 
@@ -138,7 +144,7 @@ darüber lässt sich später abfragen, wer die Qualität bestätigt hat. Ein Spr
 direkt auf den Endstatus würde diese Spur verlieren.
 
 Ausgeführt wird unter dem konfigurierten Service-Account
-(`METADATA_AGENT_WLO_GUEST_USERNAME`) — in der Historie erscheint also dieser
+(`WLO_GUEST_USERNAME`) — in der Historie erscheint also dieser
 Nutzer, bei Gast-Zugang entsprechend der hinterlegte Gast-Nutzer.
 
 ## Status des WLO-Redaktions-Workflows
@@ -208,7 +214,7 @@ Status im Repository landet.
         }
     },
 )
-async def set_node_workflow(node_id: str, request: Request):
+async def set_node_workflow(node_id: NodeId, request: Request):
     """Advance an existing node through the editorial review workflow."""
     require_node_id(node_id)
 

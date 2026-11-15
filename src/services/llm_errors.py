@@ -15,6 +15,7 @@ expired session of the user.
 
 from __future__ import annotations
 
+import json
 from typing import Any, Optional
 
 AUTH_SOURCE_LABELS = {
@@ -123,6 +124,17 @@ class LLMEmptyAnswer(LLMError):
     code = "LLM_EMPTY_ANSWER"
 
 
+class LLMAnswerTruncated(LLMEmptyAnswer):
+    """
+    200 with text, but cut off at the token limit (finish_reason "length").
+
+    What is there is no complete answer: half a JSON object read as a value put
+    the word "value" into a description (audit 13.11., L-17).
+    """
+
+    code = "LLM_ANSWER_TRUNCATED"
+
+
 class LLMUpstreamError(LLMError):
     """A server error (5xx) that persisted through the retries."""
 
@@ -153,8 +165,6 @@ def short_upstream_detail(body: str, limit: int = 200) -> str:
     The B-API answers 403 with a full Java stack trace in `trace`; only the
     short fields are worth passing on.
     """
-    import json
-
     try:
         data = json.loads(body)
     except (ValueError, TypeError):

@@ -61,3 +61,5 @@ Thumbs.db
 
 # pytest basetemp when TEMP points at the working directory (Git Bash)
 pytest-of-*/
+# pytest's capture files, when the system temp directory is not writable
+/tmp????????

@@ -32,8 +32,10 @@ FROM python:3.13-slim@sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c
 WORKDIR /app
 
 # Install Playwright system dependencies (Chromium)
-# These are the minimal packages needed for headless Chromium
+# These are the minimal packages needed for headless Chromium. tini is the
+# init process (ENTRYPOINT below).
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    tini \
     libnss3 \
     libnspr4 \
     libdbus-1-3 \
@@ -66,10 +68,12 @@ ENV PATH="/app/.venv/bin:$PATH"
 # /app stays owned by root: the process serving requests can read its code but
 # not change it, and no chown copies the venv into another layer. Chromium
 # writes only to /tmp and the home directory.
+# --only-shell: the headless shell alone, which launch(headless=True) starts;
+# without it Chrome for Testing is downloaded as well and never used.
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
 RUN useradd -m -u 1000 appuser \
     && mkdir -p $PLAYWRIGHT_BROWSERS_PATH \
-    && playwright install chromium \
+    && playwright install --only-shell chromium \
     && chmod -R o+rx $PLAYWRIGHT_BROWSERS_PATH
 
 # Copy application code (includes src/static/widget/ if present)
@@ -82,6 +86,9 @@ USER appuser
 # Environment variables
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
+# The address uvicorn listens on (it reads UVICORN_* itself). Not in CMD, so a
+# deployment can change it: "::" on an IPv6 cluster (Helm: listenHost).
+ENV UVICORN_HOST=0.0.0.0
 
 # Expose port
 EXPOSE 8000
@@ -90,8 +97,14 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
 
-# Run with uvicorn
-CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# tini as PID 1: it reaps the processes a killed Chromium leaves behind and
+# passes SIGTERM on, so uvicorn still finishes running requests.
+ENTRYPOINT ["tini", "--"]
+
+# Run with uvicorn. Idle connections stay open for 75 s, longer than the 60 s
+# a proxy keeps them: with uvicorn's 5 s the proxy sent requests into
+# connections already closed (502).
+CMD ["uvicorn", "src.main:app", "--port", "8000", "--timeout-keep-alive", "75"]
 
 # Which release and commit the image is (both CIs pass them). Last, so a new
 # commit changes only the image metadata, no layer.

@@ -1,4 +1,12 @@
 {{- if .Values.ingress.enabled }}
+{{- /* What the agent accepts and what nginx lets through were coupled in the
+       defaults only: a raised METADATA_AGENT_MAX_REQUEST_BYTES met the old 20m
+       at the ingress. Without the annotation (another controller) no check. */}}
+{{- $size := index (.Values.ingress.annotations | default dict) "nginx.ingress.kubernetes.io/proxy-body-size" }}
+{{- $expected := include "metadata-agent.bodySize" . }}
+{{- if and $size (ne (toString $size) $expected) }}
+{{- fail (printf "ingress annotation proxy-body-size is %v, env.METADATA_AGENT_MAX_REQUEST_BYTES needs %s - set both to the same size" $size $expected) }}
+{{- end }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:

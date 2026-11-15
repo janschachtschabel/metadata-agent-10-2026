@@ -12,13 +12,16 @@ from ...models.schemas import (
 
 from fastapi import APIRouter
 
+from ..params import NodeId
+
 from ..deps import (
     require_node_id,
     parse_json_object,
     require_repository_service,
 )
 from ..responses import SAVE_NODE_ERROR_STATUS
-from .request_body import invalid_body
+from ..request_body import invalid_body
+from .repository_docs import VERIFY_RESPONSES
 
 
 router = APIRouter()
@@ -32,6 +35,7 @@ router = APIRouter()
 @router.post(
     "/upload/verify/{node_id}",
     response_model=VerifyResponse,
+    responses=VERIFY_RESPONSES,
     summary="Upload-Ergebnis prüfen (SOLL/IST-Vergleich)",
     description="""Liest die Metadaten eines Nodes aus dem Repository und vergleicht sie optional mit den erwarteten Werten.
 
@@ -39,21 +43,21 @@ router = APIRouter()
 
 **Nur lesen** (ohne Body): Gibt die aktuellen Metadaten des Nodes zurück.
 
-**SOLL/IST-Vergleich** (mit Body): Vergleicht die erwarteten Metadaten (z.B. Output von `/generate`) mit den tatsächlich geschriebenen Werten.
+**SOLL/IST-Vergleich** (mit Body): Vergleicht die erwarteten Metadaten (z.B. Output von `/generate`) mit den tatsächlich geschriebenen Werten. `expected_metadata` nimmt die Formen an, die auch `/upload` annimmt: die Felder flach oder verschachtelt unter `metadata` bzw. `metadata.metadata` — alle Formen werden gleich verglichen. Optionen von `/upload` und `/nodes` neben den Feldern zählen nicht als Felder.
 
 ## Diff-Status pro Feld
 
 | Status | Bedeutung |
 |--------|-----------|
-| `match` | Wert stimmt überein |
+| `match` | Wert stimmt überein. Verglichen wird nach Art des Feldes: bei Vokabular-Feldern und beim Lizenzschlüssel ohne Rücksicht auf Groß- und Kleinschreibung, bei Freitext mit. Ein einzelner Wert gleicht einer Liste mit einem Eintrag, die Reihenfolge einer Liste zählt nicht, ein Datum darf als Millisekunden gespeichert sein. Ein Feld, das der Dienst in anderer Form schreibt, wird in dieser Form verglichen: `oeh:new_lrt` als `ccm:oeh_lrt`, ein Lizenz-Link in `ccm:custom_license` als `ccm:commonlicense_key` und `ccm:commonlicense_cc_version`, `cm:author` über die Namen |
 | `mismatch` | Wert weicht ab (SOLL ≠ IST) |
 | `missing_in_repo` | Feld wurde erwartet, ist aber nicht im Repository |
-| `extra_in_repo` | Feld ist im Repository, war aber nicht erwartet |
-| `not_written` | Feld war nicht repo-fähig (virtual:, schema:, oder kein repo_field) |
+| `extra_in_repo` | Feld ist im Repository, war aber nicht erwartet. Was der Dienst aus gesendeten Feldern ableitet (Lizenzschlüssel und -version aus einem Lizenz-Link, die Autoren-Felder aus `cm:author`), zählt nicht dazu |
+| `not_written` | Feld wird nie geschrieben: Es ist kein Repository-Feld des Schemas (weder unter seinem Namen noch unter dem, unter dem es geschrieben wird — `oeh:new_lrt` zählt als `ccm:oeh_lrt`), oder es ist ein `virtual:`-Feld, das das Repository selbst berechnet. Sind die Repository-Felder des Schemas nicht lesbar, gilt das für jedes Feld |
 
 ## Summary
 
-Zählt die Anzahl der Felder pro Status-Kategorie.
+Zählt die Anzahl der Felder pro Status-Kategorie. `unresolved` zählt daneben die verglichenen Felder, deren Wert das Repository nicht auflöst — ein solches Feld kann zugleich `match` sein.
 
 ## Fehler
 
@@ -93,7 +97,7 @@ Zählt die Anzahl der Felder pro Status-Kategorie.
         }
     },
 )
-async def verify_upload(node_id: str, request: Request):
+async def verify_upload(node_id: NodeId, request: Request):
     """
     Verify uploaded metadata by reading it back from the repository.
 
@@ -125,8 +129,9 @@ async def verify_upload(node_id: str, request: Request):
 
         # Extract context/version from expected metadata if available
         if expected_metadata:
-            context = expected_metadata.get("contextName", "default")
-            version = expected_metadata.get("schemaVersion", "latest")
+            # `or`: a marker that is null means the default, as on /validate.
+            context = expected_metadata.get("contextName") or "default"
+            version = expected_metadata.get("schemaVersion") or "latest"
 
     result = await repo_service.verify_node(
         node_id=node_id,

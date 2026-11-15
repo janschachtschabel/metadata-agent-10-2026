@@ -7,8 +7,11 @@ Drei Fragen, kurz beantwortet:
 3. [Workflow triggern](#3-workflow-triggern)
 
 Alle Angaben sind aus `src/schemata/default/v2.0.0/core.json` und den
-Pydantic-Modellen in `src/models/schemas.py` gezogen, nicht abgeschrieben.
-Ausführliche Endpoint-Doku: [README.md](README.md).
+Pydantic-Modellen unter `src/models/` gezogen, nicht abgeschrieben. Die Modelle
+liegen je Familie in einem Modul: `extraction.py` für `/generate`,
+`repository.py` für `/upload`, `/nodes` und `/workflow`. `schemas.py` reicht
+alle weiter, `from src.models.schemas import UploadRequest` gilt unverändert.
+Ausführliche Endpoint-Doku: [docs/API.de.md](docs/API.de.md) (englisch: [docs/API.md](docs/API.md)).
 
 ---
 
@@ -60,10 +63,16 @@ weil beide im Umlauf sind.
 ```
 
 Die Erkennung hängt an einer einzigen Bedingung: ist `metadata` im Body ein
-Objekt, gilt Form 1 oder 3, sonst Form 2. Bei Form 2 sind die Options-Namen
+Objekt, gilt Form 2 oder 3, sonst Form 1. Bei Form 1 sind die Options-Namen
 (`collection_id`, `workflow_steps`, `source`, `check_duplicates`, …) auf der
 obersten Ebene reserviert — Metadaten-IDs tragen aber alle einen Namensraum
-(`ccm:`, `cclom:`, `schema:`), also kollidiert das nicht.
+(`ccm:`, `cclom:`, `schema:`), also kollidiert das nicht. Ein unbekannter
+Schlüssel bleibt dort ein Feld. Neben einem verschachtelten `metadata` (Form 2
+und 3) stehen dagegen nur die Optionen, der Umschlag einer `/generate`-Antwort,
+`repository` und Schlüssel mit führendem `_`; alles andere – etwa eine falsch
+geschriebene Option – ist `422`. In jeder Form `422` ist eine Option, die es nur
+bei `POST /nodes` gibt (`preview`, `start_review_workflow`,
+`start_quality_workflow`); umgekehrt lehnt `/nodes` die Optionen von `/upload` ab.
 
 > **`metadataset` immer mitschicken.** Der Schlüssel entscheidet, welches
 > Typschema zusätzlich zu `core.json` geladen wird — und damit, welche Felder
@@ -71,18 +80,21 @@ obersten Ebene reserviert — Metadaten-IDs tragen aber alle einen Namensraum
 >
 > | geladen | Repo-Felder |
 > |---|---|
-> | nur `core.json` | 22 |
-> | + `learning_material.json` | 34 |
-> | + `event.json` | 29 |
+> | nur `core.json` | 26 |
+> | + `learning_material.json` | 40 |
+> | + `event.json` | 33 |
 >
 > Fehlt er, fallen bei einer Veranstaltung `ccm:oeh_event_begin`,
 > `ccm:oeh_event_end`, `ccm:price` und `ccm:competence` weg — ohne Fehler, mit
 > `success: true`. `/generate` liefert ihn mit; wer die Antwort umbaut, muss ihn
-> behalten.
+> behalten. Ein `metadataset`, dessen Schema sich nicht laden lässt (Tippfehler,
+> Datei fehlt in dieser Version, URI ohne Inhaltstyp), ist dagegen ein Fehler:
+> `422` `SCHEMA_UNAVAILABLE` mit `step: "schema"`, nichts wird geschrieben.
 
 Dieselben drei Formen und dieselbe `metadataset`-Regel gelten für **`/validate`**
 und **`/export/markdown`** — beide entscheiden daran, gegen welches Schema sie
-arbeiten.
+arbeiten. Ein unbekannter Kontext, eine unbekannte Version oder Schemadatei ist
+dort `404`.
 
 ### Die 27 Core-Felder
 
@@ -133,8 +145,10 @@ leitet der Upload ersatzweise einen groben aus `ccm:oeh_extendedType` ab
 
 Die drei `ccm:commonlicense_ai_*`-Felder sind Strings mit genau zwei möglichen
 Werten, `"true"` und `"false"` — bewusst kein JSON-Boolean, weil das Repository
-`["false"]` erwartet und nicht `[false]`. Die KI setzt sie nur, wenn Text,
-Impressum oder Lizenz es hergeben; sonst bleiben sie leer.
+`["false"]` erwartet und nicht `[false]`. Kommt beim Upload doch ein
+JSON-Boolean an, schreibt der Agent ihn als `"true"` bzw. `"false"`. Die KI
+setzt die Felder nur, wenn Text, Impressum oder Lizenz es hergeben; sonst
+bleiben sie leer.
 
 ### Die zwölf Qualitätsfelder
 
@@ -186,6 +200,9 @@ zusammenbaut, erzeugt einen Wert, den WLO nicht auflöst.
 
 Das Präfix `schema:` allein schließt nichts aus: `schema:datePublished` ist ein
 reguläres Repository-Feld und wird geschrieben.
+
+Welche gesendeten Felder mit Wert auf keine Repository-Property geschrieben
+wurden, nennt die Antwort in `skipped_fields`; `fields_skipped` zählt sie.
 
 Lädt kein Schema (Fehlerfall), wird **gar nichts** geschrieben statt blind zu
 raten.
@@ -265,6 +282,10 @@ Original bleibt im Inbox-Ordner; die Sammlung bekommt einen Verweis darauf.
 Sammlung**. Eine fehlgeschlagene Referenzierung setzt `success` auf oberster
 Ebene *nicht* auf `false`: der Node ist angelegt und die Metadaten sind
 geschrieben. Wer auf die Sammlung angewiesen ist, muss `collections` auswerten.
+Liegt der Node schon in der Sammlung (das Repository antwortet `409`), gilt der
+Eintrag als verknüpft. Endet das Zeitlimit während der Verknüpfung, bleibt der
+Node bestehen: Die `504`-Antwort nennt ihn in `node` und in `collections` je
+Sammlung, ob sie verknüpft, nicht bestätigt oder nicht versucht wurde.
 
 ---
 
@@ -388,9 +409,9 @@ jq '{metadata: ., collection_id: ["3039bdb2-f51f-4cc8-b1d9-3fb6b0ffc1d9"],
 
 | Situation | Verhalten |
 |---|---|
-| Falsches oder fehlendes `metadataset` | Es gilt nur `core.json`; typspezifische Felder fallen weg. **Sichtbar an `schema_used` und `repo_fields_available` in der Antwort** |
-| Upload bricht nach dem Anlegen ab | Node wird zurückgenommen (Papierkorb, wiederherstellbar); die ID steht in `discarded_node` |
-| Rücknahme scheitert ebenfalls | `discarded_node` bleibt gesetzt — der Node existiert und muss von Hand weg |
+| Fehlendes `metadataset` | Es gilt nur `core.json`; typspezifische Felder fallen weg. **Sichtbar an `schema_used` und `repo_fields_available` in der Antwort**. Ein falsches `metadataset` (Schema nicht ladbar) ist `422` `SCHEMA_UNAVAILABLE`, nichts wird geschrieben |
+| Upload bricht nach dem Anlegen ab | Node wird zurückgenommen (Papierkorb, wiederherstellbar); die ID steht in `discarded_node`. Nicht mehr zurückgenommen wird ein Node, sobald die erste Sammlungsanfrage hinausgegangen oder der Workflow gestartet ist — er steht dann in `node` |
+| Rücknahme scheitert ebenfalls | Der Node steht in `node.nodeId`, `discarded_node` fehlt — er existiert und muss von Hand weg |
 | Einzelnes Feld wird abgelehnt | Bulk-Schreiben fällt auf Feld-für-Feld zurück; `field_errors` nennt die Schuldigen, der Upload gilt trotzdem als erfolgreich |
 | Keine Lizenz erkannt | `ccm:commonlicense_key` bleibt **leer**. Kein Default — „unbekannt" wird nicht zu „urheberrechtsfrei" gemacht |
 | URL existiert bereits | `duplicate: true`, kein neuer Node (abschaltbar mit `check_duplicates: false`) |

@@ -1,7 +1,8 @@
-__pycache__
-*.pyc
-*.pyo
-*.pyd
+# With **/: a pattern without it only matches in the root of the context.
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/*.pyd
 .Python
 .env
 .env.*
@@ -11,7 +12,7 @@ __pycache__
 *.md
 .vscode
 .idea
-*.log
+**/*.log
 .pytest_cache
 .coverage
 htmlcov

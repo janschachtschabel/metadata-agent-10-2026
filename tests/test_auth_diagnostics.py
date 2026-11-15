@@ -11,13 +11,14 @@ from fastapi.testclient import TestClient
 from src import main
 from src.api import deps
 from src.config import Settings
+from conftest import use_settings
 
 KEY = "Bearer 0123456789abcdef0123456789abcdef"
 
 
 def _client(monkeypatch, **overrides):
-    monkeypatch.setattr(
-        deps, "settings", Settings(_env_file=None, b_api_key="own-key", **overrides)
+    use_settings(
+        monkeypatch, Settings(_env_file=None, b_api_key="own-key", **overrides)
     )
     return TestClient(main.app)
 

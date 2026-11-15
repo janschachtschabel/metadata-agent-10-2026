@@ -8,7 +8,8 @@ import asyncio
 
 import pytest
 
-from src.config import Settings, get_settings
+from conftest import use_settings
+from src.config import Settings
 from src.services.llm_service import (
     LLMService,
     RateLimiter,
@@ -21,13 +22,14 @@ real_sleep = asyncio.sleep
 
 
 @pytest.fixture(autouse=True)
-def _fresh_gates():
+def _fresh_gates(monkeypatch):
     """The gates are process-wide on purpose; tests must not inherit each other's."""
     reset_provider_gates()
-    get_settings.cache_clear()
+    # Read again from the environment the test sets; the previous object
+    # comes back afterwards.
+    use_settings(monkeypatch)
     yield
     reset_provider_gates()
-    get_settings.cache_clear()
 
 
 # ------------------------------------------------------------- rate limiting
@@ -192,7 +194,12 @@ def _config(provider, **env):
 
 @pytest.mark.parametrize(
     "provider, concurrent, rate",
-    [("b-api-openai", 20, 0.0), ("openai", 20, 0.0), ("b-api-academiccloud", 2, 2.0)],
+    [
+        ("b-api-openai", 20, 0.0),
+        ("b-api-router", 20, 0.0),
+        ("openai", 20, 0.0),
+        ("b-api-academiccloud", 2, 2.0),
+    ],
 )
 def test_provider_defaults(provider, concurrent, rate):
     config = _config(provider)

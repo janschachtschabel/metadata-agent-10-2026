@@ -1,12 +1,24 @@
-"""Geocoding service using Photon API (Komoot) to convert addresses to coordinates."""
+"""
+Geocoding service using Photon API (Komoot) to convert addresses to coordinates.
+
+A deployment with a B-API calls Photon through the B-API's proxy path, with the
+same key as the LLM calls (Settings.geocoder_api_url); otherwise Photon itself.
+"""
 
 import asyncio
+import heapq
 import time
+from contextlib import AsyncExitStack
+from contextvars import ContextVar
 from typing import Any, Optional
 import httpx
 import logging
 
-from ..metrics import THIRD_PARTY_HOOKS
+from ..config import get_settings
+from ..metrics import OWN_SERVICE_HOOKS, THIRD_PARTY_HOOKS
+from ..utils.tls_context import shared_tls_context
+from .llm_auth import b_api_headers_for
+from .llm_errors import LLMCredentialsMissing
 
 logger = logging.getLogger(__name__)
 
@@ -19,11 +31,72 @@ MAX_GEOCODED_LOCATIONS = 10
 GEOCODING_RESERVE_SECONDS = 1.0
 
 
+class GeocoderRefused(Exception):
+    """
+    The B-API does not let this key use the geocoder - or there is no key.
+
+    True for every place of the request alike: asking again per place only
+    costs time. The message is one for the caller (processing.warnings).
+    """
+
+
+# The languages Photon answers in; any other is a 400 there, and the place
+# stayed without coordinates. Left out, Photon uses the language of the place.
+PHOTON_LANGUAGES = ("de", "en", "fr")
+
+
+def photon_language(language: Any) -> Optional[str]:
+    """ "de" for "de", "DE" or "de-AT"; None for a language Photon does not know."""
+    code = str(language or "")[:8].lower().split("-")[0].split("_")[0]
+    return code if code in PHOTON_LANGUAGES else None
+
+
 def _has_coordinates(location: Any) -> bool:
-    """A location that needs no lookup, and so uses none of the limit."""
-    return isinstance(location, dict) and bool(
-        (location.get("geo") or {}).get("latitude")
-    )
+    """
+    A location that needs no lookup, and so uses none of the limit.
+
+    Latitude 0 is a coordinate (the equator); a `geo` that is no object - a
+    model or a caller wrote text there - holds none (audit 14.11., L-40).
+    """
+    geo = location.get("geo") if isinstance(location, dict) else None
+    return isinstance(geo, dict) and geo.get("latitude") not in (None, "")
+
+
+class _Lookups:
+    """
+    The HTTP client for the lookups of one request, opened at the first one.
+
+    Each lookup built its own client: 420 ms of TLS setup, synchronously, up
+    to ten times per request (audit 14.11., L-41).
+    """
+
+    def __init__(self) -> None:
+        self._stack = AsyncExitStack()
+        self._client: Optional[httpx.AsyncClient] = None
+
+    async def client(self, via_b_api: bool) -> httpx.AsyncClient:
+        if self._client is None:
+            # Counted. Tracing headers only on the way through the B-API:
+            # Photon itself is a third party.
+            self._client = await self._stack.enter_async_context(
+                httpx.AsyncClient(
+                    timeout=10.0,
+                    verify=shared_tls_context(),
+                    event_hooks=OWN_SERVICE_HOOKS if via_b_api else THIRD_PARTY_HOOKS,
+                )
+            )
+        return self._client
+
+    async def aclose(self) -> None:
+        await self._stack.aclose()
+
+
+# Set while the locations of one request are enriched; geocode_address finds
+# the request's client here. A context variable, so the signature callers and
+# tests know stays as it is, and concurrent requests each see their own.
+_SHARED_LOOKUPS: ContextVar[Optional[_Lookups]] = ContextVar(
+    "geocoder_lookups", default=None
+)
 
 
 class GeocodingService:
@@ -32,15 +105,14 @@ class GeocodingService:
     Converts addresses to geo-coordinates (latitude/longitude).
     """
 
-    # Photon API endpoint (free, no API key required)
-    PHOTON_API_URL = "https://photon.komoot.io/api"
-
     # Rate limiting: 1 request per second
     RATE_LIMIT_MS = 1000
 
     def __init__(self):
         # Next free request slot (monotonic ms), shared by concurrent lookups.
         self._next_slot = 0.0
+        # Slots of lookups cancelled while they waited, earliest first.
+        self._returned_slots: list[float] = []
 
     async def geocode_address(
         self, address: str, language: str = "de"
@@ -50,7 +122,8 @@ class GeocodingService:
 
         Args:
             address: Address string (e.g., "Erfurter Straße 1, 99423 Weimar")
-            language: Language for results (de, en, fr, it)
+            language: Language for results (PHOTON_LANGUAGES; any other is
+                not sent)
 
         Returns:
             Dict with latitude, longitude, and enriched address data, or None
@@ -58,31 +131,55 @@ class GeocodingService:
         if not address or not address.strip():
             return None
 
+        settings = get_settings()
+        api_url = settings.geocoder_api_url
+        try:
+            # Before the rate-limit slot: a lookup that cannot be made must not
+            # make every other request wait for it.
+            auth = b_api_headers_for(api_url, settings)
+        except LLMCredentialsMissing as e:
+            raise GeocoderRefused(
+                "Für den Geocoder über die B-API (Proxy-Dienst photon_geocoding) "
+                "gibt es keinen Schlüssel."
+            ) from e
+
+        # The client of the request (enrich_metadata_with_geocoding), else one
+        # for this lookup alone.
+        shared = _SHARED_LOOKUPS.get()
+        session = shared or _Lookups()
         try:
             # Rate limiting
             await self._wait_for_rate_limit()
 
             # Build API URL
-            params: dict[str, str | int] = {"q": address, "lang": language, "limit": 1}
-
+            params: dict[str, str | int] = {"q": address, "limit": 1}
+            lang = photon_language(language)
+            if lang:
+                params["lang"] = lang
             headers = {"User-Agent": "MetadataAgentAPI/1.0 (geocoding service)"}
-            # Counted, but no tracing headers: Photon is a third party.
-            async with httpx.AsyncClient(
-                timeout=10.0, event_hooks=THIRD_PARTY_HOOKS
-            ) as client:
-                response = await client.get(
-                    self.PHOTON_API_URL, params=params, headers=headers
-                )
+            client = await session.client(bool(auth))
+            response = await client.get(
+                api_url, params=params, headers={**headers, **auth}
+            )
 
-                if response.status_code != 200:
-                    logger.error(f"❌ Photon API error: {response.status_code}")
-                    return None
+            if response.status_code != 200:
+                if auth and response.status_code in (401, 403, 429):
+                    raise GeocoderRefused(
+                        "Die B-API hat den Aufruf des Geocoders abgelehnt "
+                        f"(HTTP {response.status_code}, Proxy-Dienst "
+                        "photon_geocoding)."
+                    )
+                via = "B-API (photon_geocoding)" if auth else "Photon"
+                logger.error(f"❌ Geocoder {via}: HTTP {response.status_code}")
+                return None
 
-                data = response.json()
+            data = response.json()
 
             # Check if we got results
             if not data.get("features") or len(data["features"]) == 0:
-                logger.warning(f"⚠️ No geocoding results for: {address}")
+                # The place itself only at DEBUG: an address can be personal.
+                logger.warning("⚠️ No geocoding result for a place")
+                logger.debug(f"No geocoding result for: {address}")
                 return None
 
             feature = data["features"][0]
@@ -116,14 +213,19 @@ class GeocodingService:
                 },
             }
 
-            logger.info(
+            logger.debug(
                 f"✅ Geocoded '{address}' → {result['latitude']}, {result['longitude']}"
             )
             return result
 
+        except GeocoderRefused:
+            raise
         except Exception as e:
             logger.error(f"❌ Geocoding error: {e}")
             return None
+        finally:
+            if session is not shared:
+                await session.aclose()
 
     async def enrich_metadata_with_geocoding(
         self,
@@ -180,9 +282,26 @@ class GeocodingService:
             return metadata
 
         budget = None if deadline is None else deadline - GEOCODING_RESERVE_SECONDS
-        enriched_locations, skipped, out_of_time = await self._enrich_locations(
-            location_field, language, budget
-        )
+        (
+            enriched_locations,
+            skipped,
+            out_of_time,
+            refused,
+            failed,
+        ) = await self._enrich_locations(location_field, language, budget)
+        if failed:
+            message = (
+                f"Geokodierung: {len(failed)} Ort(e) konnten nicht verarbeitet "
+                f"werden und bleiben unverändert ({', '.join(sorted(set(failed)))})."
+            )
+            logger.warning(f"⚠️ {message}")
+            if warnings is not None:
+                warnings.append(message)
+        if refused:
+            message = f"Orte bleiben ohne Koordinaten: {refused}"
+            logger.warning(f"⚠️ {message}")
+            if warnings is not None:
+                warnings.append(message)
         if skipped:
             logger.warning(
                 f"⚠️ Geocoding limited to {MAX_GEOCODED_LOCATIONS} lookups; "
@@ -204,35 +323,59 @@ class GeocodingService:
 
     async def _enrich_locations(
         self, locations: list, language: str, budget: Optional[float]
-    ) -> tuple[list, int, int]:
+    ) -> tuple[list, int, int, Optional[str], list[str]]:
         """
-        (locations, skipped by the lookup limit, left out by the budget).
+        (locations, skipped by the lookup limit, left out by the budget, why
+        the geocoder refused - None if it did not -, the kinds of fault that
+        left a location as it was).
 
         Past the lookup limit or the budget (loop time) a location passes
-        through unchanged; a lookup still running at the budget is cut.
+        through unchanged; a lookup still running at the budget is cut. After
+        a refusal no further lookup is made. A fault in one location costs
+        that location only (audit 14.11., L-40).
         """
         enriched_locations: list = []
         lookups = skipped = out_of_time = 0
-        for i, location in enumerate(locations):
-            if not _has_coordinates(location):
-                if lookups >= MAX_GEOCODED_LOCATIONS:
-                    skipped += 1
-                    enriched_locations.append(location)
-                    continue
-                if budget is not None and not self._slot_before(budget):
+        refused: Optional[str] = None
+        failed: list[str] = []
+        shared = _Lookups()
+        token = _SHARED_LOOKUPS.set(shared)
+        try:
+            for i, location in enumerate(locations):
+                if not _has_coordinates(location):
+                    if refused:
+                        enriched_locations.append(location)
+                        continue
+                    if lookups >= MAX_GEOCODED_LOCATIONS:
+                        skipped += 1
+                        enriched_locations.append(location)
+                        continue
+                    if budget is not None and not self._slot_before(budget):
+                        out_of_time += 1
+                        enriched_locations.append(location)
+                        continue
+                    lookups += 1
+                logger.info(f"📍 Processing location {i + 1}/{len(locations)}")
+                try:
+                    async with asyncio.timeout_at(budget):
+                        enriched = await self._enrich_single_location(
+                            location, language
+                        )
+                except TimeoutError:
                     out_of_time += 1
-                    enriched_locations.append(location)
-                    continue
-                lookups += 1
-            logger.info(f"📍 Processing location {i + 1}/{len(locations)}: {location}")
-            try:
-                async with asyncio.timeout_at(budget):
-                    enriched = await self._enrich_single_location(location, language)
-            except TimeoutError:
-                out_of_time += 1
-                enriched = location
-            enriched_locations.append(enriched)
-        return enriched_locations, skipped, out_of_time
+                    enriched = location
+                except GeocoderRefused as e:
+                    refused = str(e)
+                    enriched = location
+                except Exception as e:
+                    # The kind only: the text of a fault may quote the place.
+                    failed.append(type(e).__name__)
+                    enriched = location
+                enriched_locations.append(enriched)
+        finally:
+            _SHARED_LOOKUPS.reset(token)
+            await shared.aclose()
+        return enriched_locations, skipped, out_of_time, refused, failed
 
     def _slot_before(self, budget: float) -> bool:
         """
@@ -241,8 +384,20 @@ class GeocodingService:
         Checked without reserving: a slot after the budget would only make
         every other request wait for a lookup that is never made.
         """
-        wait = max(0.0, self._next_slot - time.monotonic() * 1000) / 1000
+        now = time.monotonic() * 1000
+        wait = (self._free_slot(now) - now) / 1000
         return asyncio.get_running_loop().time() + wait < budget
+
+    def _free_slot(self, now: float) -> float:
+        """
+        The next free slot (monotonic ms), not yet taken: one a cancelled
+        lookup returned if it is still to come, else the end of the queue.
+        """
+        while self._returned_slots and self._returned_slots[0] < now:
+            heapq.heappop(self._returned_slots)
+        if self._returned_slots:
+            return self._returned_slots[0]
+        return max(now, self._next_slot)
 
     async def _enrich_single_location(
         self, location: Any, language: str
@@ -257,97 +412,105 @@ class GeocodingService:
         Returns:
             Structured location object with geo coordinates
         """
-        # If already a structured object
         if isinstance(location, dict):
-            # Check if already has geo coordinates
-            if location.get("geo") and location["geo"].get("latitude"):
-                logger.info(f"  ✅ Already has coordinates: {location['geo']}")
-                return location
-
-            # Build address string for geocoding
-            address_obj = location.get("address", {})
-            address_str = self._build_address_string(address_obj) if address_obj else ""
-
-            # Fallback: If address is empty/incomplete, try using the name field
-            if not address_str and location.get("name"):
-                name = location.get("name", "")
-                logger.info(f"  ℹ️ Address empty, using name for geocoding: {name}")
-                address_str = name
-
-            if address_str:
-                geo_result = await self.geocode_address(address_str, language)
-                if geo_result:
-                    location["geo"] = {
-                        "latitude": geo_result["latitude"],
-                        "longitude": geo_result["longitude"],
-                    }
-                    # Enrich address if empty or incomplete
-                    if not address_obj or not self._build_address_string(address_obj):
-                        location["address"] = self._build_address_object(geo_result)
-                        logger.info("  ✅ Enriched address from geocoding result")
-
-            return location
-
-        # If string, convert to structured object
+            return await self._enrich_location_object(location, language)
         if isinstance(location, str):
-            address_str = location.strip()
-
-            # Try to parse name from address (format: "Name, Address")
-            name = None
-            if "," in address_str:
-                parts = address_str.split(",", 1)
-                # If first part doesn't look like a street address, use as name
-                first_part = parts[0].strip()
-                if (
-                    not any(char.isdigit() for char in first_part)
-                    and len(first_part) < 50
-                ):
-                    name = first_part
-                    address_str = parts[1].strip() if len(parts) > 1 else address_str
-
-            # Geocode the address
-            geo_result = await self.geocode_address(location, language)
-
-            if geo_result:
-                enriched = geo_result.get("enriched_address", {})
-
-                result = {
-                    "address": {
-                        "streetAddress": enriched.get("street") or "",
-                        "postalCode": enriched.get("postal_code") or "",
-                        "addressLocality": enriched.get("city") or "",
-                        "addressRegion": enriched.get("state") or "",
-                        # Photon leaves countrycode out for some places
-                        "addressCountry": (enriched.get("country_code") or "").upper()
-                        or enriched.get("country")
-                        or "",
-                    },
-                    "geo": {
-                        "latitude": geo_result["latitude"],
-                        "longitude": geo_result["longitude"],
-                    },
-                }
-
-                # Add name if extracted or use locality
-                if name:
-                    result["name"] = name
-
-                # Add housenumber to street if available
-                if enriched.get("housenumber") and enriched.get("street"):
-                    result["address"]["streetAddress"] = (
-                        f"{enriched['street']} {enriched['housenumber']}"
-                    )
-
-                logger.info(
-                    f"  ✅ Geocoded to: {result['geo']['latitude']}, {result['geo']['longitude']}"
-                )
-                return result
-            else:
-                # Return basic structure even without geocoding
-                return {"name": location, "address": {}, "geo": {}}
+            return await self._location_from_text(location, language)
 
         # Unknown format, return as-is wrapped
         return {"name": str(location), "address": {}, "geo": {}}
+
+    async def _enrich_location_object(
+        self, location: dict[str, Any], language: str
+    ) -> dict[str, Any]:
+        """A structured location: coordinates (and a missing address) are added."""
+        if _has_coordinates(location):
+            logger.info("  ✅ Already has coordinates")
+            return location
+
+        # An address written as text is the address to look up, and stays
+        # as the caller wrote it; any other non-object is no address.
+        address = location.get("address")
+        address_obj = address if isinstance(address, dict) else {}
+        if isinstance(address, str):
+            address_str = address.strip()
+        else:
+            address_str = self._build_address_string(address_obj)
+
+        # Fallback: If address is empty/incomplete, try using the name field
+        name = location.get("name")
+        if not address_str and name and isinstance(name, str):
+            logger.info("  ℹ️ Address empty, using the name for geocoding")
+            address_str = name
+
+        if address_str:
+            geo_result = await self.geocode_address(address_str, language)
+            if geo_result:
+                location["geo"] = {
+                    "latitude": geo_result["latitude"],
+                    "longitude": geo_result["longitude"],
+                }
+                # Enrich address if empty or incomplete
+                if not isinstance(address, str) and not (
+                    self._build_address_string(address_obj)
+                ):
+                    location["address"] = self._build_address_object(geo_result)
+                    logger.info("  ✅ Enriched address from geocoding result")
+
+        return location
+
+    async def _location_from_text(self, location: str, language: str) -> dict[str, Any]:
+        """A location written as text, as a structured object with coordinates."""
+        address_str = location.strip()
+
+        # Try to parse name from address (format: "Name, Address")
+        name = None
+        if "," in address_str:
+            parts = address_str.split(",", 1)
+            # If first part doesn't look like a street address, use as name
+            first_part = parts[0].strip()
+            if not any(char.isdigit() for char in first_part) and len(first_part) < 50:
+                name = first_part
+                address_str = parts[1].strip() if len(parts) > 1 else address_str
+
+        # Geocode the address
+        geo_result = await self.geocode_address(location, language)
+
+        if geo_result:
+            enriched = geo_result.get("enriched_address", {})
+
+            result: dict[str, Any] = {
+                "address": {
+                    "streetAddress": enriched.get("street") or "",
+                    "postalCode": enriched.get("postal_code") or "",
+                    "addressLocality": enriched.get("city") or "",
+                    "addressRegion": enriched.get("state") or "",
+                    # Photon leaves countrycode out for some places
+                    "addressCountry": (enriched.get("country_code") or "").upper()
+                    or enriched.get("country")
+                    or "",
+                },
+                "geo": {
+                    "latitude": geo_result["latitude"],
+                    "longitude": geo_result["longitude"],
+                },
+            }
+
+            # Add name if extracted or use locality
+            if name:
+                result["name"] = name
+
+            # Add housenumber to street if available
+            if enriched.get("housenumber") and enriched.get("street"):
+                result["address"]["streetAddress"] = (
+                    f"{enriched['street']} {enriched['housenumber']}"
+                )
+
+            logger.info("  ✅ Geocoded")
+            return result
+        else:
+            # Return basic structure even without geocoding
+            return {"name": location, "address": {}, "geo": {}}
 
     def _build_address_object(self, geo_result: dict) -> dict:
         """Build structured address object from geocoding result."""
@@ -400,9 +563,18 @@ class GeocodingService:
         wall-clock jump must not open or close the window.
         """
         now = time.monotonic() * 1000
-        slot = max(now, self._next_slot)
-        self._next_slot = slot + self.RATE_LIMIT_MS
-        await asyncio.sleep((slot - now) / 1000)
+        slot = self._free_slot(now)
+        if self._returned_slots:
+            heapq.heappop(self._returned_slots)
+        else:
+            self._next_slot = slot + self.RATE_LIMIT_MS
+        try:
+            await asyncio.sleep((slot - now) / 1000)
+        except asyncio.CancelledError:
+            # No lookup was made in this slot: the next one takes it instead
+            # of waiting a second behind it (audit 14.11., L-N).
+            heapq.heappush(self._returned_slots, slot)
+            raise
 
 
 # Singleton instance

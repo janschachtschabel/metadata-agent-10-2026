@@ -35,6 +35,33 @@ from src.config import Settings  # noqa: E402
 Settings.model_config["env_file"] = None
 
 
+# ------------------------------------------------------------ settings seam
+def use_settings(monkeypatch, settings=None):
+    """
+    Put `settings` in force for the rest of the test, for everything at once.
+
+    The app, the routers (`deps.settings`) and the services (`get_settings()`)
+    read one object, src.config._settings; this replaces it and monkeypatch
+    puts the previous one back. Without `settings` the object is forgotten and
+    the next use reads the environment again (after monkeypatch.setenv).
+    Returns what was passed.
+
+    The only way a test changes the settings as a whole (audit 14.11., Q-09;
+    tests/test_one_settings_object.py refuses the two older ways: replacing
+    `deps.settings` and patching one module's `get_settings`). They reached
+    routers or one service only, so a test could pass on a configuration that
+    cannot exist in production. Single values still go onto the object in
+    force: monkeypatch.setattr(deps.settings, "upload_timeout", 5).
+
+    A service built before the call keeps what it copied from the settings
+    at that time: build it afterwards.
+    """
+    import src.config
+
+    monkeypatch.setattr(src.config, "_settings", settings)
+    return settings
+
+
 # ------------------------------------------------------------ network guard
 # Tests run offline (audit 18.10. final): a test that reaches an external
 # service depends on it, and could carry data out. Loopback stays open for

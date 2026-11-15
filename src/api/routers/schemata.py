@@ -3,6 +3,7 @@
 from fastapi import HTTPException
 
 from ...models.schemas import (
+    GenerateRequest,
     SchemataInfoResponse,
     ContextInfo,
     SchemaInfo,
@@ -16,7 +17,12 @@ from ...utils.schema_loader import (
 
 from fastapi import APIRouter
 
-from .. import deps
+from ..params import Context, SchemaFile, Version
+from .info_docs import (
+    SCHEMA_DEFINITION_RESPONSES,
+    SCHEMAS_RESPONSES,
+    SCHEMATA_RESPONSES,
+)
 
 
 router = APIRouter()
@@ -37,6 +43,7 @@ router = APIRouter()
 
 Nutze diese Info um gültige Werte für `context` und `version` in anderen Endpoints zu finden.
 """,
+    responses=SCHEMATA_RESPONSES,
 )
 async def get_schemata_info():
     """Get information about available schemata."""
@@ -52,7 +59,9 @@ async def get_schemata_info():
             )
             for c in contexts
         ],
-        default_context=deps.settings.default_context,
+        # The context a request without one gets - no setting changes that
+        # (audit 14.11., O-45).
+        default_context=GenerateRequest.model_fields["context"].default,
     )
 
 
@@ -65,19 +74,22 @@ async def get_schemata_info():
 ## Path-Parameter
 
 - **context**: Schema-Kontext, z.B. `default`
-- **version**: Schema-Version, z.B. `1.8.1` oder `latest`
+- **version**: Schema-Version, z.B. `2.0.0` oder `latest`
 
 ## Response
 
 Liste von Schemas mit:
 - **file**: Schema-Dateiname (z.B. `event.json`)
 - **profile_id**: Profil-ID für edu-sharing
-- **label**: Mehrsprachiges Label
-- **groups**: Anzahl Feldgruppen
+- **label**: Name des Inhaltstyps (`de`, `en`), z.B. `Veranstaltung`; für `core.json` der Dateiname
+- **groups**: IDs der Feldgruppen, z.B. `["schedule", "attendance"]`
 - **field_count**: Anzahl Felder
+
+`404` für einen unbekannten Kontext oder eine unbekannte Version.
 """,
+    responses=SCHEMAS_RESPONSES,
 )
-async def get_schemas_for_version(context: str, version: str):
+async def get_schemas_for_version(context: Context, version: Version):
     """Get available schemas for a context and version."""
     try:
         schemas = get_available_schemas(context, version)
@@ -103,18 +115,24 @@ async def get_schemas_for_version(context: str, version: str):
 ## Path-Parameter
 
 - **context**: Schema-Kontext, z.B. `default`
-- **version**: Schema-Version, z.B. `1.8.1`
+- **version**: Schema-Version, z.B. `2.0.0` oder `latest`
 - **schema_file**: Schema-Datei, z.B. `event.json`, `core.json`
 
 ## Response
 
-Vollständiges Schema mit:
-- **fields**: Alle Felder mit ID, Label, Typ, Vokabular etc.
-- **groups**: Feldgruppen für UI-Anzeige
-- **metadata**: Schema-Metadaten
+Die Schema-Datei, wie sie ausgeliefert wird:
+- **profileId**, **version**, **@context**: Kennung, Version und JSON-LD-Kontext des Schemas
+- **groups**: Feldgruppen für die UI-Anzeige (`id`, `label`)
+- **fields**: Alle Felder mit ID, Label, Gruppe, Datentyp, Vokabular etc.
+- **output_template**: leere Vorlage eines Datensatzes
+
+`404` für einen unbekannten Kontext, eine unbekannte Version oder Schema-Datei.
 """,
+    responses=SCHEMA_DEFINITION_RESPONSES,
 )
-async def get_schema_definition(context: str, version: str, schema_file: str):
+async def get_schema_definition(
+    context: Context, version: Version, schema_file: SchemaFile
+):
     """Get full schema definition."""
     try:
         schema = load_schema(context, version, schema_file)

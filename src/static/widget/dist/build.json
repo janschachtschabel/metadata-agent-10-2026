@@ -1,0 +1,30 @@
+{
+  "name": "metadata-agent-canvas",
+  "version": "4.0.0",
+  "builtAt": "2026-11-15T10:40:56.142Z",
+  "hash": "1a5a187c166a4a5829cab95c661fe838cdd92179ecbe0b450c432da5a48fc7d3",
+  "files": {
+    "assets/i18n/de.json": "81efcbc3bf2586d9de308b364ff8e9e16fd7fc39a4f8ff283ebb0a85e51bd8c7",
+    "assets/i18n/en.json": "fe6ec6ea46ff45d7e022064cb0855c2395d97b1b5818d03b0fed19b032efb1dc",
+    "dist/3rdpartylicenses.txt": "594898af9a6b738da6225da87f7d0a3f6fe66995664907745a41e44fd0cbcc08",
+    "dist/LICENSE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    "dist/NOTICE": "1e896278db9ba968cbf4d6443af6ca8de7de6055a3c2ab8e91ab0894f5fe67ff",
+    "dist/fonts/LICENSE-material-icons.txt": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    "dist/fonts/OFL.txt": "84044c09058803d87a241bd28abb4ce30a433d7db9c27a04da3efad6a0ca539c",
+    "dist/fonts/material-icons.woff2": "8265f64786397d6b832d1ca0aafdf149ad84e72759fffa9f7272e91a0fb015d1",
+    "dist/fonts/roboto-latin-300-normal.woff2": "299f10a52fe1423dd5579ff7e83db8dbea312f1e924f3e06e55839286b4d1c1d",
+    "dist/fonts/roboto-latin-400-normal.woff2": "425c0713a8176f92273d378599c7eac57de7fafabd4bd0ed457b70eb8f80d371",
+    "dist/fonts/roboto-latin-500-normal.woff2": "5bcc3aa180e7f26f643cd5b2621cd7c2de193d0661d913a94afd3d4881a7a34b",
+    "dist/fonts/roboto-latin-ext-300-normal.woff2": "ccd24ea4a6eb7d7f2ad3d48078f64ffceb623faad8b4a52943bd7569d995dbec",
+    "dist/fonts/roboto-latin-ext-400-normal.woff2": "5725eacca97303d8bce26f76cfcaee4393295bbf93c1eb6c3e5e4f260b2da189",
+    "dist/fonts/roboto-latin-ext-500-normal.woff2": "1e597a6e3b163200475089698be3427ab1bb01553493d5b7d53694429948d8ec",
+    "dist/main.js": "bbfbe3f1e79072710ecff281dab17da9f06b62bae433749020d31240ec7cc8f4",
+    "dist/main.js.gz": "4ed107673ef7654e10c500f34b085fd82edf335ecd27495eb69b583606f04d88",
+    "dist/polyfills.js": "ee2a6f5bdc1b6f4c0ad92b5bb975611ec1f65572f6ae64b675e4b6db9c11056f",
+    "dist/polyfills.js.gz": "cf2fd8ba66f5fcc2cd77e93e8408373e78edf6bc390a4296bbd8387e85a77036",
+    "dist/runtime.js": "dfec62526d27aa44162dbbb9a476ac9500dbcd8dd4e19e7cbe84062bdbf517a5",
+    "dist/runtime.js.gz": "0e55128845e29b83c9d47c4f88b5bb4ae9ee19c7c16fb4eafde9ef152d9c5053",
+    "dist/styles.css": "d9d5d30f51d86fefca255d39728adba01c289f9e8ea0d416405d9b2410471754",
+    "dist/styles.css.gz": "a4b9347370dd88a8232bac7af5844376c86921960f98bbf1d1c8c8c5bc829cc9"
+  }
+}

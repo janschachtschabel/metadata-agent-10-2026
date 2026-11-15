@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "993c3fb1-7c3e-4207-ab96-b21982b8eff4",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent-3\\docs\\architektur\\metadata-agent-architektur-b-api.json",
+  "output": "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent-3\\docs\\architektur\\metadata-agent-architektur-b-api.html",
+  "specification": {
+    "sha256": "c1949a69b4ad6eb531d606ac56ea1de608cc8cbfcaacde9c3de13e7fe7fac554",
+    "bytes": 37161
+  },
+  "artifact": {
+    "sha256": "e6298619d064b13679adf7772a22eac1929700b05320b82b7b1d191203300af2",
+    "bytes": 836501
+  }
+}

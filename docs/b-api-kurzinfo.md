@@ -1,6 +1,6 @@
 # Kurzinfo: B-API-Routing und B-API-Auth im Metadata Agent 3.0
 
-Für Entwickler. Details: [ENV-PARAMETER.md](../ENV-PARAMETER.md) – Abschnitte
+Für Entwickler. Details: [ENV-PARAMETER.de.md](../ENV-PARAMETER.de.md) – Abschnitte
 „B-API: Routing“ und „B-API: Authentifizierung“.
 
 ## 1. Routing
@@ -26,7 +26,7 @@ METADATA_AGENT_B_API_ROUTER_MODEL=metadata-agent        # Name der Route
 METADATA_AGENT_LLM_REQUEST_STYLE=classic                # Qwen/DeepSeek; reasoning für GPT-5/6
 METADATA_AGENT_B_API_ROUTER_REASONING_EFFORT=none       # Pflicht für denkende Modelle (qwen3.6)
 METADATA_AGENT_LLM_MAX_CONCURRENT_REQUESTS=2            # AcademicCloud-Modelle: GWDG-Grenzen
-METADATA_AGENT_LLM_MAX_REQUESTS_PER_SECOND=2
+METADATA_AGENT_LLM_MAX_REQUESTS_PER_SECOND=0.16   # ~10 je Minute, das GWDG-Limit des Schlüssels
 ```
 
 Regeln:
@@ -68,6 +68,23 @@ für Nutzer oder Gäste, und die B-API bucht Kosten und Limits auf ihn.
   woher er kam (`forwarded` oder `static`).
 - **Sicherheit:** Der Agent prüft den Schlüssel nicht selbst. Er darf **nur über
   die B-API erreichbar** sein; die NetworkPolicy im Helm-Chart sorgt dafür.
+
+### Derselbe Schlüssel für Textextraktion und Geocoder
+
+Mit einem B-API-Provider ruft der Agent auch die Textextraktion und den
+Geocoder über die B-API auf (`/api/v1/proxy/text-extraction`,
+`/api/v1/proxy/photon_geocoding`). So gehören sie immer zur B-API der Umgebung:
+Staging zu Staging, Produktion zu Produktion.
+
+- **Rechte:** Jeder Schlüssel, mit dem der Dienst aufgerufen wird (Nutzer- und
+  Gast-Schlüssel aus edu-sharing, `B_API_KEY`), braucht neben den
+  LLM-Endpunkten die Proxy-Dienste `text-extraction` und `photon_geocoding`.
+- **Fehlt das Recht:** Das Erschließen aus einer URL endet mit `502`
+  `TEXT_EXTRACTION_AUTH_REFUSED`; Orte bleiben ohne Koordinaten, und
+  `processing.warnings` sagt warum.
+- **`METADATA_AGENT_B_API_SERVICES`:** `auto` (Default) wie beschrieben, aber
+  nur, wenn die LLM-Aufrufe an `METADATA_AGENT_B_API_BASE_URL` gehen; `direct`
+  ruft beide Dienste direkt und ohne Schlüssel auf; `proxy` erzwingt die B-API.
 
 Lokal ausprobieren (simuliert den Proxy):
 

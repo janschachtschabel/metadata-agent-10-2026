@@ -268,8 +268,10 @@ schon heute schreiben:
 ```
 
 Deshalb sind die Felder als `datatype: "string"` mit geschlossenem Vokabular
-angelegt und nicht als `boolean`: ein Python-`False` würde als JSON-`false`
-serialisiert, und das ist auf der Leitung ein anderer Wert als `"false"`.
+angelegt und nicht als `boolean`: ein JSON-`false` ist auf der Leitung ein
+anderer Wert als `"false"`. Schickt ein Aufrufer trotzdem einen JSON-Boolean,
+wandelt ihn der Schreibpfad in `"true"` bzw. `"false"` um – für jedes Feld, nicht
+nur für diese drei.
 
 Die Prompts sind bewusst zurückhaltend formuliert — die KI setzt einen Wert nur,
 wenn der Text, das Impressum oder die Lizenz es hergibt. Steht nichts dazu da,
@@ -380,11 +382,11 @@ Diese setzt der Upload-Pfad unabhängig vom Schema-Flag:
 |------|------|
 | `ccm:linktype` | Immer beim Anlegen (`USER_GENERATED`) |
 | `ccm:oeh_extendedType` | `write_extended_data: true` — URI des Inhaltstyps |
-| `ccm:oeh_extendedData` | `write_extended_data: true` — vollständiges Metadaten-JSON |
-| `ccm:oeh_extendedText` | `write_extended_data: true` und `extended_text` gesetzt |
+| `ccm:oeh_extendedData` | `write_extended_data: true` — die Metadatenfelder als JSON: ohne den Umschlag des Datensatzes und ohne die Schlüssel `ccm:oeh_extended*` selbst (ein gelesener und erneut gesendeter Datensatz würde sonst die Daten des letzten Uploads in sich verschachteln) |
+| `ccm:oeh_extendedText` | `write_extended_data: true` und `extended_text` gesetzt — auf 150.000 Zeichen gekürzt, die Kürzung steht in `error` der Antwort |
 | `ccm:oeh_lrt` | Ersatzweise aus `ccm:oeh_extendedType` abgeleitet — nur wenn die Extraktion keinen Typ lieferte. Sonst ein reguläres Repo-Feld, siehe oben |
-| `ccm:commonlicense_key` | `CUSTOM`, wenn `ccm:custom_license` nicht auf das Vokabular passt. Kein Fallback, wenn gar keine Lizenz erkannt wurde — das Feld bleibt leer |
-| `ccm:commonlicense_cc_version` | Aus `ccm:custom_license` abgeleitet — bei CC-Links aus der URL, sonst `4.0` für CC-Keys ohne Version |
+| `ccm:commonlicense_key` | Aus `ccm:custom_license` abgeleitet, wenn dort ein CC-Link (`creativecommons.org/licenses/…`, `…/publicdomain/…`) oder eine URI des OEH-Vokabulars (`http(s)://w3id.org/openeduhub/vocabs/…`) steht; sonst `CUSTOM` (sofern kein Schlüssel mitgeschickt wurde) — auch für einen Link an anderer Stelle, der nur auf einen Schlüssel endet. Der Wert in `ccm:custom_license` entfällt nur, wenn er nichts als dieser Link war; ein Satz um den Link und ein portierter CC-Link (`/3.0/de/`) bleiben daneben stehen. Kein Fallback, wenn gar keine Lizenz erkannt wurde — das Feld bleibt leer |
+| `ccm:commonlicense_cc_version` | Aus `ccm:custom_license` abgeleitet — bei CC-Links aus der URL, sonst `4.0` für CC-Keys ohne Version (`CC_0`: `1.0`) |
 | `ccm:lifecyclecontributer_author` | Aus `cm:author` als VCARD |
 | `cm:latitude` / `cm:longitude` | Aus `schema:location[].geo` bzw. `schema:geo` |
 
@@ -414,6 +416,12 @@ angekommen ist, schaut auf `virtual:licenseurl`.
 Die Labels im Schema stehen weiterhin in der vertrauten Form (`CC BY-SA`). Der
 Vokabular-Abgleich fällt auf sie zurück, deshalb darf die Extraktion die
 gewohnte Schreibweise liefern — geschrieben wird die, die auflöst.
+
+Die Tabelle zeigt, was das Repository mit einem direkt geschriebenen Wert tut.
+`/upload` und `/nodes` setzen die gewohnten Schreibweisen selbst um: `CC BY-SA`,
+`cc-by-sa` und `CC0` gehen als `CC_BY_SA` bzw. `CC_0` ins Repository (Groß-/
+Kleinschreibung egal; Leerzeichen, Bindestrich und Unterstrich gleichwertig).
+Ein Wert, der danach kein bekannter Schlüssel ist, wird nicht geschrieben.
 
 ---
 

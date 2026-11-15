@@ -16,9 +16,12 @@ from src.services.repository_licenses import (
 
 
 def test_a_cc_uri_becomes_key_and_version():
-    normalized = {"ccm:custom_license": ["…/CC_BY_SA_40"]}
+    # Under the OpenEduHub vocabulary prefix: a link elsewhere that ends in a
+    # key is somebody's own licence text (audit 14.11., R-09).
+    uri = "http://w3id.org/openeduhub/vocabs/licenses/CC_BY_SA_40"
+    normalized = {"ccm:custom_license": [uri]}
 
-    transform_license(normalized, {"ccm:custom_license": "https://x/CC_BY_SA_40"})
+    transform_license(normalized, {"ccm:custom_license": uri})
 
     assert normalized["ccm:commonlicense_key"] == ["CC_BY_SA"]
     assert normalized["ccm:commonlicense_cc_version"] == ["4.0"]
@@ -84,12 +87,8 @@ def test_a_licence_is_never_silently_discarded(value):
         ("https://creativecommons.org/licenses/by-sa/4.0/", "CC_BY_SA", "4.0"),
         ("http://creativecommons.org/licenses/by-nd/2.0", "CC_BY_ND", "2.0"),
         ("https://creativecommons.org/licenses/by-nc/2.5/", "CC_BY_NC", "2.5"),
-        # Ported licences carry a jurisdiction after the version
-        (
-            "https://creativecommons.org/licenses/by-nc-sa/3.0/de/",
-            "CC_BY_NC_SA",
-            "3.0",
-        ),
+        # Ported licences (a jurisdiction after the version) keep their link:
+        # tests/test_licence_written_as_the_repository_reads_it.py.
         ("https://creativecommons.org/publicdomain/zero/1.0/", "CC_0", "1.0"),
     ],
 )

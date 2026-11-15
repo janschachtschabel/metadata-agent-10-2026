@@ -57,7 +57,9 @@ def test_the_image_carries_license_and_notice():
 
 
 def test_the_readme_names_the_same_license():
-    readme = (ROOT / "README.md").read_text("utf-8")
-    section = readme.split("## Lizenz", 1)[1]
+    """In English (README.md, the default) and in German (README.de.md)."""
+    for name, heading in (("README.md", "## License"), ("README.de.md", "## Lizenz")):
+        readme = (ROOT / name).read_text("utf-8")
+        section = readme.split(heading, 1)[1]
 
-    assert "Apache License 2.0" in section and "MIT" not in section
+        assert "Apache License 2.0" in section and "MIT" not in section, name

@@ -11,6 +11,10 @@ every LLM call got a 403 and every URL extraction a connect timeout.
 - text_extraction, repository: one GET to the configured address. Any HTTP
   answer counts as reachable - the question is DNS, network and TLS, not a
   particular endpoint of the service.
+- text_extraction and geocoder through the B-API (its proxy paths): asked with
+  the same key, on an endpoint that answers 200 only to a key with the right
+  for that proxy service - 401/403 shows up as authorized: false. Photon
+  called directly is a third party and is not asked.
 
 Reports addresses, status, time and the kind of failure - never a key.
 """
@@ -22,9 +26,10 @@ from typing import Any, Optional
 import httpx
 
 from ..config import Settings
-from .llm_auth import b_api_auth
+from .llm_auth import b_api_auth, b_api_headers_for
 from .llm_errors import LLMError
 from ..utils.request_id import TRACE_EVENT_HOOKS
+from ..utils.tls_context import shared_tls_context
 
 # Short on purpose: a dependency that needs longer is a finding in itself, and
 # the report waits for the slowest check.
@@ -42,7 +47,9 @@ async def _probe(
     start = time.monotonic()
     try:
         response = await client.get(url, headers=headers)
-    except httpx.HTTPError as e:
+    except (httpx.HTTPError, httpx.InvalidURL) as e:
+        # InvalidURL is no HTTPError: a configured address that is no URL is a
+        # finding of this report, not a 500 (audit 14.11., L-N).
         return {
             "url": url,
             "reachable": False,
@@ -59,6 +66,45 @@ async def _probe(
 
 async def _check_reachable(client: httpx.AsyncClient, url: str) -> dict[str, Any]:
     return (await _probe(client, url))[0]
+
+
+async def _check_service(
+    client: httpx.AsyncClient, settings: Settings, url: str, probe: str = ""
+) -> dict[str, Any]:
+    """
+    A service that may sit behind the B-API: reachable, and is the key taken?
+
+    `probe` is appended for the call through the B-API: its proxy answers 403
+    to paths it does not know, so the bare address says nothing about the key.
+    """
+    if not url:
+        return {"configured": False}
+    try:
+        headers = b_api_headers_for(url, settings)
+    except LLMError as e:
+        # No key at all: nothing to send, and nothing is sent.
+        return {"url": url, "error": e.code, "message": e.message}
+    if not headers:
+        return await _check_reachable(client, url)
+    result, response = await _probe(client, f"{url}{probe}", headers)
+    result = {**result, "url": url}
+    if response is not None:
+        result["auth_source"] = b_api_auth(settings)[1]
+        result["authorized"] = response.status_code == 200
+    return result
+
+
+async def _check_geocoder(
+    client: httpx.AsyncClient, settings: Settings
+) -> dict[str, Any]:
+    if not settings.services_via_b_api:
+        return {
+            "url": settings.geocoder_api_url,
+            "skipped": "Photon wird direkt aufgerufen (Fremddienst, nicht geprüft)",
+        }
+    return await _check_service(
+        client, settings, settings.geocoder_api_url, "?q=Berlin&limit=1"
+    )
 
 
 async def _check_llm(client: httpx.AsyncClient, settings: Settings) -> dict[str, Any]:
@@ -102,15 +148,20 @@ def _listed_ids(response: httpx.Response) -> set:
 async def check_dependencies(
     settings: Settings, client: Optional[httpx.AsyncClient] = None
 ) -> dict[str, Any]:
-    """Run the three checks side by side and report them with the configuration."""
+    """Run the checks side by side and report them with the configuration."""
     own_client = client is None
     client = client or httpx.AsyncClient(
-        timeout=PROBE_TIMEOUT, event_hooks=TRACE_EVENT_HOOKS
+        timeout=PROBE_TIMEOUT,
+        event_hooks=TRACE_EVENT_HOOKS,
+        verify=shared_tls_context(),
     )
     try:
-        llm, text_extraction, repository = await asyncio.gather(
+        llm, text_extraction, geocoder, repository = await asyncio.gather(
             _check_llm(client, settings),
-            _check_reachable(client, settings.text_extraction_api_url),
+            _check_service(
+                client, settings, settings.text_extraction_api_url, "/metrics"
+            ),
+            _check_geocoder(client, settings),
             _check_reachable(client, settings.repository_url),
         )
     finally:
@@ -124,6 +175,7 @@ async def check_dependencies(
         "checks": {
             "llm": llm,
             "text_extraction": text_extraction,
+            "geocoder": geocoder,
             "repository": repository,
         },
     }

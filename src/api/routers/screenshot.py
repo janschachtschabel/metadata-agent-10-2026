@@ -1,6 +1,7 @@
 """Page screenshots (/screenshot)."""
 
 import asyncio
+import base64
 
 from fastapi import HTTPException
 
@@ -18,11 +19,14 @@ import logging
 from fastapi import APIRouter
 
 from .. import deps
+from ..request_body import JsonObjectRoute
 from ..responses import SAVE_NODE_ERROR_STATUS, upload_timeout_response
+from .repository_docs import SCREENSHOT_RESPONSES
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+# The body is read like that of the raw-request endpoints (request_body.py).
+router = APIRouter(route_class=JsonObjectRoute)
 
 
 # ============================================================================
@@ -33,6 +37,7 @@ router = APIRouter()
 @router.post(
     "/screenshot",
     response_model=ScreenshotResponse,
+    responses=SCREENSHOT_RESPONSES,
     summary="Screenshot einer Webseite erstellen",
     description="""Erstellt einen Screenshot einer Webseite.
 
@@ -52,7 +57,13 @@ Wenn `node_id` angegeben wird, wird der Screenshot direkt als Vorschaubild auf d
 Das Bearbeitungsfenster (2 Stunden nach dem Anlegen) wird **vor** der Aufnahme
 geprüft: `403`/`404` bzw. `502` bei einem Repository-Fehler, ohne dass ein Browser
 startet. Aufnahme und Upload zusammen enden nach `METADATA_AGENT_UPLOAD_TIMEOUT`
-Sekunden mit `504` (`UPLOAD_TIMEOUT`).
+Sekunden mit `504` (`UPLOAD_TIMEOUT`). Ohne Repository-Zugangsdaten antwortet
+der Dienst mit `503`, ebenfalls vor der Aufnahme.
+
+`success` heißt: die Aufnahme ist gelungen, das Bild steht in `image_base64`.
+Ob es am Node gespeichert wurde, sagt `preview_uploaded`; lehnt das Repository
+das Bild ab, bleibt es bei `200` mit `preview_uploaded: false` und dem Grund in
+`error`.
 """,
     tags=["Screenshot"],
 )
@@ -77,11 +88,11 @@ async def take_screenshot(req: ScreenshotRequest):
 
 
 async def _capture_and_store(req: ScreenshotRequest):
-    import base64
-
     screenshot_service = deps.get_screenshot_service()
-    repo_service = deps.get_repository_service() if req.node_id else None
-    if req.node_id and repo_service:
+    # With a node the repository is needed, as on every write path: 503 before
+    # a browser starts for an image nobody could store (audit 14.11., R-10).
+    repo_service = deps.require_repository_service() if req.node_id else None
+    if repo_service:
         # Before the capture: a node outside its window must not hold a
         # browser slot for up to 90 s only to be refused afterwards.
         refusal = await repo_service.preview_refusal(req.node_id)
@@ -126,25 +137,25 @@ async def _capture_and_store(req: ScreenshotRequest):
     )
 
     # Optional: upload as preview to node
-    if req.node_id:
-        if not repo_service:
-            response.error = "Repository service not configured (missing credentials)"
-            response.preview_uploaded = False
-        else:
-            # Upload the image just returned instead of capturing a second time;
-            # the editing window was checked before the capture.
-            upload_result = await repo_service.upload_preview(
-                req.node_id, result.image_bytes, result.mimetype, window_checked=True
+    if repo_service:
+        # Upload the image just returned instead of capturing a second time;
+        # the editing window was checked before the capture.
+        upload_result = await repo_service.upload_preview(
+            req.node_id, result.image_bytes, result.mimetype, window_checked=True
+        )
+        error_code = upload_result.get("error_code")
+        if error_code in SAVE_NODE_ERROR_STATUS:
+            raise HTTPException(
+                status_code=SAVE_NODE_ERROR_STATUS[error_code],
+                detail=upload_result.get("error"),
             )
-            error_code = upload_result.get("error_code")
-            if error_code in SAVE_NODE_ERROR_STATUS:
-                raise HTTPException(
-                    status_code=SAVE_NODE_ERROR_STATUS[error_code],
-                    detail=upload_result.get("error"),
-                )
-            response.preview_uploaded = upload_result.get("success", False)
-            response.node_id = req.node_id
-            if not upload_result.get("success"):
-                response.error = upload_result.get("error")
+        # Still a 200: the capture succeeded and the image is in the answer.
+        response.preview_uploaded = bool(upload_result.get("success"))
+        response.node_id = req.node_id
+        if not response.preview_uploaded:
+            response.error = (
+                upload_result.get("error")
+                or "Das Vorschaubild konnte nicht am Node gespeichert werden."
+            )
 
     return response

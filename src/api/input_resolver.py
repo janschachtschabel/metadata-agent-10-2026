@@ -10,12 +10,14 @@ same failed fetch answered 400 in two and 502 in the third (API-01), and
 
 import logging
 from dataclasses import dataclass, field
+
+import httpx
 from typing import Any
 
 from fastapi import HTTPException
 
 from ..models.schemas import InputSource
-from ..services.input_source_service import TextExtractionError
+from ..services.input_source_service import NodeWithoutText, TextExtractionError
 from ..services.llm_prompts import CORRECTION_HEADER as CORRECTION_HEADER
 from ..utils.public_url import PublicUrlError
 from . import deps
@@ -33,9 +35,37 @@ MAX_TEXT_LENGTH = 150_000
 # context (audit API-05).
 MAX_CORRECTION_LENGTH = 10_000
 
+# The values of the first round are context for the correction, not a second
+# source: bounded like the instruction. Unbounded, a body of megabytes went
+# into every field prompt and cut the source down to nothing (audit S-20).
+MAX_PREVIOUS_VALUE_LENGTH = 2_000
+MAX_PREVIOUS_LENGTH = 30_000
+_MAX_PREVIOUS_KEY_LENGTH = 200
+
 PREVIOUS_VALUES_HEADER = (
     "--- BISHERIGER STAND (extrahierte Metadaten aus Durchlauf 1) ---"
 )
+
+
+# The header of a /generate answer. The widget sends the whole answer back as
+# existing_metadata, and a node can hold one: merged like fields, the header of
+# the last round replaced that of the new one and its `processing` block stood
+# in the correction prompt (audit 14.11., L-33).
+HEADER_KEYS = (
+    "contextName",
+    "schemaVersion",
+    "metadataset",
+    "metadataset_uri",
+    "language",
+    "exportedAt",
+    "processing",
+    "preview_image_url",
+)
+
+
+def without_header(metadata: dict[str, Any]) -> dict[str, Any]:
+    """The record without the header keys of a /generate answer."""
+    return {key: value for key, value in metadata.items() if key not in HEADER_KEYS}
 
 
 @dataclass
@@ -81,9 +111,11 @@ async def resolve_input(req) -> ResolvedInput:
     Fetch the text a request names, untruncated.
 
     `req` has input_source, text, source_url, node_id, extraction_method,
-    language and output_format. Raises HTTPException 400 for a missing
-    parameter or a URL that is not public, 502 when the source cannot be read.
-    TextExtractionError propagates: it has its own answer (responses.py).
+    language, output_format, context and version. Raises HTTPException 400 for
+    a missing parameter or a URL that is not public, 404 for a node the
+    repository does not show, 422 for a node without any text, 502 when the
+    source cannot be read. TextExtractionError propagates: it has its own
+    answer (responses.py).
     """
     source = req.input_source
     if source == InputSource.TEXT:
@@ -110,10 +142,15 @@ async def resolve_input(req) -> ResolvedInput:
             return ResolvedInput(text=with_source_url(text, req.source_url))
 
         if source == InputSource.NODE_ID:
-            data = await input_service.fetch_from_node_id(req.node_id)
+            # Context and version: a node read keeps the properties a schema
+            # of that context declares.
+            data = await input_service.fetch_from_node_id(
+                req.node_id, context=req.context, version=req.version
+            )
             return ResolvedInput(
                 text=with_source_url(data.text, data.source_url),
                 fetched_metadata=data.existing_metadata or {},
+                warnings=data.warnings,
             )
 
         data = await input_service.fetch_from_node_url(
@@ -122,6 +159,8 @@ async def resolve_input(req) -> ResolvedInput:
             extraction_method=req.extraction_method.value,
             lang=req.language,
             output_format=req.output_format.value,
+            context=req.context,
+            version=req.version,
         )
         return ResolvedInput(
             text=with_source_url(data.text, data.source_url or req.source_url),
@@ -132,7 +171,26 @@ async def resolve_input(req) -> ResolvedInput:
         raise
     except PublicUrlError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    except NodeWithoutText as e:
+        # Not a fault of the repository, which a 502 named "ValueError"
+        # claimed (audit 14.11., list S-N).
+        raise HTTPException(
+            status_code=422,
+            detail="Der Node enthält keinen Text, aus dem sich Metadaten "
+            "erschließen lassen: weder Volltext noch Titel, Beschreibung, "
+            "Schlagworte oder eine abrufbare URL.",
+        ) from e
     except Exception as e:
+        # A node the repository does not have or does not show is the caller's
+        # error, as /nodes and /upload/verify answer it (audit 13.11., API-14).
+        if isinstance(e, httpx.HTTPStatusError) and e.response.status_code in (
+            403,
+            404,
+        ):
+            raise HTTPException(
+                status_code=404,
+                detail="Node nicht gefunden oder für den Dienst nicht lesbar.",
+            ) from e
         # The source (text extraction, repository) failed, not the request. Its
         # message may name internal hosts: log only (audit S-06).
         logger.error(f"❌ Fetching the input failed: {type(e).__name__}: {e}")
@@ -142,6 +200,30 @@ async def resolve_input(req) -> ResolvedInput:
         ) from e
 
 
+def _previous_value_lines(existing_metadata: dict[str, Any]) -> list[str]:
+    """One line per field of the first round, each value and the whole bounded."""
+    lines: list[str] = []
+    used = left_out = 0
+    for key, value in existing_metadata.items():
+        if key.startswith("_"):
+            continue
+        if isinstance(value, list):
+            value = ", ".join(str(v) for v in value)
+        value = str(value)
+        if len(value) > MAX_PREVIOUS_VALUE_LENGTH:
+            value = value[:MAX_PREVIOUS_VALUE_LENGTH] + " …"
+        line = f"  {key[:_MAX_PREVIOUS_KEY_LENGTH]}: {value}"
+        if used + len(line) > MAX_PREVIOUS_LENGTH:
+            left_out += 1
+            continue
+        lines.append(line)
+        used += len(line) + 1
+    if left_out:
+        logger.warning(f"⚠️ {left_out} previous values left out of the prompt")
+        lines.append(f"  (… {left_out} weitere Felder ausgelassen)")
+    return lines
+
+
 def with_correction(
     source: str, existing_metadata: dict[str, Any], instruction: str
 ) -> tuple[str, str]:
@@ -149,25 +231,14 @@ def with_correction(
     Combine a source, the values extracted so far and a correction instruction.
 
     Returns (text for the LLM, source text for the next round). The instruction
-    comes last and is never cut off: the source is truncated to make room. The
+    comes last and is never cut off: the source is truncated to make room; the
+    caller bounds it (MAX_CORRECTION_LENGTH, /generate). The
     next round's source is the source alone: the values already carry this
     correction (the widget sends them anew every round), and a relative one
     such as "shorter" would otherwise be applied twice. The widget also uploads
     it as ccm:oeh_extendedText, which should not hold editor instructions.
     """
-    if len(instruction) > MAX_CORRECTION_LENGTH:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Korrekturanweisung zu lang: höchstens {MAX_CORRECTION_LENGTH} "
-            "Zeichen.",
-        )
-    lines = []
-    for key, value in existing_metadata.items():
-        if key.startswith("_"):
-            continue
-        if isinstance(value, list):
-            value = ", ".join(str(v) for v in value)
-        lines.append(f"  {key}: {value}")
+    lines = _previous_value_lines(existing_metadata)
     previous = f"\n\n{PREVIOUS_VALUES_HEADER}\n" + ("\n".join(lines) or "(keine)")
     correction = f"\n\n{CORRECTION_HEADER}\n{instruction.strip()}"
 

@@ -1,6 +1,7 @@
 """The concurrency and rate budget of each LLM gateway, shared by every LLMService."""
 
 import asyncio
+import heapq
 from typing import Any, Optional
 from weakref import WeakKeyDictionary
 
@@ -25,6 +26,8 @@ class RateLimiter:
         )
         self._lock = asyncio.Lock()
         self._next_slot: Optional[float] = None
+        # Slots of callers cancelled while they waited, earliest first.
+        self._returned: list[float] = []
 
     async def acquire(self) -> float:
         """Wait for this caller's slot. Returns how long it waited, in seconds."""
@@ -36,13 +39,27 @@ class RateLimiter:
         # queue is handed out at once instead of each caller blocking the next.
         async with self._lock:
             now = loop.time()
-            slot = now if self._next_slot is None else max(now, self._next_slot)
-            self._next_slot = slot + self._interval
+            slot = self._returned_slot(now)
+            if slot is None:
+                slot = now if self._next_slot is None else max(now, self._next_slot)
+                self._next_slot = slot + self._interval
 
         delay = slot - loop.time()
         if delay > 0:
-            await asyncio.sleep(delay)
+            try:
+                await asyncio.sleep(delay)
+            except asyncio.CancelledError:
+                # Nothing was sent in this slot: the next caller takes it
+                # instead of waiting behind it (audit 14.11., L-N).
+                heapq.heappush(self._returned, slot)
+                raise
         return max(delay, 0.0)
+
+    def _returned_slot(self, now: float) -> Optional[float]:
+        """The earliest returned slot that is still to come; passed ones are dropped."""
+        while self._returned and self._returned[0] < now:
+            heapq.heappop(self._returned)
+        return heapq.heappop(self._returned) if self._returned else None
 
 
 class ProviderGate:

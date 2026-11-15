@@ -12,7 +12,22 @@ spec:
     - name: http
       port: {{ .Values.service.port }}
       targetPort: http
-    # For the ServiceMonitor only; the ingress routes to "http".
+---
+# The internal port (/health, /ready, /metrics) for the ServiceMonitor, in a
+# Service of its own that is always ClusterIP: with service.type=LoadBalancer
+# or NodePort the port above is published, this one must not be.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "metadata-agent.internalName" . }}
+  labels:
+    {{- include "metadata-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: internal
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "metadata-agent.selectorLabels" . | nindent 4 }}
+  ports:
     - name: internal
       port: {{ .Values.service.internalPort }}
       targetPort: internal

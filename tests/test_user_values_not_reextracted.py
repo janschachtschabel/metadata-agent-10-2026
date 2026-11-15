@@ -7,6 +7,7 @@ extracted. Named in regenerate_fields, the editor asks for it explicitly -
 and then gets the new value (origin "ai"), not the old one back.
 """
 
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 from src.services.field_normalizer import get_field_normalizer
@@ -69,8 +70,19 @@ class _LLM:
     def __init__(self, values):
         self.values, self.asked = values, []
 
+    @asynccontextmanager
+    async def text_cache_primer(self, text, language, start=True):
+        yield None
+
     async def extract_fields_parallel(
-        self, fields, text, existing_metadata, language, max_workers
+        self,
+        fields,
+        text,
+        existing_metadata,
+        language,
+        max_workers,
+        deadline=None,
+        primer=None,
     ):
         self.asked.extend(f["id"] for f in fields)
         return {

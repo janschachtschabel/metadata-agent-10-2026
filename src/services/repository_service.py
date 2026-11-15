@@ -2,79 +2,80 @@
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
-from typing import Any, Awaitable, Callable, Optional
-from urllib.parse import quote
+from datetime import datetime, timezone
+from typing import Any, Optional
 
 import httpx
 
-from ..metrics import OWN_SERVICE_HOOKS, THIRD_PARTY_HOOKS
-from ..utils.schema_loader import get_repo_fields
-from .field_normalizer import find_object_shape_violations
+from ..config import get_settings
+from ..metrics import OWN_SERVICE_HOOKS
+from ..utils.tls_context import shared_tls_context
+from ..utils.schema_loader import get_repo_fields, get_schema_fields
+from .object_shapes import find_object_shape_violations
 from .repository_curation import (
-    DEFAULT_WORKFLOW_STATUS,
     extract_collection_ids,
     run_workflow_steps,
     set_collections,
 )
 
-# Re-exported: callers and tests import these from repository_service, as before 3.0.0.
+# The parts of the service (audit 14.11., Q-07: the editing window, the
+# preview upload and the unfinished write are mixins like the first three).
+from .repository_cut_off import CutOffMixin
+from .repository_edit_window import EditWindowMixin
 from .repository_metadata import MetadataWriteMixin
-from .repository_nodes import NodeMixin
+from .repository_nodes import NodeMixin, url_lock_key, url_locks
+from .repository_preview_upload import PreviewUploadMixin, preview_reserve
+from .repository_review import ReviewMixin
+
+# Re-exported: callers and tests import these from repository_service, as before 3.0.0.
 from .repository_preview import MAX_PREVIEW_BYTES as MAX_PREVIEW_BYTES
 from .repository_preview import PreviewError as PreviewError
 from .repository_preview import resolve_preview as resolve_preview
-from .repository_result import METADATA_INVALID, WRITE_FAILED
-from .repository_review import ReviewMixin
+from .repository_result import (
+    METADATA_INVALID,
+    WRITE_FAILED,
+    created_result,
+    duplicate_result,
+    no_writable_fields_result,
+    unloadable_schema_result,
+    written_result,
+)
 from .repository_support import get_repository_config as get_repository_config
 
 # Shared helpers the flows below use.
 from .repository_support import (
     first_value,
-    text_value,
-    repository_error,
-    no_writable_fields_result,
     identifying_url,
     nothing_written,
     partial_problems,
     duplicate_skipped,
-    node_created_at,
 )
 from .repository_support import build_auth_header as build_auth_header
+from .repository_write import (
+    NodeWrite,
+    StepResults,
+    WriteProgress,
+    WriteTarget,
+    upload_workflow_steps,
+    with_resolved_schema,
+)
 
-# Public names this module defined before 3.0.0 (tests/test_import_compatibility.py).
+# Public names this module defined before 3.0.0 (tests/test_import_compatibility.py)
+# or before its split of 14.11.
+from .repository_edit_window import NODE_EDIT_WINDOW as NODE_EDIT_WINDOW
 from .repository_metadata import EXTENDED_TYPE_TO_NEW_LRT as EXTENDED_TYPE_TO_NEW_LRT
 from .repository_nodes import DISCARD_TIMEOUT_SECONDS as DISCARD_TIMEOUT_SECONDS
 from .repository_nodes import derive_node_name as derive_node_name
 from .repository_preview import MAX_PREVIEW_REDIRECTS as MAX_PREVIEW_REDIRECTS
 from .repository_preview import PREVIEW_USER_AGENT as PREVIEW_USER_AGENT
+from .repository_support import node_created_at as node_created_at
+from .repository_write import PreviewSource as PreviewSource
 
 logger = logging.getLogger(__name__)
 
 # The name before 3.0.0, kept so existing imports keep working.
 _get_repository_config = get_repository_config
 
-
-# How long after its creation a node may still be rewritten through this service.
-# Past that point the content has been in the editorial queue long enough for a
-# human to have worked on it, and an automated write would replace that work
-# without anyone being told. The window is deliberately short: it covers the
-# session that produced the node, not later revisions.
-NODE_EDIT_WINDOW = timedelta(hours=2)
-
-# A preview image: awaited before the workflow runs, raises when there is none.
-PreviewSource = Callable[[], Awaitable[tuple[bytes, str]]]
-
-# Seconds of the write deadline the preview may not use: the workflow PUTs that
-# follow it still have to fit. A capture may take up to 90 s, the deadline
-# defaults to 100 s - without the reserve a slow page ends the write at the
-# deadline and the finished node is discarded. The preview is not worth that.
-PREVIEW_RESERVE_SECONDS = 15.0
-# Without workflow steps nothing follows the preview inside the deadline; this
-# margin keeps its own limit ahead of the deadline, so the preview is what
-# gets cut, not the write.
-PREVIEW_MARGIN_SECONDS = 1.0
 
 # The read-back after a finished write runs outside the deadline with this limit
 # of its own: the node is complete, a slow read must not turn it into a 504.
@@ -92,85 +93,39 @@ _ANSWER_MAYBE_LOST = (
 )
 
 
-@dataclass
-class NodeWrite:
-    """One write of metadata to the repository; /upload and /nodes describe theirs."""
-
-    metadata: dict[str, Any]
-    context: str = "default"
-    version: str = "latest"
-    # Node to rewrite (inside NODE_EDIT_WINDOW); None creates one in the inbox.
-    node_id: Optional[str] = None
-    check_duplicates: bool = False
-    # Read the finished node (or the duplicate) back into 'node_full'.
-    read_back: bool = False
-    write_extended_data: bool = True
-    extended_text: Optional[str] = None
-    collection_ids: Optional[list[str]] = None
-    # Workflow states run in order; empty runs none.
-    workflow_steps: list[str] = field(default_factory=list)
-    workflow_comment: Optional[str] = None
-    workflow_receiver: Optional[list[str]] = None
-    preview_source: Optional[PreviewSource] = None
+def _schema_loads(context: str, version: str, schema_file: Any) -> bool:
+    """Whether the schema a write names can be read (its fields are needed)."""
+    try:
+        get_schema_fields(context, version, schema_file)
+    except Exception as e:
+        logger.warning(f"⚠️ Schema {str(schema_file)[:120]!r} not loadable: {e}")
+        return False
+    return True
 
 
-@dataclass
-class _Target:
-    """What the write may put where: the cleaned metadata and the schema's fields."""
-
-    clean_metadata: dict[str, Any]
-    schema_file: Optional[str]
-    repo_field_ids: Any
-    inbox_id: str
-    # Properties of a handed-over node, as the edit-window check read them.
-    node_properties: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass
-class _Progress:
-    """What a write has done so far, for the cleanup when it fails or is cut off."""
-
-    # Only ever a node this call created: a node handed over by the caller
-    # holds their content and is not ours to bin.
-    created_node_id: Optional[str] = None
-    # Set while a create request is out: its node may exist without an id.
-    creating_since: Optional[datetime] = None
-    # The create answer got lost and no new node turned up in the inbox.
-    maybe_created: bool = False
-    # A write request to the node has gone out (aspects or metadata).
-    node_touched: bool = False
-    # From here the node is in the editorial process: never discarded.
-    workflow_started: bool = False
-    # Every write step ran: the node is complete and kept, whatever follows
-    # (building the answer, the read-back, a client that went away).
-    finished: bool = False
-
-    @property
-    def keeps_node(self) -> bool:
-        return self.workflow_started or self.finished
-
-
-@dataclass
-class _StepResults:
-    collections: Optional[dict[str, Any]] = None
-    extended: Optional[dict[str, Any]] = None
-    preview: Optional[dict[str, Any]] = None
-    workflow: Optional[dict[str, Any]] = None
-
-
-class RepositoryService(NodeMixin, MetadataWriteMixin, ReviewMixin):
+class RepositoryService(
+    NodeMixin,
+    MetadataWriteMixin,
+    ReviewMixin,
+    EditWindowMixin,
+    PreviewUploadMixin,
+    CutOffMixin,
+):
     """
     Service for uploading metadata to WLO edu-sharing repository.
 
     Write steps (_write_steps / _after_metadata):
-    1. Check for duplicates (by ccm:wwwurl), unless a node was handed over
-    2. Create the node with minimal data, or check the handed-over node's
-       editing window
+    1. Check for duplicates (by ccm:wwwurl: search and the newest of the
+       inbox), unless a node was handed over
+    2. Create the node with minimal data (1 and 2 one after the other per
+       URL), or check the handed-over node's editing window
     3. Add the aspects the special fields need, then set the metadata
-    4. Reference the node in collections (optional)
-    5. Write the extended fields (optional)
-    6. Store the preview image (optional; within what the deadline leaves)
-    7. Run the review workflow steps (from here the node is never discarded)
+    4. Write the extended fields (optional)
+    5. Store the preview image (optional; within what the deadline leaves
+       for the steps after it)
+    6. Reference the node in collections (optional; from the first request
+       on the node is never discarded)
+    7. Run the review workflow steps (optional; the node is never discarded)
     8. Read the finished node back (optional; outside the deadline)
     """
 
@@ -224,12 +179,14 @@ class RepositoryService(NodeMixin, MetadataWriteMixin, ReviewMixin):
                 "error": "cclom:title fehlt — ein Node ohne Titel ist im Eingangsordner nicht auffindbar.",
             }
 
-        target = _Target(clean_metadata, None, None, config["inbox_id"])
-        progress = _Progress()
+        target = WriteTarget(clean_metadata, None, None, config["inbox_id"])
+        progress = WriteProgress()
         try:
             timeout = httpx.Timeout(45.0, connect=10.0)
             async with httpx.AsyncClient(
-                timeout=timeout, event_hooks=OWN_SERVICE_HOOKS
+                timeout=timeout,
+                event_hooks=OWN_SERVICE_HOOKS,
+                verify=shared_tls_context(),
             ) as client:
                 async with asyncio.timeout_at(deadline):
                     return await self._create_only(
@@ -239,7 +196,7 @@ class RepositoryService(NodeMixin, MetadataWriteMixin, ReviewMixin):
             return await self._create_cut_off(base_url, target, progress)
         except _ANSWER_MAYBE_LOST:
             if progress.created_node_id:
-                return self._created_result(
+                return created_result(
                     base_url, progress.created_node_id, clean_metadata
                 )
             return {
@@ -259,71 +216,54 @@ class RepositoryService(NodeMixin, MetadataWriteMixin, ReviewMixin):
         self,
         client: httpx.AsyncClient,
         base_url: str,
-        target: "_Target",
-        progress: "_Progress",
+        target: WriteTarget,
+        progress: WriteProgress,
         check_duplicates: bool,
     ) -> dict[str, Any]:
         """The requests of POST /node: duplicate check (optional), create."""
         clean_metadata = target.clean_metadata
-        duplicate_warning = None
-        if check_duplicates:
-            url = identifying_url(clean_metadata)
-            if url:
-                duplicate = await self._check_duplicate(client, base_url, url)
-                if duplicate.get("exists"):
-                    return await self._duplicate_result(
-                        client, base_url, url, duplicate, read_back=False
-                    )
-                duplicate_warning = duplicate.get("warning")
-
-        result = await self._create_tracked(client, base_url, target, progress)
+        duplicate, result, duplicate_warning = await self._create_unless_duplicate(
+            client, base_url, target, progress, check_duplicates
+        )
+        if duplicate is not None:
+            return await self._duplicate_result(
+                client, base_url, duplicate, clean_metadata, read_back=False
+            )
         if not result.get("success"):
             return result
-        created = self._created_result(base_url, result["nodeId"], clean_metadata)
+        created = created_result(base_url, result["nodeId"], clean_metadata)
         if duplicate_warning:
             created["error"] = duplicate_skipped(duplicate_warning)
         return created
 
-    def _created_result(
-        self, base_url: str, node_id: str, clean_metadata: dict[str, Any]
-    ) -> dict[str, Any]:
-        return {
-            "success": True,
-            "node": {
-                "nodeId": node_id,
-                "title": text_value(clean_metadata.get("cclom:title")),
-                "wwwurl": identifying_url(clean_metadata),
-                "repositoryUrl": f"{base_url}/components/render/{node_id}",
-            },
-        }
+    async def _create_unless_duplicate(
+        self,
+        client: httpx.AsyncClient,
+        base_url: str,
+        target: WriteTarget,
+        progress: WriteProgress,
+        check_duplicates: bool,
+    ) -> tuple[Optional[dict[str, Any]], dict[str, Any], Optional[str]]:
+        """
+        (duplicate, create result, warning): the duplicate check, then the create.
 
-    async def _create_cut_off(
-        self, base_url: str, target: "_Target", progress: "_Progress"
-    ) -> dict[str, Any]:
-        """The answer for a POST /node its deadline ended; a node found is named."""
-        node_id = progress.created_node_id
-        if node_id is None and progress.creating_since is not None:
-            node_id = await self._find_lost_node(
-                base_url,
-                target.inbox_id,
-                target.clean_metadata,
-                progress.creating_since,
+        With the check they are one step per URL: a second request for the same
+        URL waits until the first has created its node and then finds it (audit
+        14.11., R-05). A duplicate comes without a create result; `warning`
+        names a check that could not run.
+        """
+        url = identifying_url(target.clean_metadata) if check_duplicates else None
+        if not url:
+            created = await self._create_tracked(client, base_url, target, progress)
+            return None, created, None
+        async with url_locks.holding(url_lock_key(url)):
+            duplicate = await self._check_duplicate(
+                client, base_url, url, target.inbox_id
             )
-        result: dict[str, Any] = {"success": False, "error_code": "upload_timeout"}
-        if node_id:
-            result["node"] = self._created_result(
-                base_url, node_id, target.clean_metadata
-            )["node"]
-            note = f"Node {node_id} wurde trotzdem angelegt"
-        elif progress.creating_since is not None:
-            note = (
-                "möglicherweise wurde trotzdem ein Node angelegt; bitte den "
-                "Eingangsordner prüfen"
-            )
-        else:
-            note = "es wurde kein Node angelegt"
-        result["error"] = f"Zeitlimit beim Anlegen des Nodes erreicht — {note}"
-        return result
+            if duplicate.get("exists"):
+                return duplicate, {}, None
+            created = await self._create_tracked(client, base_url, target, progress)
+            return None, created, duplicate.get("warning")
 
     async def upload_metadata(
         self,
@@ -345,7 +285,10 @@ class RepositoryService(NodeMixin, MetadataWriteMixin, ReviewMixin):
         deadline: Optional[float] = None,
     ) -> dict[str, Any]:
         """
-        Upload metadata to WLO repository (/upload).
+        Upload metadata to WLO repository: the write of /upload from keywords.
+
+        The router builds its NodeWrite itself and calls write_node (audit
+        14.11., Q-10); this signature stays for callers that name the options.
 
         `preview_source` returns the preview image (bytes, mimetype), e.g. a
         screenshot captured meanwhile. It is awaited and stored before the
@@ -377,8 +320,8 @@ class RepositoryService(NodeMixin, MetadataWriteMixin, ReviewMixin):
         Returns:
             Upload result with nodeId, success status, etc.
         """
-        steps = (workflow_steps or [DEFAULT_WORKFLOW_STATUS]) if start_workflow else []
-        return await self._write_node(
+        steps = upload_workflow_steps(start_workflow, workflow_steps)
+        return await self.write_node(
             NodeWrite(
                 metadata=metadata,
                 context=context,
@@ -411,7 +354,8 @@ class RepositoryService(NodeMixin, MetadataWriteMixin, ReviewMixin):
         deadline: Optional[float] = None,
     ) -> dict[str, Any]:
         """
-        Write metadata to the repository — creating a node or updating one (/nodes).
+        Write metadata to the repository — creating a node or updating one: the
+        write of /nodes from keywords (the router builds its NodeWrite itself).
 
         Without `node_id` a node is created in the inbox. With one, that node is
         rewritten, provided it is still within NODE_EDIT_WINDOW. Fields the
@@ -435,7 +379,7 @@ class RepositoryService(NodeMixin, MetadataWriteMixin, ReviewMixin):
         Returns:
             Result dict with the node, the write counts and the full node.
         """
-        return await self._write_node(
+        return await self.write_node(
             NodeWrite(
                 metadata=metadata,
                 context=context,
@@ -451,27 +395,33 @@ class RepositoryService(NodeMixin, MetadataWriteMixin, ReviewMixin):
             deadline,
         )
 
-    async def _write_node(
+    async def write_node(
         self, job: NodeWrite, deadline: Optional[float] = None
     ) -> dict[str, Any]:
         """
         The one write path of /upload and /nodes.
 
         Refuses what may not be written before the first request, then: node,
-        aspects, metadata, collections, extended fields, preview, workflow,
+        aspects, metadata, extended fields, preview, collections, workflow,
         read-back. A node this call created is discarded when a later step fails
         or the request is cut off; at the deadline (loop time) the answer says
         what happened to it (error_code upload_timeout, audit D-04).
         """
         config = get_repository_config()
         base_url = config["base_url"]
+        job = with_resolved_schema(job)
         clean_metadata = self._extract_metadata_fields(job.metadata)
         schema_file = job.metadata.get("metadataset") or None
 
-        # Refuse before anything is written. A value whose shape contradicts the
-        # schema cannot be silently corrected here: the caller reviewed what they
-        # sent, and the repository must hold that, not a version of it nobody saw.
-        # Checked ahead of the first request so no half-written node is left over.
+        # Refuse before anything is written. A schema that does not load would
+        # leave core.json alone to decide what is written (audit 14.11., R-04).
+        if schema_file and not _schema_loads(job.context, job.version, schema_file):
+            return unloadable_schema_result(job.context, job.version, schema_file)
+
+        # A value whose shape contradicts the schema cannot be silently
+        # corrected here: the caller reviewed what they sent, and the repository
+        # must hold that, not a version of it nobody saw. Checked ahead of the
+        # first request so no half-written node is left over.
         if schema_file:
             violations = find_object_shape_violations(
                 clean_metadata, job.context, job.version, schema_file
@@ -492,15 +442,16 @@ class RepositoryService(NodeMixin, MetadataWriteMixin, ReviewMixin):
         if not repo_field_ids:
             return no_writable_fields_result(job.context, job.version, schema_file)
 
-        target = _Target(
+        target = WriteTarget(
             clean_metadata, schema_file, repo_field_ids, config["inbox_id"]
         )
-        progress = _Progress()
+        progress = WriteProgress()
         try:
             # Longer timeout for sequential edu-sharing calls on hosted runtimes
             async with httpx.AsyncClient(
                 timeout=httpx.Timeout(45.0, connect=10.0),
                 event_hooks=OWN_SERVICE_HOOKS,
+                verify=shared_tls_context(),
             ) as client:
                 # The deadline covers the write requests, not the cleanup after
                 # it (below) nor the read-back of a finished node (own limit).
@@ -562,47 +513,13 @@ class RepositoryService(NodeMixin, MetadataWriteMixin, ReviewMixin):
             logger.warning(f"⚠️ Read-back of node {node_id} timed out")
             return None
 
-    async def _write_failed(
-        self, base_url: str, job: NodeWrite, progress: "_Progress", error: str
-    ) -> dict[str, Any]:
-        """
-        The answer for a write that raised; a node already kept is not discarded.
-
-        A kept node is named in `node`, also one the caller handed over. The
-        discard is shielded: a cancel arriving meanwhile must not abort it.
-        """
-        node_id = progress.created_node_id
-        if job.node_id and progress.node_touched and not progress.keeps_node:
-            # The request may have reached the repository before it raised
-            # (e.g. ReadTimeout): said like the deadline path says it.
-            return {
-                "success": False,
-                "error": f"{error} — der bestehende Node {job.node_id} kann "
-                "teilweise geschrieben sein",
-                "node": {
-                    "nodeId": job.node_id,
-                    "repositoryUrl": f"{base_url}/components/render/{job.node_id}",
-                },
-            }
-        if progress.keeps_node and node_id is None:
-            node_id = job.node_id
-        return await asyncio.shield(
-            self._failed(
-                base_url,
-                node_id,
-                error,
-                maybe_created=progress.maybe_created,
-                keep=progress.keeps_node,
-            )
-        )
-
     async def _write_steps(
         self,
         client: httpx.AsyncClient,
         base_url: str,
         job: NodeWrite,
-        target: "_Target",
-        progress: "_Progress",
+        target: WriteTarget,
+        progress: WriteProgress,
         deadline: Optional[float] = None,
     ) -> dict[str, Any]:
         """The requests of one write, in the order the editorial process needs them."""
@@ -611,20 +528,10 @@ class RepositoryService(NodeMixin, MetadataWriteMixin, ReviewMixin):
         # 1. Check for duplicates. Skipped for a node that was handed over: the
         # check searches by ccm:wwwurl, and the node being filled in already
         # carries that URL — it would find itself and refuse the upload.
-        duplicate_warning = None
-        if job.check_duplicates and not job.node_id:
-            url = identifying_url(clean_metadata)
-            if url:
-                duplicate = await self._check_duplicate(client, base_url, url)
-                if duplicate.get("exists"):
-                    return await self._duplicate_result(
-                        client, base_url, url, duplicate, job.read_back
-                    )
-                duplicate_warning = duplicate.get("warning")
-
         # 2. Create the node, or check that the given one may still be written:
         # after the window it has reached the editors, and this call would
         # replace their work.
+        duplicate_warning = None
         if job.node_id:
             refusal, existing = await self._edit_check(client, base_url, job.node_id)
             if refusal is not None:
@@ -633,7 +540,14 @@ class RepositoryService(NodeMixin, MetadataWriteMixin, ReviewMixin):
             node_id = job.node_id
             logger.info(f"📌 Writing existing node: {node_id}")
         else:
-            node_result = await self._create_tracked(client, base_url, target, progress)
+            outcome = await self._create_unless_duplicate(
+                client, base_url, target, progress, job.check_duplicates
+            )
+            duplicate, node_result, duplicate_warning = outcome
+            if duplicate is not None:
+                return await self._duplicate_result(
+                    client, base_url, duplicate, clean_metadata, job.read_back
+                )
             if not node_result.get("success"):
                 return {**node_result, "error_code": WRITE_FAILED}
             node_id = node_result["nodeId"]
@@ -657,7 +571,7 @@ class RepositoryService(NodeMixin, MetadataWriteMixin, ReviewMixin):
             client, base_url, node_id, job, target, progress, deadline
         )
         progress.finished = True
-        result = self._written_result(
+        result = written_result(
             base_url, node_id, target, progress, metadata_result, steps
         )
         problems = partial_problems(
@@ -672,7 +586,7 @@ class RepositoryService(NodeMixin, MetadataWriteMixin, ReviewMixin):
             problems.insert(0, duplicate_skipped(duplicate_warning))
         if problems:
             result["error"] = "; ".join(problems)
-        # 8. The read-back (job.read_back) follows in _write_node, outside the
+        # 8. The read-back (job.read_back) follows in write_node, outside the
         # deadline: the node is complete by now.
         return result
 
@@ -682,23 +596,14 @@ class RepositoryService(NodeMixin, MetadataWriteMixin, ReviewMixin):
         base_url: str,
         node_id: str,
         job: NodeWrite,
-        target: "_Target",
-        progress: "_Progress",
+        target: WriteTarget,
+        progress: WriteProgress,
         deadline: Optional[float] = None,
-    ) -> "_StepResults":
-        """Collections, extended fields, preview, workflow — each reported, none fatal."""
-        steps = _StepResults()
+    ) -> StepResults:
+        """Extended fields, preview, collections, workflow — each reported, none fatal."""
+        steps = StepResults()
 
-        # 4. Reference the node in collections (from metadata and/or request)
-        all_collection_ids = extract_collection_ids(
-            target.clean_metadata, job.collection_ids
-        )
-        if all_collection_ids:
-            steps.collections = await set_collections(
-                client, self._auth_header, base_url, node_id, all_collection_ids
-            )
-
-        # 5. Write extended data fields (bypasses repo_field filter)
+        # 4. Write extended data fields (bypasses repo_field filter)
         if job.write_extended_data:
             steps.extended = await self._write_extended_fields(
                 client,
@@ -713,16 +618,33 @@ class RepositoryService(NodeMixin, MetadataWriteMixin, ReviewMixin):
                 keep_lrt=bool(first_value(target.node_properties.get("ccm:oeh_lrt"))),
             )
 
-        # 6. Preview before the workflow, so whoever picks the node out of the
+        all_collection_ids = extract_collection_ids(
+            target.clean_metadata, job.collection_ids
+        )
+
+        # 5. Preview before the workflow, so whoever picks the node out of the
         # queue sees it
         if job.preview_source:
-            reserve = (
-                PREVIEW_RESERVE_SECONDS
-                if job.workflow_steps
-                else PREVIEW_MARGIN_SECONDS
-            )
+            reserve = preview_reserve(len(all_collection_ids), len(job.workflow_steps))
             steps.preview = await self._bounded_preview(
                 client, base_url, node_id, job.preview_source, deadline, reserve
+            )
+
+        # 6. Reference the node in collections (from metadata and/or request).
+        # Last before the workflow: a deadline during the steps above discards
+        # a node this call created, and a reference set before them stayed
+        # behind in the collection, pointing at it (audit 13.11., L-18). From
+        # the first request on the node is kept (audit 14.11., R-01).
+        if all_collection_ids:
+            progress.collection_ids = all_collection_ids
+            progress.collection_results = []
+            steps.collections = await set_collections(
+                client,
+                self._auth_header,
+                base_url,
+                node_id,
+                all_collection_ids,
+                progress.collection_results,
             )
 
         # 7. The workflow states, each its own history entry
@@ -739,12 +661,29 @@ class RepositoryService(NodeMixin, MetadataWriteMixin, ReviewMixin):
             )
         return steps
 
+    async def _duplicate_result(
+        self,
+        client: httpx.AsyncClient,
+        base_url: str,
+        duplicate: dict[str, Any],
+        clean_metadata: dict[str, Any],
+        read_back: bool,
+    ) -> dict[str, Any]:
+        """The refusal for a URL the repository already holds, read back if asked."""
+        result = duplicate_result(base_url, duplicate, clean_metadata)
+        existing = duplicate.get("nodeId")
+        if read_back and existing:
+            result["node_full"] = await self._fetch_full_node(
+                client, base_url, existing
+            )
+        return result
+
     async def _create_tracked(
         self,
         client: httpx.AsyncClient,
         base_url: str,
-        target: "_Target",
-        progress: "_Progress",
+        target: WriteTarget,
+        progress: WriteProgress,
     ) -> dict[str, Any]:
         """
         Create the node and remember it, so a failure afterwards can undo it.
@@ -763,6 +702,7 @@ class RepositoryService(NodeMixin, MetadataWriteMixin, ReviewMixin):
                 target.inbox_id,
                 target.clean_metadata,
                 progress.creating_since,
+                target.repo_field_ids,
             )
             progress.maybe_created = progress.created_node_id is None
             raise
@@ -771,459 +711,6 @@ class RepositoryService(NodeMixin, MetadataWriteMixin, ReviewMixin):
             progress.created_node_id = node_result["nodeId"]
             logger.info(f"✅ Created node: {node_result['nodeId']}")
         return node_result
-
-    async def _clean_up_cut_off(
-        self, base_url: str, target: "_Target", progress: "_Progress"
-    ) -> Optional[dict[str, Any]]:
-        """
-        Undo what a cut-off write created, and say what happened to the node.
-
-        Returns the node as the answer names it: discarded, handed back for
-        cleanup, or kept because it already went into the workflow (the
-        editors may have been notified). None when no node was touched.
-        """
-        node_id = progress.created_node_id
-        if node_id is None and progress.creating_since is not None:
-            node_id = await self._find_lost_node(
-                base_url,
-                target.inbox_id,
-                target.clean_metadata,
-                progress.creating_since,
-            )
-        if node_id is None:
-            return None
-        info = {
-            "nodeId": node_id,
-            "repositoryUrl": f"{base_url}/components/render/{node_id}",
-        }
-        if progress.keeps_node:
-            where = "und im Workflow" if progress.workflow_started else "vollständig"
-            return {
-                "node": info,
-                "note": f"Node {node_id} ist geschrieben {where}; "
-                "er wurde nicht verworfen",
-            }
-        logger.warning(f"⏱️ Write cut off; discarding node {node_id}")
-        if await self._discard_node(base_url, node_id):
-            return {
-                "discarded_node": node_id,
-                "note": "der dabei angelegte Node wurde verworfen",
-            }
-        return {
-            "node": info,
-            "note": f"der unvollständige Node {node_id} konnte nicht verworfen "
-            "werden und liegt weiterhin im Eingangsordner",
-        }
-
-    async def _cut_off_result(
-        self, base_url: str, job: NodeWrite, target: "_Target", progress: "_Progress"
-    ) -> dict[str, Any]:
-        """The answer for a write its deadline ended (audit D-04)."""
-        outcome = await self._clean_up_cut_off(base_url, target, progress)
-        result: dict[str, Any] = {"success": False, "error_code": "upload_timeout"}
-        if outcome:
-            note = outcome.pop("note")
-            result.update(outcome)
-        elif job.node_id:
-            note = (
-                f"der bestehende Node {job.node_id} kann teilweise geschrieben sein"
-                if progress.node_touched
-                else f"der bestehende Node {job.node_id} wurde nicht verändert"
-            )
-            result["node"] = {"nodeId": job.node_id}
-        elif progress.creating_since is not None:
-            note = (
-                "möglicherweise wurde trotzdem ein Node angelegt; bitte den "
-                "Eingangsordner prüfen"
-            )
-        else:
-            note = "es wurde kein Node angelegt"
-        result["error"] = f"Zeitlimit beim Schreiben ins Repository erreicht — {note}"
-        return result
-
-    async def _duplicate_result(
-        self,
-        client: httpx.AsyncClient,
-        base_url: str,
-        url: str,
-        duplicate: dict[str, Any],
-        read_back: bool,
-    ) -> dict[str, Any]:
-        """The refusal for a URL the repository already holds, with that node."""
-        existing = duplicate.get("nodeId")
-        result: dict[str, Any] = {
-            "success": False,
-            "duplicate": True,
-            "node": {
-                "nodeId": existing,
-                "title": duplicate.get("title"),
-                "description": duplicate.get("description"),
-                "wwwurl": url,
-                "repositoryUrl": f"{base_url}/components/render/{existing}",
-            },
-            "error": f'URL existiert bereits: "{duplicate.get("title")}"',
-        }
-        if read_back and existing:
-            result["node_full"] = await self._fetch_full_node(
-                client, base_url, existing
-            )
-        return result
-
-    def _written_result(
-        self,
-        base_url: str,
-        node_id: str,
-        target: "_Target",
-        progress: "_Progress",
-        metadata_result: dict[str, Any],
-        steps: "_StepResults",
-    ) -> dict[str, Any]:
-        """The answer for a write that went through, before problems and read-back."""
-        clean_metadata = target.clean_metadata
-        # With fallbacks for the organization schema
-        title = text_value(
-            clean_metadata.get("cclom:title") or clean_metadata.get("schema:name")
-        )
-        description = text_value(
-            clean_metadata.get("cclom:general_description")
-            or clean_metadata.get("schema:description")
-        )
-        result: dict[str, Any] = {
-            "success": True,
-            # Which schema decided what may be written. Without it a caller
-            # cannot tell a complete upload from one that quietly fell back to
-            # core.json and dropped the type-specific fields — both answer 200.
-            "schema_used": target.schema_file,
-            "repo_fields_available": len(target.repo_field_ids),
-            # False when the caller handed the node over. Both answer 200 with
-            # the same nodeId, so nothing else tells them apart.
-            "node_created": progress.created_node_id is not None,
-            "node": {
-                "nodeId": node_id,
-                "title": title,
-                "description": description[:200] + "..."
-                if description and len(description) > 200
-                else description,
-                "wwwurl": identifying_url(clean_metadata),
-                "repositoryUrl": f"{base_url}/components/render/{node_id}",
-            },
-            "fields_written": metadata_result.get("fields_written", 0),
-            "fields_skipped": metadata_result.get("fields_skipped", 0),
-        }
-        if steps.collections is not None:
-            result["collections"] = steps.collections["results"]
-        if steps.workflow is not None:
-            result["workflow"] = steps.workflow["steps"]
-        if steps.preview is not None:
-            result["preview"] = steps.preview
-        field_errors = metadata_result.get("field_errors", [])
-        if field_errors:
-            result["field_errors"] = field_errors
-        return result
-
-    async def _reject_if_too_old(
-        self, client: httpx.AsyncClient, base_url: str, node_id: str
-    ) -> Optional[dict[str, Any]]:
-        """
-        Refuse to rewrite a node that has left its editing window.
-
-        Returns the error result to answer with, or None when the node may be
-        written. Fails closed: a node that cannot be read or cannot be dated is
-        refused as well, because the guard protects editorial work this service
-        has no other way of seeing.
-        """
-        refusal, _ = await self._edit_check(client, base_url, node_id)
-        return refusal
-
-    async def _edit_check(
-        self, client: httpx.AsyncClient, base_url: str, node_id: str
-    ) -> tuple[Optional[dict[str, Any]], Optional[dict[str, Any]]]:
-        """(refusal, None) or (None, the node as read) - see _reject_if_too_old."""
-        node, missing = await self._read_node(client, base_url, node_id)
-        node_info = {
-            "nodeId": node_id,
-            "repositoryUrl": f"{base_url}/components/render/{node_id}",
-        }
-
-        if node is None and not missing:
-            # An outage says nothing about the node: not a 404 (502 instead).
-            return {
-                "success": False,
-                "error_code": "node_unreadable",
-                "error": (
-                    f"Node {node_id} konnte wegen eines Repository-Fehlers nicht "
-                    "gelesen werden — bitte später erneut versuchen."
-                ),
-                "node": node_info,
-            }, None
-
-        if node is None:
-            return {
-                "success": False,
-                "error_code": "node_not_found",
-                "error": (
-                    f"Node {node_id} konnte nicht gelesen werden — er existiert "
-                    "nicht oder der Dienst hat keinen Zugriff darauf."
-                ),
-                "node": node_info,
-            }, None
-
-        created = node_created_at(node)
-        if created is None:
-            return {
-                "success": False,
-                "error_code": "node_age_unknown",
-                "error": (
-                    f"Die Erstellungszeit von Node {node_id} ist nicht lesbar — "
-                    "das Bearbeitungsfenster lässt sich nicht prüfen."
-                ),
-                "node": node_info,
-                "node_full": node,
-            }, None
-
-        window_hours = NODE_EDIT_WINDOW.total_seconds() / 3600
-        age_hours = (datetime.now(timezone.utc) - created).total_seconds() / 3600
-        if age_hours > window_hours:
-            logger.info(f"🔒 Node {node_id} is {age_hours:.1f}h old — edit refused")
-            return {
-                "success": False,
-                "error_code": "node_too_old",
-                "error": (
-                    f"Node {node_id} wurde am {created.isoformat()} angelegt und "
-                    f"ist {age_hours:.1f} Stunden alt. Bearbeitet werden kann nur "
-                    f"innerhalb von {window_hours:.0f} Stunden nach dem Anlegen."
-                ),
-                "node": node_info,
-                "node_full": node,
-            }, None
-
-        return None, node
-
-    async def preview_refusal(self, node_id: str) -> Optional[dict[str, Any]]:
-        """
-        The refusal upload_preview would answer for this node, or None.
-
-        For /screenshot, which checks before it starts the browser: a node
-        outside its window must not hold one of the few capture slots.
-        """
-        base_url = get_repository_config()["base_url"]
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(45.0, connect=10.0), event_hooks=OWN_SERVICE_HOOKS
-        ) as client:
-            return await self._reject_if_too_old(client, base_url, node_id)
-
-    async def upload_preview(
-        self, node_id: str, image: bytes, mimetype: str, window_checked: bool = False
-    ) -> dict[str, Any]:
-        """
-        Store an image as preview of an existing node - inside its editing window.
-
-        The window protects editorial work like it does for /upload and /nodes:
-        a published node keeps its preview. Returns the refusal (error_code
-        node_too_old, node_age_unknown, node_not_found or node_unreadable) or
-        the upload result; never raises. `window_checked`: preview_refusal ran
-        just before, the window is not read a second time.
-        """
-        base_url = get_repository_config()["base_url"]
-        timeout = httpx.Timeout(45.0, connect=10.0)
-        async with httpx.AsyncClient(
-            timeout=timeout, event_hooks=OWN_SERVICE_HOOKS
-        ) as client:
-            if not window_checked:
-                refusal = await self._reject_if_too_old(client, base_url, node_id)
-                if refusal:
-                    return refusal
-            return await self._post_preview(client, base_url, node_id, image, mimetype)
-
-    async def _bounded_preview(
-        self,
-        client: httpx.AsyncClient,
-        base_url: str,
-        node_id: str,
-        preview_source: PreviewSource,
-        deadline: Optional[float],
-        reserve: float,
-    ) -> dict[str, Any]:
-        """
-        The preview within what the deadline leaves after `reserve` seconds.
-
-        Out of time it is reported as failed and the write goes on: the node
-        holds its metadata already, and a missing picture is not worth a 504
-        that discards it.
-        """
-        if deadline is None:
-            return await self._preview_from_source(
-                client, base_url, node_id, preview_source
-            )
-        budget = deadline - asyncio.get_running_loop().time() - reserve
-        unavailable = {
-            "success": False,
-            "error": "Vorschaubild nicht rechtzeitig verfügbar — ohne Vorschau "
-            "fortgefahren, damit das Zeitlimit für den Workflow reicht",
-        }
-        if budget <= 0:
-            logger.warning("⚠️ Preview skipped: no time left before the workflow")
-            return unavailable
-        try:
-            async with asyncio.timeout(budget):
-                return await self._preview_from_source(
-                    client, base_url, node_id, preview_source
-                )
-        except TimeoutError:
-            logger.warning(f"⚠️ Preview given up after {budget:.1f} s")
-            return unavailable
-
-    async def _preview_from_source(
-        self,
-        client: httpx.AsyncClient,
-        base_url: str,
-        node_id: str,
-        preview_source: Callable[[], Awaitable[tuple[bytes, str]]],
-    ) -> dict[str, Any]:
-        """Await an image source and store the image; failures become the result."""
-        try:
-            image, mimetype = await preview_source()
-        except PreviewError as e:
-            logger.warning(f"⚠️ Preview rejected: {e}")
-            return {"success": False, "error": str(e)}
-        except Exception as e:
-            # The text can name internal hosts: log it, answer with the type.
-            logger.warning(f"⚠️ Preview not available: {type(e).__name__}: {e}")
-            return {
-                "success": False,
-                "error": f"Vorschaubild nicht verfügbar ({type(e).__name__})",
-            }
-        return await self._post_preview(client, base_url, node_id, image, mimetype)
-
-    def _fetched_preview(self, preview: str) -> PreviewSource:
-        """
-        An image source for a URL or inline image data (data URL, bare base64).
-
-        A URL is fetched with a client of its own: the host is a third party and
-        gets no tracing headers.
-        """
-
-        async def fetch() -> tuple[bytes, str]:
-            async with httpx.AsyncClient(
-                timeout=httpx.Timeout(30.0, connect=10.0),
-                event_hooks=THIRD_PARTY_HOOKS,
-            ) as fetch_client:
-                return await resolve_preview(fetch_client, preview)
-
-        return fetch
-
-    async def _post_preview(
-        self,
-        client: httpx.AsyncClient,
-        base_url: str,
-        node_id: str,
-        image: bytes,
-        mimetype: str,
-    ) -> dict[str, Any]:
-        """Upload image bytes as the node's preview; never raises."""
-        extension = mimetype.rsplit("/", 1)[-1]
-        url = (
-            f"{base_url}/rest/node/v1/nodes/-home-/{node_id}/preview"
-            f"?mimetype={quote(mimetype, safe='')}&createVersion=true"
-        )
-
-        try:
-            response = await client.post(
-                url,
-                headers={"Authorization": self._auth_header},
-                files={"image": (f"preview.{extension}", image, mimetype)},
-            )
-        except Exception as e:
-            # The text can name internal hosts: log it, answer with the type.
-            logger.warning(f"⚠️ Preview upload failed: {type(e).__name__}: {e}")
-            return {
-                "success": False,
-                "error": f"Upload des Vorschaubilds fehlgeschlagen ({type(e).__name__})",
-            }
-
-        if response.status_code in (200, 201, 204):
-            logger.info(f"🖼️ Preview set on {node_id} ({mimetype}, {len(image)} bytes)")
-            return {
-                "success": True,
-                "mimetype": mimetype,
-                "size_bytes": len(image),
-            }
-
-        logger.warning(f"⚠️ Preview upload failed: HTTP {response.status_code}")
-        return {
-            "success": False,
-            "error": repository_error(response),
-        }
-
-    async def _metadata_rejected(
-        self, base_url: str, created_node_id: Optional[str], metadata_result: dict
-    ) -> dict[str, Any]:
-        """Answer for a metadata write the repository refused entirely."""
-        result = await self._failed(
-            base_url,
-            created_node_id,
-            "Das Repository hat keines der Metadatenfelder angenommen",
-        )
-        result["step"] = "setMetadata"
-        result["field_errors"] = metadata_result.get("field_errors", [])
-        return result
-
-    async def _failed(
-        self,
-        base_url: str,
-        created_node_id: Optional[str],
-        error: str,
-        maybe_created: bool = False,
-        keep: bool = False,
-    ) -> dict[str, Any]:
-        """
-        Build the error response and undo a half-finished upload.
-
-        The upload is create-then-populate. When the second half never runs, the
-        node stays in the inbox carrying only its title — invisible to the
-        caller, who sees success=false and retries, leaving one more behind
-        every time. Discarding it keeps a failed upload from becoming litter.
-
-        `keep`: the node is complete or already in the workflow (editors may
-        have been notified) - it is reported in `node`, never discarded. Only
-        with `keep` may the id be a node the caller handed over. Everything
-        else left nothing behind but litter: error_code WRITE_FAILED (502).
-        """
-        result: dict[str, Any] = {
-            "success": False,
-            "error_code": WRITE_FAILED,
-            "error": error,
-        }
-        if created_node_id and keep:
-            del result["error_code"]
-            result["node"] = {
-                "nodeId": created_node_id,
-                "repositoryUrl": f"{base_url}/components/render/{created_node_id}",
-            }
-            result["error"] = (
-                f"{error} — Node {created_node_id} ist bereits geschrieben und "
-                "wurde nicht verworfen"
-            )
-            return result
-        if not created_node_id:
-            if maybe_created:
-                # The answer to "create" got lost and no new node turned up.
-                result["error"] = (
-                    f"{error} — möglicherweise wurde trotzdem ein Node angelegt; "
-                    "bitte den Eingangsordner prüfen"
-                )
-            return result
-
-        if await self._discard_node(base_url, created_node_id):
-            result["discarded_node"] = created_node_id
-            result["error"] = f"{error} (unvollständiger Node wurde verworfen)"
-        else:
-            result["node"] = {"nodeId": created_node_id}
-            result["error"] = (
-                f"{error} — der unvollständige Node {created_node_id} konnte nicht "
-                "verworfen werden und liegt weiterhin im Eingangsordner"
-            )
-        return result
 
 
 _repository_service: Optional[RepositoryService] = None
@@ -1234,8 +721,6 @@ def get_repository_service() -> Optional[RepositoryService]:
     global _repository_service
 
     if _repository_service is None:
-        from ..config import get_settings
-
         settings = get_settings()
 
         username = settings.wlo_guest_username

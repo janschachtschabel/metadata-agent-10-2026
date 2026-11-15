@@ -11,8 +11,8 @@ import asyncio
 import pytest
 
 from src.config import Settings
-from src.services import llm_service as llm_module
 from src.services.llm_service import LLMService, reset_provider_gates
+from conftest import use_settings
 
 
 @pytest.fixture(autouse=True)
@@ -24,7 +24,7 @@ def _fresh_gates():
 
 async def test_a_failing_field_task_cancels_the_others(monkeypatch):
     cfg = Settings(_env_file=None, b_api_key="own-key", llm_retry_delay=0)
-    monkeypatch.setattr(llm_module, "get_settings", lambda: cfg)
+    use_settings(monkeypatch, cfg)
     service = LLMService(llm_provider="b-api-openai")
     started = asyncio.Event()
     cancelled = []

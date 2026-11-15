@@ -414,7 +414,7 @@ def test_upload_answers_a_refused_node_like_nodes_does(monkeypatch, error_code, 
     from src import main
 
     class _Refusing:
-        async def upload_metadata(self, **kwargs):
+        async def write_node(self, job, deadline=None):
             return {"success": False, "error_code": error_code, "error": "abgelehnt"}
 
     monkeypatch.setattr(deps, "get_repository_service", lambda: _Refusing())
@@ -432,7 +432,7 @@ def test_a_skipped_workflow_step_is_marked_in_the_api_answer(monkeypatch):
     from src import main
 
     class _Stopped:
-        async def upload_metadata(self, **kwargs):
+        async def write_node(self, job, deadline=None):
             return {
                 "success": True,
                 "node": {"nodeId": NODE_ID},

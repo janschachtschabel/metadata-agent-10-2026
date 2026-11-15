@@ -8,11 +8,12 @@ from typing import Any, Optional
 import httpx
 
 from ..utils.schema_loader import get_content_type_uri
-from .field_normalizer import find_object_shape_violations
+from .object_shapes import find_object_shape_violations
 from .repository_licenses import transform_license
 from .repository_values import (
     extract_geo_coordinates,
     normalize_for_repo,
+    skipped_fields,
     transform_author_to_vcard,
     transform_lrt,
 )
@@ -26,6 +27,12 @@ logger = logging.getLogger(__name__)
 # seconds (audit D-02). Each may take the client timeout; without a budget a
 # schema of 40 fields could hold the request for half an hour.
 FIELD_FALLBACK_SECONDS = 30.0
+
+# ccm:oeh_extendedText holds the text the metadata were generated from. That
+# text is cut to MAX_TEXT_LENGTH of the API layer before the model reads it;
+# a longer one a caller sends is cut to the same length instead of being
+# stored without any bound (audit 14.11., R-N).
+MAX_EXTENDED_TEXT_LENGTH = 150_000
 
 
 # Mapping: ccm:oeh_extendedType URI → oeh:new_lrt URI
@@ -60,7 +67,14 @@ def _extended_fields(
     the raise lands in the caller's except, which discards the half-written node.
     """
     extended_fields: dict[str, list[str]] = {}
-    fields = metadata_fields(metadata)
+    # Without the extended fields themselves: a record read from a node and
+    # sent again would nest the last upload's data in the next one's (audit
+    # 14.11., R-06).
+    fields = {
+        key: value
+        for key, value in metadata_fields(metadata).items()
+        if not key.startswith("ccm:oeh_extended")
+    }
 
     # 1. ccm:oeh_extendedType — resolve URI from metadataset (schema_file)
     type_uri = None
@@ -91,11 +105,11 @@ def _extended_fields(
         extended_fields["ccm:oeh_lrt"] = [lrt_uri]
         logger.info(f"📎 lrt: {lrt_uri} (from extendedType {type_uri.split('/')[-1]})")
 
-    # 2. ccm:oeh_extendedData — the metadata fields as JSON string
+    # 2. ccm:oeh_extendedData — the metadata fields as JSON string. The check
+    # reads the fields: in the whole record of a nested body it found none of
+    # them and passed every shape (audit 14.11., R-N).
     if schema_file:
-        violations = find_object_shape_violations(
-            metadata, context, version, schema_file
-        )
+        violations = find_object_shape_violations(fields, context, version, schema_file)
         if violations:
             raise ValueError(
                 "ccm:oeh_extendedData nicht geschrieben — "
@@ -106,11 +120,80 @@ def _extended_fields(
         extended_fields["ccm:oeh_extendedData"] = [data]
         logger.info(f"📎 extendedData: {len(data)} chars")
 
-    # 3. ccm:oeh_extendedText — raw source text
+    # 3. ccm:oeh_extendedText — raw source text, no longer than a source text
+    # the generation reads
     if extended_text:
-        extended_fields["ccm:oeh_extendedText"] = [extended_text]
+        extended_fields["ccm:oeh_extendedText"] = [
+            extended_text[:MAX_EXTENDED_TEXT_LENGTH]
+        ]
         logger.info(f"📎 extendedText: {len(extended_text)} chars")
     return extended_fields
+
+
+def _cut_text_note(extended_text: Optional[str]) -> dict[str, str]:
+    """{'note': ...} for a raw text that was cut, for the answer; else {}."""
+    if not extended_text or len(extended_text) <= MAX_EXTENDED_TEXT_LENGTH:
+        return {}
+    logger.warning(
+        f"⚠️ extendedText cut from {len(extended_text)} to "
+        f"{MAX_EXTENDED_TEXT_LENGTH} characters"
+    )
+    return {
+        "note": f"Rohtext (ccm:oeh_extendedText) auf {MAX_EXTENDED_TEXT_LENGTH} "
+        f"Zeichen gekürzt (gesendet: {len(extended_text)})"
+    }
+
+
+_LICENCE_PAIR = ("ccm:commonlicense_key", "ccm:commonlicense_cc_version")
+
+
+def _write_units(normalized: dict[str, Any]) -> list[dict[str, Any]]:
+    """
+    The requests of the field-by-field fallback: one field each, but the
+    licence in one.
+
+    Key and version are one statement. Written apart, a refusal of one of them
+    left half a licence on the node: a key the repository reads as 4.0 where
+    the page said 3.0, or a version without a key (audit 14.11., R-N).
+    """
+    licence = {name: normalized[name] for name in _LICENCE_PAIR if name in normalized}
+    if len(licence) < 2:
+        return [{name: value} for name, value in normalized.items()]
+    return [licence] + [
+        {name: value} for name, value in normalized.items() if name not in licence
+    ]
+
+
+def _has_geo(metadata: dict) -> bool:
+    """Coordinates in schema:location, or complete ones in schema:geo."""
+    has_geo = False
+    locations = metadata.get("schema:location")
+    if locations:
+        if isinstance(locations, list):
+            for loc in locations:
+                if isinstance(loc, dict) and isinstance(loc.get("geo"), dict):
+                    has_geo = True
+                    break
+        elif isinstance(locations, dict) and isinstance(locations.get("geo"), dict):
+            has_geo = True
+    # Also check schema:geo (organization.json top-level)
+    if not has_geo and isinstance(metadata.get("schema:geo"), dict):
+        geo = metadata["schema:geo"]
+        if geo.get("latitude") is not None and geo.get("longitude") is not None:
+            has_geo = True
+    return has_geo
+
+
+def _aspects_needed(metadata: dict) -> list[str]:
+    """The aspects without which the repository drops fields of this record."""
+    extra_aspects = []
+    # cm:geographic → needed for cm:latitude, cm:longitude
+    if _has_geo(metadata):
+        extra_aspects.append("cm:geographic")
+    # cm:author → needed for ccm:lifecyclecontributer_author
+    if metadata.get("cm:author"):
+        extra_aspects.append("cm:author")
+    return extra_aspects
 
 
 class MetadataWriteMixin:
@@ -173,11 +256,15 @@ class MetadataWriteMixin:
         # Transform oeh:new_lrt → ccm:oeh_lrt (the property the repository keeps)
         transform_lrt(normalized, metadata)
 
+        # Sent with a value, written under no property (audit 14.11., R-13).
+        skipped = skipped_fields(metadata, normalized)
+
         if not normalized:
             return {
                 "success": True,
                 "fields_written": 0,
-                "fields_skipped": 0,
+                "fields_skipped": len(skipped),
+                "skipped_fields": skipped,
                 "field_errors": [],
             }
 
@@ -200,7 +287,8 @@ class MetadataWriteMixin:
             return {
                 "success": True,
                 "fields_written": len(normalized),
-                "fields_skipped": 0,
+                "fields_skipped": len(skipped),
+                "skipped_fields": skipped,
                 "field_errors": [],
             }
 
@@ -213,55 +301,23 @@ class MetadataWriteMixin:
 
         fields_written = 0
         fields_skipped = 0
-        field_errors = []
+        field_errors: list[dict[str, Any]] = []
         budget_ends = time.monotonic() + FIELD_FALLBACK_SECONDS
 
-        for field_id, field_value in normalized.items():
-            if time.monotonic() >= budget_ends:
-                fields_skipped += 1
-                field_errors.append(
-                    {
-                        "field_id": field_id,
-                        "error": "Nicht versucht: Zeitbudget für das Schreiben "
-                        f"Feld für Feld ({FIELD_FALLBACK_SECONDS:g} s) erschöpft",
-                        "status_code": None,
-                    }
-                )
+        for unit in _write_units(normalized):
+            error, status_code = await self._write_unit(
+                client, metadata_url, unit, budget_ends
+            )
+            if error is None:
+                fields_written += len(unit)
                 continue
-            try:
-                single_response = await client.post(
-                    metadata_url,
-                    headers={
-                        "Authorization": self._auth_header,
-                        "Content-Type": "application/json",
-                        "Accept": "application/json",
-                    },
-                    json={field_id: field_value},
-                )
-
-                if single_response.status_code in (200, 201):
-                    fields_written += 1
-                else:
-                    fields_skipped += 1
-                    field_errors.append(
-                        {
-                            "field_id": field_id,
-                            "error": repository_error(single_response),
-                            "status_code": single_response.status_code,
-                        }
-                    )
-                    logger.error(f"   ❌ {field_id}: {single_response.status_code}")
-            except Exception as e:
-                fields_skipped += 1
-                # The text can name internal hosts: log it, answer with the type.
-                field_errors.append(
-                    {
-                        "field_id": field_id,
-                        "error": f"Schreiben fehlgeschlagen ({type(e).__name__})",
-                        "status_code": None,
-                    }
-                )
-                logger.error(f"   ❌ {field_id}: {type(e).__name__}: {e}")
+            fields_skipped += len(unit)
+            if len(unit) > 1:
+                error = f"Lizenzschlüssel und -version nur zusammen: {error}"
+            field_errors.extend(
+                {"field_id": field_id, "error": error, "status_code": status_code}
+                for field_id in unit
+            )
 
         logger.info(
             f"📊 Field-by-field result: {fields_written} written, {fields_skipped} failed"
@@ -270,9 +326,38 @@ class MetadataWriteMixin:
         return {
             "success": fields_written > 0,
             "fields_written": fields_written,
-            "fields_skipped": fields_skipped,
+            # Refused or untried here (named in field_errors) plus the ones
+            # that were never eligible (named in skipped_fields).
+            "fields_skipped": fields_skipped + len(skipped),
+            "skipped_fields": skipped,
             "field_errors": field_errors,
         }
+
+    async def _write_unit(
+        self,
+        client: httpx.AsyncClient,
+        metadata_url: str,
+        unit: dict[str, Any],
+        budget_ends: float,
+    ) -> tuple[Optional[str], Optional[int]]:
+        """One request of the field-by-field fallback: (None, None), or (error, status)."""
+        names = ", ".join(unit)
+        if time.monotonic() >= budget_ends:
+            return (
+                "Nicht versucht: Zeitbudget für das Schreiben "
+                f"Feld für Feld ({FIELD_FALLBACK_SECONDS:g} s) erschöpft",
+                None,
+            )
+        try:
+            response = await self._post_fields(client, metadata_url, unit)
+        except Exception as e:
+            # The text can name internal hosts: log it, answer with the type.
+            logger.error(f"   ❌ {names}: {type(e).__name__}: {e}")
+            return f"Schreiben fehlgeschlagen ({type(e).__name__})", None
+        if response.status_code in (200, 201):
+            return None, None
+        logger.error(f"   ❌ {names}: {response.status_code}")
+        return repository_error(response), response.status_code
 
     async def _write_extended_fields(
         self,
@@ -300,6 +385,7 @@ class MetadataWriteMixin:
         if not extended_fields:
             logger.warning("⚠️ No extended fields to write")
             return {"success": True, "fields_written": 0}
+        cut = _cut_text_note(extended_text)
 
         try:
             # All in one request; on refusal field by field
@@ -308,7 +394,11 @@ class MetadataWriteMixin:
                 logger.info(
                     f"✅ Extended fields written: {list(extended_fields.keys())}"
                 )
-                return {"success": True, "fields_written": len(extended_fields)}
+                return {
+                    "success": True,
+                    "fields_written": len(extended_fields),
+                    **cut,
+                }
             logger.warning(
                 f"⚠️ Extended fields bulk write failed ({response.status_code}): "
                 f"{response.text[:300]}"
@@ -334,6 +424,7 @@ class MetadataWriteMixin:
                 "success": not failed,
                 "fields_written": written,
                 "failed_fields": failed,
+                **cut,
             }
 
         except Exception as e:
@@ -369,31 +460,7 @@ class MetadataWriteMixin:
         Returns a message for the caller when an aspect could not be set, since
         the fields depending on it are then lost although the write reports them.
         """
-        extra_aspects = []
-
-        # cm:geographic → needed for cm:latitude, cm:longitude
-        has_geo = False
-        locations = metadata.get("schema:location")
-        if locations:
-            if isinstance(locations, list):
-                for loc in locations:
-                    if isinstance(loc, dict) and isinstance(loc.get("geo"), dict):
-                        has_geo = True
-                        break
-            elif isinstance(locations, dict) and isinstance(locations.get("geo"), dict):
-                has_geo = True
-        # Also check schema:geo (organization.json top-level)
-        if not has_geo and isinstance(metadata.get("schema:geo"), dict):
-            geo = metadata["schema:geo"]
-            if geo.get("latitude") is not None and geo.get("longitude") is not None:
-                has_geo = True
-        if has_geo:
-            extra_aspects.append("cm:geographic")
-
-        # cm:author → needed for ccm:lifecyclecontributer_author
-        if metadata.get("cm:author"):
-            extra_aspects.append("cm:author")
-
+        extra_aspects = _aspects_needed(metadata)
         if not extra_aspects:
             return None
 

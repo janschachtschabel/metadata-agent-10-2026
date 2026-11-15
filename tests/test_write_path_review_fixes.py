@@ -551,7 +551,7 @@ def test_a_refused_upload_cancels_its_running_capture(monkeypatch, error_code, s
         started.append(asyncio.current_task())
         await asyncio.sleep(3600)
 
-    async def upload_metadata(**kwargs):
+    async def write_node(job, deadline=None):
         await asyncio.sleep(0)  # the capture task starts
         return {"success": False, "error_code": error_code, "error": "nein"}
 
@@ -561,7 +561,7 @@ def test_a_refused_upload_cancels_its_running_capture(monkeypatch, error_code, s
     monkeypatch.setattr(
         deps,
         "get_repository_service",
-        lambda: SimpleNamespace(upload_metadata=upload_metadata),
+        lambda: SimpleNamespace(write_node=write_node),
     )
 
     with TestClient(main.app) as client:

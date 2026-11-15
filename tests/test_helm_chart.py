@@ -22,7 +22,7 @@ from prometheus_client import REGISTRY
 import src.metrics  # noqa: F401 - registers the agent's metrics
 from src import main
 from src.config import INGRESS_TIMEOUT_SECONDS, Settings
-from src.metrics import UPSTREAM_SERVICES
+from src.metrics import GENERATION_STATUSES, HTTP_DURATION, UPSTREAM_SERVICES
 from src.services import llm_errors
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -119,9 +119,11 @@ def test_critical_llm_rules_ignore_the_callers_problems():
 
 def test_generation_status_values_exist():
     for rule in _alert_rules():
-        for value in _label_values(rule["expr"], "status"):
-            if "generations" in rule["expr"]:
-                assert value in {"success", "partial", "failed"}, rule["alert"]
+        for selector in re.findall(
+            r"metadata_agent_generations_total\{([^}]*)\}", rule["expr"]
+        ):
+            for value in _label_values(selector, "status"):
+                assert value in GENERATION_STATUSES, rule["alert"]
 
 
 def test_service_and_route_values_exist():
@@ -143,24 +145,26 @@ def test_upstream_rules_ignore_urls_callers_hand_in():
         for selector in re.findall(
             r"metadata_agent_upstream_\w+\{([^}]*)\}", rule["expr"]
         ):
+            # Either "other" is excluded, or the rule names its services.
             excluded = re.search(r'service\s*(!=|!~)\s*"([^"]*)"', selector)
-            assert excluded and "other" in excluded.group(2).split("|"), (
-                rule["alert"],
-                selector,
-            )
+            named = re.search(r'service\s*=~?\s*"([^"]*)"', selector)
+            assert (excluded and "other" in excluded.group(2).split("|")) or (
+                named and "other" not in named.group(1).split("|")
+            ), (rule["alert"], selector)
 
 
 def test_critical_llm_rules_see_a_series_that_starts_with_a_failure():
     """
     Audit OPS-06: increase() ignores a series' first value. Besides the series
-    created at start (src/metrics.py), each critical rule also counts series
-    younger than its window - `unless ... offset`.
+    created at start (src/metrics.py), each critical rule also reads when the
+    agent last failed (audit 14.11., O-34; tests/test_last_failure_gauges.py).
     """
     for rule in _alert_rules():
         if rule["labels"]["severity"] == "critical" and "llm_requests" in rule["expr"]:
-            assert "unless" in rule["expr"] and "offset 10m" in rule["expr"], rule[
-                "alert"
-            ]
+            assert (
+                "time() - max by (namespace) "
+                "(metadata_agent_llm_last_failure_timestamp_seconds{" in rule["expr"]
+            ), rule["alert"]
 
 
 def test_promtool_tests_cover_every_alert():
@@ -205,8 +209,28 @@ def test_chart_version_follows_the_service():
     project = (ROOT / "pyproject.toml").read_text("utf-8")
     version = re.search(r'^version = "([^"]+)"', project, re.MULTILINE).group(1)
 
-    assert chart["appVersion"] == version
+    # One version for service, image and chart: values and image always match
+    # (developer guide for services, chapter 4).
+    assert chart["version"] == chart["appVersion"] == version
     assert _values()["image"]["tag"] == f"v{version}"
+
+
+def _value_paths(node, prefix="") -> set[str]:
+    """Every value of values.yaml by its path; lists and empty maps are one value."""
+    if not isinstance(node, dict) or not node:
+        return {prefix}
+    paths = set()
+    for key, child in node.items():
+        paths |= _value_paths(child, f"{prefix}.{key}" if prefix else key)
+    return paths
+
+
+def test_every_chart_value_is_described():
+    """`## @param <path> <text>` for each value - and none for a value that is gone."""
+    text = (CHART / "values.yaml").read_text("utf-8")
+    described = dict(re.findall(r"^\s*## @param (\S+) (\S.*)$", text, re.MULTILINE))
+
+    assert set(described) == _value_paths(_values())
 
 
 # ------------------------------------------------------------ network policy
@@ -261,11 +285,18 @@ def test_forwarded_headers_are_trusted_from_the_proxy():
     """
     Audit OPS-01: behind a TLS ingress uvicorn only honours X-Forwarded-Proto
     from FORWARDED_ALLOW_IPS (default 127.0.0.1), so /widget/info answered with
-    http:// URLs that browsers block as mixed content.
+    http:// URLs that browsers block as mixed content. Since the audit of
+    14.11. (S-43) /widget/info returns relative references and no answer
+    depends on the headers; the chart still sets the variable, and its comment
+    must not give the old reason.
     """
     assert "FORWARDED_ALLOW_IPS" in _deployment()
     assert ".Values.forwardedAllowIps" in _deployment()
     assert _values()["forwardedAllowIps"]
+    values = (CHART / "values.yaml").read_text("utf-8")
+    comment = values[: values.index("## @param forwardedAllowIps")].rsplit("\n\n", 1)[1]
+    assert "relative references" in comment
+    assert "http://" not in comment
 
 
 def test_the_internal_port_is_configured_once():
@@ -410,9 +441,12 @@ def test_in_cluster_egress_is_limited_to_the_service_ports():
 def test_the_network_caveats_are_documented():
     """IPv6 is never allowed out; a public name that DNATs into the cluster is blocked."""
     values = (CHART / "values.yaml").read_text("utf-8")
-    deployment_doc = (ROOT / "DEPLOYMENT.md").read_text("utf-8")
+    documents = [
+        (ROOT / name).read_text("utf-8")
+        for name in ("DEPLOYMENT.md", "DEPLOYMENT.de.md")
+    ]
 
-    for text in (values, deployment_doc):
+    for text in (values, *documents):
         assert "IPv6" in text
         assert "LoadBalancer" in text
 
@@ -575,3 +609,269 @@ def test_a_shared_llm_limit_renders_with_zero_replicas(tmp_path):
         10 / 60, abs=1e-4
     )
     assert "Gemeinsames LLM-Limit" in notes
+
+
+# ------------------------------------------------- audit 13.11.2026, OPS-25
+
+
+def test_a_number_without_quotes_is_rendered_as_the_number(tmp_path):
+    """
+    `METADATA_AGENT_MAX_REQUEST_BYTES: 41943040` in a values file of one's own
+    reached the pod as "4.194304e+07" (helm reads a YAML number as a float)
+    and the service did not start. --set would not show it: it parses ints.
+    """
+    values = tmp_path / "values.yaml"
+    values.write_text(
+        yaml.safe_dump(
+            {
+                "env": {
+                    "METADATA_AGENT_MAX_REQUEST_BYTES": 41943040,
+                    "METADATA_AGENT_DEBUG_ENDPOINTS": True,
+                    "METADATA_AGENT_LLM_TEMPERATURE": 0.3,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    out = subprocess.run(
+        [_helm(), "template", "t", str(CHART), "--set", "image.repository=r/i"]
+        + ["-f", str(values)],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    env = _env([doc for doc in yaml.safe_load_all(out) if doc])
+
+    assert env["METADATA_AGENT_MAX_REQUEST_BYTES"] == "41943040"
+    assert env["METADATA_AGENT_DEBUG_ENDPOINTS"] == "true"
+    assert env["METADATA_AGENT_LLM_TEMPERATURE"] == "0.3"
+
+
+def test_a_shared_limit_of_zero_per_minute_is_refused():
+    """0 would render a rate of 0 - which the agent reads as "no limit"."""
+    with pytest.raises(subprocess.CalledProcessError) as raised:
+        _render("sharedLlmLimit.enabled=true", "sharedLlmLimit.requestsPerMinute=0")
+
+    assert "requestsPerMinute" in raised.value.stderr
+
+
+# ------------------------------------------------- audit 14.11.2026
+
+
+def _fails(*sets: str) -> str:
+    """The message helm stops the rendering with."""
+    with pytest.raises(subprocess.CalledProcessError) as raised:
+        _render(*sets)
+    return raised.value.stderr
+
+
+def _services(docs: list[dict]) -> dict[str, dict]:
+    return {doc["metadata"]["name"]: doc for doc in docs if doc["kind"] == "Service"}
+
+
+# Alert rules against the metrics (O-33, O-35)
+
+
+def test_the_slow_generation_rule_reads_a_bucket_the_agent_exports():
+    """O-33: a rule on a bucket bound the histogram does not have never fires."""
+    (rule,) = [r for r in _alert_rules() if r["alert"] == "MetadataAgentGenerateSlow"]
+    patterns = _label_values(rule["expr"], "le") - {"+Inf"}
+    # As prometheus_client writes the bounds: "270.0".
+    exported = {str(float(bound)) for bound in HTTP_DURATION._upper_bounds}
+
+    assert patterns
+    for pattern in patterns:
+        assert _matches_one(pattern.replace("\\\\", "\\"), exported), pattern
+    assert "histogram_quantile" not in rule["expr"]
+
+
+def test_unanswered_calls_are_not_counted_per_status_code():
+    """O-35: the first answer of a new status code started a series increase() skips."""
+    (rule,) = [
+        r for r in _alert_rules() if r["alert"] == "MetadataAgentUpstreamUnanswered"
+    ]
+
+    assert "metadata_agent_upstream_responses_total" not in rule["expr"]
+    assert "metadata_agent_upstream_response_duration_seconds_count" in rule["expr"]
+
+
+def test_the_failing_generations_rule_counts_only_runs_that_ended():
+    (rule,) = [
+        r for r in _alert_rules() if r["alert"] == "MetadataAgentGenerationsFailing"
+    ]
+    selectors = re.findall(
+        r"metadata_agent_generations_total(\{[^}]*\})?", rule["expr"]
+    )
+
+    assert selectors and all(selectors), "a selector without status counts every run"
+    for selector in selectors:
+        assert not {"cancelled", "refused"} & _label_values(selector, "status")
+
+
+def test_the_key_refused_text_fits_direct_calls_too():
+    (rule,) = [
+        r for r in _alert_rules() if r["alert"] == "MetadataAgentUpstreamKeyRefused"
+    ]
+    annotations = rule["annotations"]
+
+    assert "B-API" not in annotations["summary"]
+    assert "direkt" in annotations["description"]
+
+
+# O-41
+
+
+def test_the_version_label_names_the_app_version_not_the_image_tag():
+    chart = yaml.safe_load((CHART / "Chart.yaml").read_text("utf-8"))
+
+    for doc in _render("image.tag=develop"):
+        labels = doc["metadata"]["labels"]
+        assert labels["app.kubernetes.io/version"] == chart["appVersion"], doc["kind"]
+
+
+def test_an_image_can_be_pinned_by_digest():
+    digest = "sha256:" + "0123456789abcdef" * 4
+    docs = _render(f"image.digest={digest}")
+
+    assert _pod(docs)["containers"][0]["image"] == f"r/i@{digest}"
+
+
+def test_without_a_digest_the_image_is_pulled_by_tag():
+    image = _pod(_render())["containers"][0]["image"]
+
+    assert image == f"r/i:{_values()['image']['tag']}"
+    assert _values()["image"]["digest"] == ""
+
+
+@pytest.mark.parametrize("digest", ["latest", "sha256:abc", "md5:" + "0" * 64])
+def test_a_malformed_digest_is_refused(digest):
+    assert "image.digest" in _fails(f"image.digest={digest}")
+
+
+# O-42
+
+
+@pytest.mark.parametrize("port", ["0", "70000", "-1", "", "null"])
+def test_an_internal_port_that_cannot_be_bound_is_refused(port):
+    assert "service.internalPort" in _fails(f"service.internalPort={port}")
+
+
+def test_a_shared_rate_that_rounds_to_zero_is_refused():
+    """0.001 per minute rendered "0.0000" - which the agent reads as "no limit"."""
+    message = _fails(
+        "sharedLlmLimit.enabled=true", "sharedLlmLimit.requestsPerMinute=0.001"
+    )
+
+    assert "requestsPerMinute" in message
+
+
+def test_the_internal_port_has_a_cluster_ip_service_of_its_own():
+    """A LoadBalancer for the API published /metrics and /ready with it."""
+    services = _services(_render("service.type=LoadBalancer"))
+    public, internal = (
+        services["t-metadata-agent"],
+        services["t-metadata-agent-internal"],
+    )
+
+    assert public["spec"]["type"] == "LoadBalancer"
+    assert [port["name"] for port in public["spec"]["ports"]] == ["http"]
+    assert internal["spec"]["type"] == "ClusterIP"
+    assert [
+        (port["name"], port["port"], port["targetPort"])
+        for port in internal["spec"]["ports"]
+    ] == [("internal", 9000, "internal")]
+    assert internal["spec"]["selector"] == public["spec"]["selector"]
+
+
+def test_the_service_monitor_selects_the_internal_service_only():
+    docs = _render()
+    services = _services(docs)
+    selector = _kind(docs, "ServiceMonitor")["spec"]["selector"]["matchLabels"].items()
+
+    assert (
+        selector <= services["t-metadata-agent-internal"]["metadata"]["labels"].items()
+    )
+    assert not selector <= services["t-metadata-agent"]["metadata"]["labels"].items()
+    assert _kind(docs, "ServiceMonitor")["spec"]["endpoints"][0]["port"] == "internal"
+
+
+# O-37
+
+
+def test_both_ports_listen_on_ipv4_by_default():
+    env = _env(_render())
+
+    assert env["UVICORN_HOST"] == env["METADATA_AGENT_INTERNAL_HOST"] == "0.0.0.0"
+
+
+def test_one_value_moves_both_ports_to_ipv6():
+    env = _env(_render("listenHost=::"))
+
+    assert env["UVICORN_HOST"] == env["METADATA_AGENT_INTERNAL_HOST"] == "::"
+
+
+@pytest.mark.parametrize("name", ["UVICORN_HOST", "METADATA_AGENT_INTERNAL_HOST"])
+def test_a_listen_address_in_env_cannot_split_the_two_ports(name):
+    assert "listenHost" in _fails(f"env.{name}=::")
+
+
+# O-46
+
+
+def test_the_inbox_is_a_chart_value_with_the_default_of_the_code():
+    text = (CHART / "values.yaml").read_text("utf-8")
+    inbox = _values()["env"]["METADATA_AGENT_WLO_INBOX_ID"]
+
+    assert inbox == Settings.model_fields["wlo_inbox_id"].default
+    comment = text[: text.index("  METADATA_AGENT_WLO_INBOX_ID:")].rsplit("\n\n", 1)[-1]
+    assert "target repository" in comment
+    assert _env(_render())["METADATA_AGENT_WLO_INBOX_ID"] == inbox
+
+
+# Small findings (O-N)
+
+
+@pytest.mark.parametrize(
+    "name", ["METADATA_AGENT_B_API_BASE_URL", "METADATA_AGENT_REPOSITORY_URL"]
+)
+@pytest.mark.parametrize("value", ["", "null"])
+def test_an_emptied_address_does_not_fall_back_to_staging(name, value):
+    """The chart names production; empty, the agent took the staging default of its code."""
+    assert name in _fails(f"env.{name}={value}")
+
+
+BODY_SIZE = r"ingress.annotations.nginx\.ingress\.kubernetes\.io/proxy-body-size"
+
+
+def test_a_changed_request_limit_must_change_the_ingress_with_it():
+    """Coupled only in the defaults: 40 MB in the agent, 20 MB at the ingress - 413 from nginx."""
+    larger = "env.METADATA_AGENT_MAX_REQUEST_BYTES=41943040"
+
+    assert "proxy-body-size" in _fails("ingress.enabled=true", larger)
+    docs = _render("ingress.enabled=true", larger, f"{BODY_SIZE}=40m")
+    assert (
+        _kind(docs, "Ingress")["metadata"]["annotations"][
+            "nginx.ingress.kubernetes.io/proxy-body-size"
+        ]
+        == "40m"
+    )
+    # Without an ingress there is nothing to keep in step.
+    _render(larger)
+
+
+def test_a_request_limit_that_is_no_whole_megabyte_is_named_in_bytes():
+    odd = "env.METADATA_AGENT_MAX_REQUEST_BYTES=30000000"
+
+    assert "30000000" in _fails("ingress.enabled=true", odd)
+    _render("ingress.enabled=true", odd, f"{BODY_SIZE}=30000000")
+
+
+def test_the_agent_is_told_the_grace_period_of_the_chart():
+    """Its deadline warnings compared with a fixed 320 s (tests/test_start_warnings.py)."""
+    assert _env(_render())["METADATA_AGENT_GRACE_PERIOD_SECONDS"] == "320"
+    longer = _env(_render("terminationGracePeriodSeconds=600"))
+    assert longer["METADATA_AGENT_GRACE_PERIOD_SECONDS"] == "600"
+    assert "METADATA_AGENT_GRACE_PERIOD_SECONDS" in _configured_variables()
+    assert "terminationGracePeriodSeconds" in _fails(
+        "env.METADATA_AGENT_GRACE_PERIOD_SECONDS=600"
+    )

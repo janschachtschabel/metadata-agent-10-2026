@@ -2,13 +2,16 @@
 
 import json
 from pathlib import Path
-from fastapi import HTTPException, Request
+from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 
 
 from fastapi import APIRouter
 
+from ..params import Language
+
 from .. import deps
+from .info_docs import WIDGET_INFO_RESPONSES, WIDGET_TEXTS_RESPONSES
 
 
 router = APIRouter()
@@ -22,8 +25,9 @@ WIDGET_LANGUAGES = {"de", "en"}
     summary="Widget UI-Übersetzungen",
     description="Liefert die UI-Übersetzungstexte für die Webkomponente. Unterstützte Sprachen: `de`, `en`.",
     tags=["Widget"],
+    responses=WIDGET_TEXTS_RESPONSES,
 )
-async def widget_i18n(lang: str):
+async def widget_i18n(lang: Language):
     """Serve i18n translation files for the web component."""
     # src/static, two packages up from src/api/routers/.
     i18n_dir = (
@@ -158,26 +162,42 @@ _WIDGET_INCOMING_EVENTS = {
 }
 
 
+# Stands for the address of the service in the snippets of /widget/info.
+_SNIPPET_BASE = "{AGENT_URL}"
+
+
 @router.get(
     "/widget/info",
     summary="Widget-Einbindung (Web Component)",
     description="""Informationen zur Einbindung der Metadata Agent Webkomponente in eigene Anwendungen.
 
 Gibt alle verfügbaren Varianten, die benötigten Script-URLs und Beispiel-Code zurück.
+
+Die URLs der Antwort sind relative Verweise, aufzulösen gegen die Adresse, unter
+der `/widget/info` aufgerufen wurde (`dist/main.js` → `…/widget/dist/main.js`).
+In den Snippets steht `{AGENT_URL}` für die Basis-URL des Dienstes.
 """,
     tags=["Widget"],
+    responses=WIDGET_INFO_RESPONSES,
 )
-async def widget_info(request: Request):
+async def widget_info():
     """Return embedding info for the web component widget."""
-    base = str(request.base_url).rstrip("/")
-    dist_base = f"{base}/widget/dist"
-    examples_base = f"{base}/widget/examples"
+    # Relative to this endpoint, never built from the request: the Host header
+    # is the caller's, and behind the proxy it names the internal host without
+    # the proxy's path prefix (audit 14.11., S-43).
+    dist_base = "dist"
+    examples_base = "examples"
+    # In a snippet, which is pasted into a page somewhere else.
+    base = _SNIPPET_BASE
+    snippet_dist = f"{base}/widget/dist"
 
     return {
         "name": "metadata-agent-canvas",
         "version": deps.settings.app_version,
         "description": "Angular Web Component zur Anzeige und Bearbeitung von Metadaten. "
-        "Kann als <metadata-agent-canvas> Tag in beliebige Webanwendungen eingebettet werden.",
+        "Kann als <metadata-agent-canvas> Tag in beliebige Webanwendungen eingebettet werden. "
+        "Die URLs dieser Antwort sind relativ zur Adresse von /widget/info; "
+        f"{_SNIPPET_BASE} in den Snippets steht für die Basis-URL des Dienstes.",
         "dist_base_url": dist_base,
         "scripts": {
             "required": [
@@ -198,10 +218,10 @@ async def widget_info(request: Request):
                 "Für interaktive Metadaten-Erfassung und -Bearbeitung.",
                 "example_url": f"{examples_base}/full.html",
                 "snippet": (
-                    '<link rel="stylesheet" href="' + dist_base + '/styles.css">\n'
-                    '<script src="' + dist_base + '/runtime.js" defer></script>\n'
-                    '<script src="' + dist_base + '/polyfills.js" defer></script>\n'
-                    '<script src="' + dist_base + '/main.js" defer></script>\n\n'
+                    '<link rel="stylesheet" href="' + snippet_dist + '/styles.css">\n'
+                    '<script src="' + snippet_dist + '/runtime.js" defer></script>\n'
+                    '<script src="' + snippet_dist + '/polyfills.js" defer></script>\n'
+                    '<script src="' + snippet_dist + '/main.js" defer></script>\n\n'
                     "<metadata-agent-canvas\n"
                     '  api-url="' + base + '"\n'
                     '  layout="default"\n'
@@ -217,10 +237,10 @@ async def widget_info(request: Request):
                 "Für Repository-Detailseiten und Metadaten-Vorschau.",
                 "example_url": f"{examples_base}/detail.html",
                 "snippet": (
-                    '<link rel="stylesheet" href="' + dist_base + '/styles.css">\n'
-                    '<script src="' + dist_base + '/runtime.js" defer></script>\n'
-                    '<script src="' + dist_base + '/polyfills.js" defer></script>\n'
-                    '<script src="' + dist_base + '/main.js" defer></script>\n\n'
+                    '<link rel="stylesheet" href="' + snippet_dist + '/styles.css">\n'
+                    '<script src="' + snippet_dist + '/runtime.js" defer></script>\n'
+                    '<script src="' + snippet_dist + '/polyfills.js" defer></script>\n'
+                    '<script src="' + snippet_dist + '/main.js" defer></script>\n\n'
                     "<metadata-agent-canvas\n"
                     '  api-url="' + base + '"\n'
                     '  layout="detail"\n'
@@ -239,10 +259,10 @@ async def widget_info(request: Request):
                 "Für Einbettung in bestehende Formulare oder Sidebars.",
                 "example_url": f"{examples_base}/minimal.html",
                 "snippet": (
-                    '<link rel="stylesheet" href="' + dist_base + '/styles.css">\n'
-                    '<script src="' + dist_base + '/runtime.js" defer></script>\n'
-                    '<script src="' + dist_base + '/polyfills.js" defer></script>\n'
-                    '<script src="' + dist_base + '/main.js" defer></script>\n\n'
+                    '<link rel="stylesheet" href="' + snippet_dist + '/styles.css">\n'
+                    '<script src="' + snippet_dist + '/runtime.js" defer></script>\n'
+                    '<script src="' + snippet_dist + '/polyfills.js" defer></script>\n'
+                    '<script src="' + snippet_dist + '/main.js" defer></script>\n\n'
                     "<metadata-agent-canvas\n"
                     '  api-url="' + base + '"\n'
                     '  layout="clean"\n'

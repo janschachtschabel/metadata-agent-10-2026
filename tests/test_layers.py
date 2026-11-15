@@ -114,3 +114,51 @@ def test_nothing_imports_the_application_module():
     )
 
     assert not offenders
+
+
+def _cycles(graph: dict[str, set[str]]) -> list[list[str]]:
+    found, state, path = [], {}, []
+
+    def visit(module):
+        state[module] = "open"
+        path.append(module)
+        for target in sorted(graph[module]):
+            if state.get(target) == "open":
+                found.append(path[path.index(target) :] + [target])
+            elif target not in state:
+                visit(target)
+        path.pop()
+        state[module] = "done"
+
+    for module in sorted(graph):
+        if module not in state:
+            visit(module)
+    return found
+
+
+def test_the_cycle_search_finds_a_cycle():
+    graph = {"a": {"b"}, "b": {"c"}, "c": {"a"}, "d": {"a"}}
+
+    assert _cycles(graph) == [["a", "b", "c", "a"]]
+
+
+def test_no_module_imports_itself_through_others():
+    """
+    Audit 14.11., Q-18: imports inside functions that avoided no cycle moved to
+    the top of their modules. The graph counts every import, also the ones
+    still inside a function - none of them may be what keeps a cycle apart.
+    """
+    modules = {_module_name(path): path for path in SRC.rglob("*.py")}
+
+    def known(name: str) -> str:
+        while name and name not in modules:
+            name = name.rpartition(".")[0]
+        return name
+
+    graph = {
+        module: {known(name) for name in _imports(path)} - {"", module}
+        for module, path in modules.items()
+    }
+
+    assert len(graph) > 50
+    assert _cycles(graph) == []

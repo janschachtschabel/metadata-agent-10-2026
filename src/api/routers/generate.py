@@ -2,53 +2,52 @@
 
 import asyncio
 import base64
-import json
+import logging
+from dataclasses import dataclass
 from typing import Any, Optional
 
-from fastapi import HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
+from ...metrics import count_generation
 from ...models.schemas import (
     GenerateRequest,
     GenerateResponse,
     InputSource,
 )
 from ...services.input_source_service import TextExtractionError
-from ...metrics import GENERATIONS
-from ...services.screenshot_service import (
-    LOCAL_METHODS,
-)
-from ...utils.loggable import loggable_url
-from ...utils.schema_loader import (
-    get_latest_version,
-    load_schema,
-    resolve_schema_file_or_uri,
-    get_content_type_uri,
-)
-import logging
-
-from pydantic import ValidationError
-
-
-from fastapi import APIRouter
-
-from .. import deps
-from ..deps import (
-    sanitize_json_string,
-)
 from ...services.llm_prompts import correction_round
-from ..input_resolver import (
-    MAX_CORRECTION_LENGTH,
-    resolve_input,
-    truncate,
-    truncation_warnings,
-    with_correction,
+from ...services.metadata_service import GenerationOptions, MetadataService
+from ...utils.loggable import loggable_url
+from ...utils.schema_loader import get_content_type_uri
+from .. import deps
+from ..disconnect import (
+    CLIENT_CLOSED_REQUEST,
+    ClientDisconnected,
+    run_unless_disconnected,
 )
-from .request_body import invalid_body
+from ..generate_request import (
+    long_text_as_new_source,
+    parse_generate_request,
+    texts_for_run,
+)
+from ..input_resolver import (
+    HEADER_KEYS,
+    MAX_CORRECTION_LENGTH,
+    ResolvedInput,
+    resolve_input,
+    without_header,
+)
 from ..responses import (
+    failure_response,
     generation_failed_response,
     generation_timeout_response,
-    text_extraction_error_response,
+)
+from ..schema_resolution import resolve_schema
+from .generate_docs import (
+    GENERATE_DESCRIPTION,
+    GENERATE_OPENAPI_EXTRA,
+    GENERATE_RESPONSES,
 )
 
 logger = logging.getLogger(__name__)
@@ -65,225 +64,45 @@ def _timeout_response():
     return generation_timeout_response(deps.settings.generate_timeout)
 
 
+# /generate runs in flight in this process (METADATA_AGENT_MAX_CONCURRENT_GENERATIONS).
+_running_generations = 0
+# What a client is told to wait: a run takes 12-22 s as a rule.
+_RETRY_AFTER_SECONDS = 15
+
+
+def _too_many_generations() -> JSONResponse:
+    # Not a run: the alert on 5xx answers leaves these out (alerts.yaml).
+    count_generation("refused")
+    response = failure_response(
+        503,
+        "Der Dienst erschließt gerade so viele Inhalte, wie er zugleich "
+        f"bearbeitet. Bitte in {_RETRY_AFTER_SECONDS} s erneut versuchen.",
+        {"code": "TOO_MANY_GENERATIONS", "message": "Zu viele Erschließungen zugleich"},
+        # Turned away on purpose: worth seeing, but no fault of the service.
+        log_level=logging.WARNING,
+    )
+    response.headers["Retry-After"] = str(_RETRY_AFTER_SECONDS)
+    return response
+
+
+def _client_gone() -> Response:
+    """
+    The run was stopped because nobody waits for it. Counted as `cancelled`,
+    not as `failed`: a proxy with a short timeout would otherwise raise the
+    alert on failed generations (audit 14.11., S-36).
+    """
+    count_generation("cancelled")
+    logger.info("Client closed the connection: /generate stopped")
+    return Response(status_code=CLIENT_CLOSED_REQUEST)
+
+
 @router.post(
     "/generate",
     response_model=GenerateResponse,
     summary="Metadaten generieren",
-    description="""Generiert vollständige Metadaten aus Text, URL oder Repository-Node mittels LLM.
-
-## Input-Quellen (input_source)
-
-| Wert | Beschreibung | Benötigte Felder |
-|------|-------------|------------------|
-| `text` | Direkter Text als Eingabe (Standard) | `text` |
-| `url` | Text von URL via Crawler abrufen | `source_url`, optional `extraction_method` |
-| `node_id` | Metadaten + hinterlegte Volltexte von Repository-Node | `node_id`, `repository` |
-| `node_url` | Repository-Node + Crawler-Fallback (URL aus ccm:wwwurl) | `node_id`, `repository` (source_url optional, wird aus Metadaten geholt) |
-
-## Extraction Method (extraction_method)
-
-| Wert | Beschreibung |
-|------|-------------|
-| `simple` | Schnelle HTML-Extraktion |
-| `browser` | Vollständiges Browser-Rendering für JS-Seiten (Standard) |
-
-## Output Format (output_format)
-
-| Wert | Beschreibung |
-|------|-------------|
-| `markdown` | Markdown-Format (Standard) |
-| `txt` | Reiner Text |
-| `html` | Rohes HTML |
-
-## Repository
-
-> **Deprecated:** Der Parameter `repository` wird ignoriert. Die Repository-URL wird über `METADATA_AGENT_REPOSITORY_URL` konfiguriert.
-
-## Schema-Optionen
-
-- **context**: Schema-Kontext, z.B. `default`, `mds_oeh`
-- **version**: Schema-Version, `latest` (Standard) oder spezifisch z.B. `1.8.1`
-- **schema_file**: `auto` (automatische Erkennung), oder spezifisch z.B. `event.json`
-
-## Extraktions-Optionen
-
-- **language**: Sprache für Extraktion (`de` oder `en`)
-- **max_workers**: Parallele LLM-Worker (1-20). Ohne Angabe gilt `METADATA_AGENT_DEFAULT_MAX_WORKERS` (Standard 20); zusätzlich durch das Durchsatzlimit des Providers gedeckelt
-- **include_core**: Core-Felder einbeziehen (Standard: `true`)
-- **enable_geocoding**: Adressen zu Koordinaten umwandeln (Standard: `true`)
-- **normalize**: Normalisierung für Datum, Boolean, Vokabulare (Standard: `true`)
-
-## Regenerations-Optionen
-
-- **existing_metadata**: Bestehende Metadaten als Basis (werden erweitert)
-- **regenerate_fields**: Liste von Feld-IDs die neu extrahiert werden sollen
-- **regenerate_empty**: Leere Felder in existing_metadata neu extrahieren (Standard: `false`)
-
-## Screenshot-Optionen (Vorschaubild parallel zur Extraktion)
-
-- **screenshot_method**: `playwright` (lokal) oder der Legacy-Alias `pageshot` (nimmt ebenfalls lokal auf, kein externer Dienst). Wenn nicht gesetzt: kein Screenshot.
-- **preview_url**: URL für Screenshot (optional). Wenn nicht gesetzt: wird aus `source_url` oder bestehenden Metadaten (`ccm:wwwurl`) ermittelt.
-- Antwort enthält `preview_image_url` als Base64 Data-URL wenn Screenshot erfolgreich.
-
-## LLM-Optionen
-
-- **llm_provider**: `b-api-openai` (Standard), `b-api-academiccloud`, `b-api-router`, `openai`
-- **llm_model**: Ohne Angabe gilt der Default des Providers — `gpt-6-luna` (b-api-openai), `deepseek-v4-flash` (b-api-academiccloud), `openai/gpt-6-luna` (b-api-router, Routenname oder provider/modell), `gpt-4o-mini` (openai)
-""",
-    openapi_extra={
-        "requestBody": {
-            "content": {
-                "application/json": {
-                    "schema": {"$ref": "#/components/schemas/GenerateRequest"},
-                    "examples": {
-                        "text_input": {
-                            "summary": "1. Text-Eingabe (Standard)",
-                            "description": "Direkter Text als Eingabe. Schema wird automatisch erkannt.",
-                            "value": {
-                                "input_source": "text",
-                                "text": "Workshop 'KI in der Bildung' am 15. März 2025 in Berlin.\nLernen Sie die Grundlagen der künstlichen Intelligenz kennen.",
-                                "source_url": "",
-                                "extraction_method": "browser",
-                                "output_format": "markdown",
-                                "node_id": "",
-                                "existing_metadata": {},
-                                "context": "default",
-                                "version": "latest",
-                                "schema_file": "auto",
-                                "language": "de",
-                                "include_core": True,
-                                "enable_geocoding": True,
-                                "normalize": True,
-                                "regenerate_fields": [],
-                                "regenerate_empty": False,
-                                "screenshot_method": "",
-                                "preview_url": "",
-                            },
-                        },
-                        "url_input": {
-                            "summary": "2. URL-Eingabe (Crawler)",
-                            "description": "Text von URL abrufen via Text-Extraction-API. extraction_method: 'simple' (schnell) oder 'browser' (JS-Rendering). Mit screenshot_method wird parallel ein Vorschaubild erstellt.",
-                            "value": {
-                                "input_source": "url",
-                                "text": "",
-                                "source_url": "https://www.wirlernenonline.de",
-                                "extraction_method": "browser",
-                                "output_format": "markdown",
-                                "node_id": "",
-                                "existing_metadata": {},
-                                "context": "default",
-                                "version": "latest",
-                                "schema_file": "auto",
-                                "language": "de",
-                                "include_core": True,
-                                "enable_geocoding": True,
-                                "normalize": True,
-                                "regenerate_fields": [],
-                                "regenerate_empty": False,
-                                "screenshot_method": "playwright",
-                                "preview_url": "",
-                            },
-                        },
-                        "node_id_input": {
-                            "summary": "3. NodeID-Eingabe (Repository)",
-                            "description": "Metadaten + hinterlegte Volltexte von Repository-Node abrufen.",
-                            "value": {
-                                "input_source": "node_id",
-                                "text": "",
-                                "source_url": "",
-                                "extraction_method": "browser",
-                                "output_format": "markdown",
-                                "node_id": "cbf66543-fb90-4e69-a392-03f305139e3f",
-                                "existing_metadata": {},
-                                "context": "default",
-                                "version": "latest",
-                                "schema_file": "auto",
-                                "language": "de",
-                                "include_core": True,
-                                "enable_geocoding": True,
-                                "normalize": True,
-                                "regenerate_fields": [],
-                                "regenerate_empty": False,
-                                "screenshot_method": "playwright",
-                                "preview_url": "",
-                            },
-                        },
-                        "node_url_input": {
-                            "summary": "4. NodeID+URL (kombiniert)",
-                            "description": "Repository-Metadaten + Volltext nutzen. Falls kein Volltext: URL aus ccm:wwwurl holen und Crawler nutzen.",
-                            "value": {
-                                "input_source": "node_url",
-                                "text": "",
-                                "source_url": "",
-                                "extraction_method": "browser",
-                                "output_format": "markdown",
-                                "node_id": "cbf66543-fb90-4e69-a392-03f305139e3f",
-                                "existing_metadata": {},
-                                "context": "default",
-                                "version": "latest",
-                                "schema_file": "auto",
-                                "language": "de",
-                                "include_core": True,
-                                "enable_geocoding": True,
-                                "normalize": True,
-                                "regenerate_fields": [],
-                                "regenerate_empty": False,
-                                "screenshot_method": "playwright",
-                                "preview_url": "",
-                            },
-                        },
-                        "mit_existing_metadata": {
-                            "summary": "5. Mit bestehenden Metadaten",
-                            "description": "existing_metadata als Basis, nur bestimmte Felder neu extrahieren.",
-                            "value": {
-                                "input_source": "text",
-                                "text": "Workshop 'KI in der Bildung' am 15. März 2025 in Berlin.",
-                                "source_url": "",
-                                "extraction_method": "browser",
-                                "output_format": "markdown",
-                                "node_id": "",
-                                "existing_metadata": {
-                                    "cclom:title": "Mein Workshop",
-                                    "cclom:general_keyword": ["KI", "Bildung"],
-                                },
-                                "context": "default",
-                                "version": "latest",
-                                "schema_file": "event.json",
-                                "language": "de",
-                                "include_core": True,
-                                "enable_geocoding": True,
-                                "normalize": True,
-                                "regenerate_fields": ["ccm:oeh_event_begin"],
-                                "regenerate_empty": True,
-                                "screenshot_method": "",
-                                "preview_url": "",
-                            },
-                        },
-                        "anderer_provider": {
-                            "summary": "6. Anderer LLM-Provider",
-                            "description": "Provider und Modell nur für diese Anfrage. AcademicCloud verträgt 2 Requests gleichzeitig — mehr Worker warten nur.",
-                            "value": {
-                                "input_source": "text",
-                                "text": "Workshop 'KI in der Bildung' am 15. März 2025 in Berlin.",
-                                "llm_provider": "b-api-academiccloud",
-                                "llm_model": "deepseek-v4-flash",
-                            },
-                        },
-                    },
-                },
-                "text/plain": {
-                    "schema": {"type": "string"},
-                    "examples": {
-                        "mehrzeiliger_text": {
-                            "summary": "Mehrzeiliger Text (ohne JSON)",
-                            "description": "Für mehrzeilige Texte: Einfach den Text einfügen. Schema wird automatisch erkannt.",
-                            "value": "Workshop 'KI in der Bildung' am 15. März 2025 in Berlin.\n\nLernen Sie die Grundlagen der künstlichen Intelligenz kennen.\n\nZielgruppe: Lehrkräfte\nKosten: 49 Euro",
-                        }
-                    },
-                },
-            }
-        }
-    },
+    description=GENERATE_DESCRIPTION,
+    responses=GENERATE_RESPONSES,
+    openapi_extra=GENERATE_OPENAPI_EXTRA,
 )
 async def generate_metadata(request: Request):
     """
@@ -291,17 +110,69 @@ async def generate_metadata(request: Request):
 
     Extracts metadata from text using AI. Control characters are auto-sanitized.
 
-    **Output Format:**
-    - Header: contextName, schemaVersion, metadataset, language, exportedAt
-    - metadata: Flat key-value pairs (field_id: value)
+    **Output Format** (flat, see GenerateResponse):
+    - Header: contextName, schemaVersion, metadataset, metadataset_uri,
+      language, exportedAt
+    - every non-empty metadata field at top level under its field id
+    - _origins, _source_text and preview_image_url where present
     - processing: Success status, stats, LLM info, errors/warnings
     """
+    global _running_generations
+    limit = deps.settings.max_concurrent_generations
+    if limit is not None and _running_generations >= limit:
+        return _too_many_generations()
+    _running_generations += 1
+    try:
+        return await _generate(request)
+    except ClientDisconnected:
+        return _client_gone()
+    finally:
+        _running_generations -= 1
+
+
+@dataclass
+class _Prepared:
+    """What resolving a request yields: all the run and its answer need."""
+
+    req: GenerateRequest
+    version: str
+    schema_file: str
+    existing_metadata: dict[str, Any]
+    origins: Any
+    text: str
+    source_text: str
+    # About the request and its source; they precede the run's own warnings.
+    warnings: list[str]
+    is_correction: bool
+    service: MetadataService
+    screenshot_task: Optional[asyncio.Task]
+
+    async def release(self) -> None:
+        """Stop the capture nobody will await, close the request's own client."""
+        if self.screenshot_task:
+            self.screenshot_task.cancel()
+        if deps.has_own_llm_client(self.req):
+            await self.service.llm_service.close()
+
+
+async def _generate(request: Request):
     # One deadline for fetching the source and generating: together they must
     # stay below the ingress timeout (METADATA_AGENT_GENERATE_TIMEOUT).
     deadline = asyncio.get_running_loop().time() + deps.settings.generate_timeout
 
-    req = await _parse_request(request)
-    existing_metadata = req.existing_metadata or {}
+    prepared = await _resolve(request, deadline)
+    if isinstance(prepared, Response):
+        return prepared
+    result = await _run(request, prepared, deadline)
+    if isinstance(result, Response):
+        return result
+    return await _answer(prepared, result, deadline)
+
+
+async def _resolve(request: Request, deadline: float) -> _Prepared | Response:
+    """The request, its schema and its source - or the answer that ends it here."""
+    req = await parse_generate_request(request)
+    existing_metadata = without_header(req.existing_metadata or {})
     # Passed by the web component next to the values.
     origins = existing_metadata.pop("_origins", None) if existing_metadata else None
     original_source_text = (
@@ -315,215 +186,156 @@ async def generate_metadata(request: Request):
     # Cheap refusals before the source is fetched (audit API-05).
     version, schema_file = _version_and_schema(req)
     deps.check_provider_override(req.llm_provider)
+    deps.check_model_override(req.llm_provider, req.llm_model)
     request_warnings: list[str] = []
     if original_source_text and req.text and len(req.text) > MAX_CORRECTION_LENGTH:
-        # The 2.1.1 widget sends _source_text with every run: a text this long
-        # is a new source pasted over the old one, not a correction (final
-        # audit 18.10.) - extracted as such instead of refused.
         original_source_text = None
-        request_warnings.append(
-            f"Text länger als {MAX_CORRECTION_LENGTH} Zeichen: als neue Quelle "
-            "extrahiert, nicht als Korrekturanweisung zur bisherigen."
-        )
-    try:
-        async with asyncio.timeout_at(deadline):
-            resolved = await resolve_input(req)
-    except TextExtractionError as e:
-        return text_extraction_error_response(e)
-    except TimeoutError:
-        GENERATIONS.labels("failed").inc()
-        return _timeout_response()
+        request_warnings.append(long_text_as_new_source(req))
+    resolved = await _fetch_source(request, req, deadline)
+    if isinstance(resolved, Response):
+        return resolved
     # Values the caller sends win over those the node already has.
-    existing_metadata = {**resolved.fetched_metadata, **existing_metadata}
-    text, source_text, cut = _texts(
+    existing_metadata = {
+        **without_header(resolved.fetched_metadata),
+        **existing_metadata,
+    }
+    text, source_text, cut = texts_for_run(
         req, resolved.text, original_source_text, existing_metadata
     )
     request_warnings += cut
     service = deps.get_metadata_service(
         llm_provider=req.llm_provider, llm_model=req.llm_model
     )
-    # An override gets its own LLMService with its own HTTP client, which this
-    # request has to close on every way out.
-    own_llm_client = req.llm_provider is not None or req.llm_model is not None
-
-    async def release():
-        """Stop the capture nobody will await, close the request's own client."""
-        if screenshot_task:
-            screenshot_task.cancel()
-        if own_llm_client:
-            await service.llm_service.close()
-
     # Runs in parallel to the extraction.
     screenshot_task = _start_screenshot(req, existing_metadata)
+    return _Prepared(
+        req=req,
+        version=version,
+        schema_file=schema_file,
+        existing_metadata=existing_metadata,
+        origins=origins,
+        text=text,
+        source_text=source_text,
+        warnings=request_warnings + resolved.warnings,
+        # The same condition texts_for_run uses for building the correction text.
+        is_correction=bool(original_source_text and req.text and req.text.strip()),
+        service=service,
+        screenshot_task=screenshot_task,
+    )
 
-    # The same condition _texts uses for building the correction text.
-    is_correction = bool(original_source_text and req.text and req.text.strip())
+
+async def _run(
+    request: Request, prepared: _Prepared, deadline: float
+) -> dict[str, Any] | Response:
+    """The extraction, inside the deadline and only while the client waits."""
+    req = prepared.req
     try:
         async with asyncio.timeout_at(deadline):
-            with correction_round(is_correction):
-                result = await service.generate_metadata(
-                    text=text,
-                    context=req.context,
-                    version=version,
-                    schema_file=schema_file,
-                    existing_metadata=existing_metadata,
-                    language=req.language,
-                    max_workers=req.max_workers,
-                    include_core=req.include_core,
-                    enable_geocoding=req.enable_geocoding,
-                    normalize_output=req.normalize,
-                    normalize_vocabularies=req.normalize,
-                    regenerate_fields=req.regenerate_fields,
-                    regenerate_empty=req.regenerate_empty,
-                    origins=origins,
-                    deadline=deadline,
+            with correction_round(prepared.is_correction):
+                return await run_unless_disconnected(
+                    request,
+                    prepared.service.generate_metadata(
+                        text=prepared.text,
+                        options=GenerationOptions(
+                            context=req.context,
+                            version=prepared.version,
+                            schema_file=prepared.schema_file,
+                            existing_metadata=prepared.existing_metadata,
+                            language=req.language,
+                            max_workers=req.max_workers,
+                            include_core=req.include_core,
+                            enable_geocoding=req.enable_geocoding,
+                            normalize_output=req.normalize,
+                            normalize_vocabularies=req.normalize,
+                            regenerate_fields=req.regenerate_fields,
+                            regenerate_empty=req.regenerate_empty,
+                            origins=prepared.origins,
+                            deadline=deadline,
+                        ),
+                    ),
                 )
     except TimeoutError:
         # Field tasks were cancelled with the run (asyncio.timeout).
-        GENERATIONS.labels("failed").inc()
-        await release()
+        count_generation("failed")
+        await prepared.release()
         return _timeout_response()
     except BaseException as error:
-        # A cancelled request (client gone) is not a failed generation. The
-        # capture holds one of the few browser slots for up to MAX_CAPTURE_SECONDS.
-        if isinstance(error, Exception):
-            GENERATIONS.labels("failed").inc()
-        await release()
+        # A client that left (counted by generate_metadata) and a cancelled
+        # request are no failed generation. The capture holds one of the few
+        # browser slots for up to MAX_CAPTURE_SECONDS.
+        if isinstance(error, Exception) and not isinstance(error, ClientDisconnected):
+            count_generation("failed")
+        await prepared.release()
         raise
 
-    if request_warnings or resolved.warnings:
-        processing = result.setdefault("processing", {})
-        processing["warnings"] = (
-            request_warnings + resolved.warnings + processing.get("warnings", [])
-        )
 
-    GENERATIONS.labels((result.get("processing") or {}).get("status", "unknown")).inc()
+async def _answer(
+    prepared: _Prepared, result: dict[str, Any], deadline: float
+) -> Response:
+    """The run's result as the flat body with its preview - or as the failure."""
+    if prepared.warnings:
+        processing = result.setdefault("processing", {})
+        processing["warnings"] = prepared.warnings + processing.get("warnings", [])
+
+    count_generation((result.get("processing") or {}).get("status"))
 
     if (result.get("processing") or {}).get("status") == "failed":
         # Not one usable field: answer with the error instead of an empty
         # "success" that a client would apply over existing metadata.
-        await release()
+        await prepared.release()
         return generation_failed_response(result)
 
     try:
-        preview_image_url = await _screenshot_data_url(screenshot_task, deadline)
+        preview_image_url = await _screenshot_data_url(
+            prepared.screenshot_task, deadline
+        )
     finally:
-        # Close non-default LLM service HTTP client to prevent leak - also when
-        # the wait is cancelled (CancelledError is no Exception).
-        if own_llm_client:
-            await service.llm_service.close()
+        # Also when the wait is cancelled (CancelledError is no Exception).
+        if deps.has_own_llm_client(prepared.req):
+            await prepared.service.llm_service.close()
 
-    metadataset_uri = get_content_type_uri(result["metadataset"], req.context, version)
+    metadataset_uri = get_content_type_uri(
+        result["metadataset"], prepared.req.context, prepared.version
+    )
     return JSONResponse(
-        content=_flat_response(result, metadataset_uri, source_text, preview_image_url)
+        content=_flat_response(
+            result, metadataset_uri, prepared.source_text, preview_image_url
+        )
     )
 
 
-async def _parse_request(request: Request) -> GenerateRequest:
-    """The request from a JSON body (sanitised) or a text/plain body with defaults."""
-    content_type = request.headers.get("content-type", "application/json")
+async def _fetch_source(
+    request: Request, req: GenerateRequest, deadline: float
+) -> ResolvedInput | Response:
+    """
+    The source of the run, or the error answer when it cannot be had.
 
+    A source that failed - text extraction, repository, the deadline - is a
+    failed generation (audit 14.11., S-36). A request that names none, or a
+    node that does not exist, is the caller's and no run.
+    """
     try:
-        body_str = (await request.body()).decode("utf-8")
-
-        data: Any
-        if "text/plain" in content_type:
-            data = {
-                "text": body_str,
-                "context": "default",
-                "version": "latest",
-                "schema_file": "auto",
-                "language": "de",
-                "include_core": True,
-            }
-        else:
-            try:
-                data = json.loads(sanitize_json_string(body_str))
-            except json.JSONDecodeError as e:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid JSON: {str(e)}. Tip: Use Content-Type 'text/plain' for multi-line text input.",
-                )
-            # Same answer as parse_json_object; GenerateRequest(**data) would
-            # say "argument after ** must be a mapping" with a 422.
-            if not isinstance(data, dict):
-                raise HTTPException(
-                    status_code=400,
-                    detail='Body muss ein JSON-Objekt sein, z.B. {"text": "..."}.',
-                )
-
-        # Without max_workers the ENV default applies (Settings keeps it
-        # inside the range the request model accepts).
-        if isinstance(data, dict) and "max_workers" not in data:
-            data["max_workers"] = deps.settings.default_max_workers
-
-        try:
-            return GenerateRequest(**data)
-        except ValidationError as e:
-            raise invalid_body(e)
-
-    except HTTPException:
+        async with asyncio.timeout_at(deadline):
+            return await run_unless_disconnected(request, resolve_input(req))
+    except TextExtractionError as e:
+        if e.http_status >= 500:  # 422: the page has no text
+            count_generation("failed")
+        raise  # answered by UnexpectedErrorMiddleware
+    except TimeoutError:
+        count_generation("failed")
+        return _timeout_response()
+    except HTTPException as e:
+        if e.status_code >= 500:
+            count_generation("failed")
         raise
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Request parsing error: {str(e)}")
-
-
-def _texts(
-    req: GenerateRequest,
-    resolved_text: str,
-    original_source_text: Optional[str],
-    existing_metadata: dict[str, Any],
-) -> tuple[str, str, list[str]]:
-    """
-    (text for the LLM, source text to return, warning if the source was cut).
-
-    Re-extraction: the source, the values extracted so far and the correction
-    instruction (req.text). The source is the fetched text, or with text input
-    the source text of the previous round.
-    """
-    if not resolved_text or not resolved_text.strip():
-        raise HTTPException(
-            status_code=400, detail="No text content available from input source"
-        )
-    if original_source_text and req.text and req.text.strip():
-        source = (
-            original_source_text
-            if req.input_source == InputSource.TEXT
-            else resolved_text
-        )
-        text, kept = with_correction(source, existing_metadata, req.text)
-        return text, kept, truncation_warnings(source, kept)
-    text = truncate(resolved_text)
-    return text, text, truncation_warnings(resolved_text, text)
 
 
 def _version_and_schema(req: GenerateRequest) -> tuple[str, str]:
     """
-    The concrete schema version ('latest' resolved) and schema file (URI resolved).
-
-    400 for an unknown schema URI, 404 for a context, version or schema file
-    that does not exist - like /extract-field, and before the source is fetched
-    (audit API-06). With schema_file 'auto' the context's core.json stands in.
+    The concrete schema version and schema file, as every endpoint resolves
+    them (schema_resolution.py) - before the source is fetched (audit API-06).
     """
-    version = req.version
-    if version == "latest" or not version:
-        version = get_latest_version(req.context)
-
-    schema_file = req.schema_file
-    if schema_file and schema_file != "auto":
-        try:
-            schema_file = resolve_schema_file_or_uri(schema_file, req.context, version)
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
-    try:
-        load_schema(
-            req.context,
-            version,
-            schema_file if schema_file and schema_file != "auto" else "core.json",
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    return version, schema_file
+    return resolve_schema(req.context, req.version, req.schema_file)
 
 
 def _start_screenshot(
@@ -545,11 +357,7 @@ def _start_screenshot(
     if not screenshot_url:
         return None
 
-    method = (
-        req.screenshot_method
-        if req.screenshot_method in LOCAL_METHODS
-        else "playwright"
-    )
+    method = req.screenshot_method.value
     try:
         ss_service = deps.get_screenshot_service()
         logger.info(
@@ -599,7 +407,11 @@ def _flat_response(
     source_text: str,
     preview_image_url: Optional[str],
 ) -> dict[str, Any]:
-    """Header, the non-empty metadata fields at top level, origins, source text, preview, processing."""
+    """
+    Header, the non-empty metadata fields at top level, origins, source text,
+    preview, processing. A metadata key named like a header key is left out:
+    the header is this run's.
+    """
     response = {
         "contextName": result["contextName"],
         "schemaVersion": result["schemaVersion"],
@@ -609,6 +421,8 @@ def _flat_response(
         "exportedAt": result["exportedAt"],
     }
     for key, value in result.get("metadata", {}).items():
+        if key in HEADER_KEYS:
+            continue
         if value is not None and value != "" and value != [] and value != {}:
             response[key] = value
     if result.get("_origins"):

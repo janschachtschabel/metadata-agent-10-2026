@@ -18,6 +18,13 @@ heute gegen `/upload` programmiert, muss nichts anpassen.
 }
 ```
 
+Optionen, die es nur bei `POST /nodes` gibt (`preview`, `start_review_workflow`,
+`start_quality_workflow`), lehnt `/upload` mit `422` ab – und umgekehrt `/nodes`
+die Optionen von `/upload` (z. B. `check_duplicates`, `workflow_steps`,
+`return_full_node`). Dasselbe gilt für einen unbekannten Schlüssel neben einem
+verschachtelten `metadata`; erlaubt bleiben dort die Optionen, der Umschlag einer
+`/generate`-Antwort, `repository` und Schlüssel mit führendem `_`.
+
 ## Antwort
 
 | Feld | Typ | Immer da? | Bedeutung |
@@ -31,10 +38,11 @@ heute gegen `/upload` programmiert, muss nichts anpassen.
 | `fields_written` | int \| null | bei Erfolg | Geschriebene Felder |
 | `schema_used` | string \| null | bei Erfolg | **NEU** — Typschema, gegen das geschrieben wurde. `null` = nur `core.json` |
 | `repo_fields_available` | int \| null | bei Erfolg | **NEU** — wie viele Felder dieses Schema überhaupt schreiben darf (core 26, +`event.json` 33, +`learning_material.json` 40) |
-| `fields_skipped` | int \| null | bei Erfolg | Übersprungene Felder (nicht repo-fähig) |
+| `fields_skipped` | int \| null | bei Erfolg | Anzahl der gesendeten Felder mit Wert, die auf keine Repository-Property geschrieben wurden (meist nicht repo-fähig) |
+| `skipped_fields` | array \| null | bei Erfolg | **NEU** — die Namen dieser Felder; `[]`, wenn keines ausgelassen wurde |
 | `field_errors` | array \| null | – | `[{field_id, error, status_code}]` |
 | `preview` | object \| null | – | Status des Vorschaubild-Uploads. `method` ist immer `playwright` (lokal, auch bei `screenshot_method: "pageshot"`). Eine nicht öffentliche Vorschau-URL ergibt `success: false` mit `error` — der Upload selbst bleibt erfolgreich |
-| `collections` | array \| null | **nur wenn Sammlungen angegeben waren** | `[{collectionId, success, error}]` |
+| `collections` | array \| null | **nur wenn Sammlungen angegeben waren** | `[{collectionId, success, error}]`; steht auch in der `504`-Antwort, wenn das Zeitlimit während der Verknüpfung endete (siehe unten) |
 | `workflow` | array \| null | **nur bei `start_workflow: true`** | `[{status, success, error, skipped}]` in angeforderter Reihenfolge; `skipped: true` bei einem Schritt, der nicht gesendet wurde, weil ein früherer scheiterte |
 | `node_created` | bool \| null | bei Erfolg | **NEU** — `true`, wenn dieser Aufruf den Node angelegt hat; `false`, wenn er über `node_id` übergeben wurde |
 | `discarded_node` | string \| null | nur nach Abbruch | ID des unvollständigen Nodes, der zurückgenommen wurde. **Nie gesetzt, wenn `node_id` übergeben wurde** — ein fremder Node wird nicht verworfen |
@@ -109,11 +117,17 @@ Wert.
   "node_full": { "ref": { "id": "5ab4b434-…" }, "properties": { "…": "…" } },
   "fields_written": 23,
   "fields_skipped": 4,
+  "skipped_fields": ["schema:eventStatus", "schema:duration", "schema:doorTime", "oeh:format"],
   "preview": { "success": true, "method": "playwright" }
 }
 ```
 
-**Duplikat** — `node`/`node_full` beschreiben den **bereits vorhandenen** Node:
+**Duplikat** — `node`/`node_full` beschreiben den **bereits vorhandenen** Node.
+Geprüft wird über die Suche und zusätzlich über die 25 neuesten Nodes des
+Eingangsordners (der Suchindex kennt einen eben angelegten Node noch nicht);
+Prüfung und Anlegen laufen je URL nacheinander (innerhalb eines Prozesses), sodass
+ein Doppelklick keinen zweiten Node erzeugt. Hat der gefundene Node keinen Titel, lautet der Text
+`URL existiert bereits: Node <id>`:
 
 ```jsonc
 {
@@ -168,15 +182,18 @@ eine Fehlerantwort (`502`, `UPSTREAM_ERROR`) statt `200` mit `success: false`;
 ```jsonc
 // HTTP 502
 {
-  "detail": "Timeout bei der Verbindung zum Repository: … (unvollständiger Node wurde verworfen)",
-  "error": { "code": "UPSTREAM_ERROR", "message": "…", "request_id": "3f9c2a7d1b4e5f60" },
+  "detail": "Timeout bei der Verbindung zum Repository (ReadTimeout) (unvollständiger Node wurde verworfen)",
+  "error": { "code": "UPSTREAM_ERROR", "message": "…", "request_id": "3f9c2a7d1b4e5f6091c4a7d2e8b05f13" },
   "discarded_node": "244bf208-de5e-4543-8bf2-08de5ed543fe"
 }
 ```
 
 Dasselbe gilt für jedes Schreiben ohne Ergebnis (nichts angelegt, nichts
 geändert): `422` `VALIDATION_ERROR` (Objektform eines Felds verletzt), `422`
-`SCHEMA_UNAVAILABLE` (Kontext/Version unbekannt) oder `502` `UPSTREAM_ERROR`
+`SCHEMA_UNAVAILABLE` (Kontext, Version oder `metadataset` unbekannt: das Schema
+ließ sich nicht laden, `step: "schema"`, vor der ersten Anfrage ans Repository –
+ein nicht ladbares `metadataset` fiel früher still auf `core.json` zurück) oder
+`502` `UPSTREAM_ERROR`
 (Repository lehnte ab oder war nicht erreichbar), jeweils mit `discarded_node`,
 `node`, `step`, `field_errors`, wenn gesetzt. `200` mit `success: false` gibt es
 nur noch für Dubletten und Teilergebnisse (der Node existiert).
@@ -189,19 +206,34 @@ Hinweis „kann teilweise geschrieben sein“.
 
 Ein Fehler **vor** dem Anlegen verwirft nichts; ein erfolgreicher Upload ebenso
 wenig. Verworfen wird auch nie ein Node, der schon im Workflow ist (die Redaktion
-kann benachrichtigt sein), oder einer, dessen Schreibschritte alle gelaufen sind –
-er wird als `node` gemeldet, mit dem Hinweis „nicht verworfen“ in `error`. Mit
+kann benachrichtigt sein), einer, dessen Schreibschritte alle gelaufen sind, oder
+einer, für den die erste Sammlungsanfrage hinausgegangen ist (eine Sammlung kann
+dann schon auf ihn verweisen) – er wird als `node` gemeldet, mit dem Hinweis
+„nicht verworfen“ in `error`. Endet das Zeitlimit während der Verknüpfung, nennt
+die `504`-Antwort zusätzlich `collections` – je Sammlung verknüpft,
+„Verknüpfung nicht bestätigt“ (Anfrage gesendet, Antwort offen) oder „Verknüpfung
+nicht versucht“ – und `error` fasst dasselbe zusammen; ein angeforderter Workflow
+wurde dann nicht gestartet.
+
+Geht die Antwort auf das Anlegen verloren, sucht der Dienst den Node unter den
+neuesten des Eingangsordners. Als der eigene gilt nur einer, der seit dem Anlegen
+unverändert ist und nichts trägt, was erst die Schritte nach dem Anlegen
+schreiben; sonst wird nichts verworfen, und `error` endet mit „möglicherweise
+wurde trotzdem ein Node angelegt; bitte den Eingangsordner prüfen“. Mit
 `node_id` (bestehender Node) wird ebenfalls nichts verworfen; vor dem Schreiben
 prüft der Dienst dann das Bearbeitungsfenster: `403` außerhalb, `404` unbekannt,
 `502`, wenn der Node wegen eines Repository-Fehlers nicht lesbar ist.
 
 **Zeitlimit.** `/upload` und `/nodes` brechen nach `METADATA_AGENT_UPLOAD_TIMEOUT`
 (Default 100 s) mit `504` und `error.code: UPLOAD_TIMEOUT` ab; für den Node gelten
-dieselben Regeln (`discarded_node` oder `node`). Das Vorschaubild darf das
-Zeitlimit nur bis 15 s vor seinem Ende nutzen: Ist es bis dahin nicht da, geht
-der Upload ohne Bild weiter (Grund in `preview.error`), statt am Zeitlimit den
-fertigen Node zu verlieren. Das Zurücklesen eines fertigen Nodes (`node_full`)
-läuft mit eigener Grenze (10 s) außerhalb des Zeitlimits.
+dieselben Regeln (`discarded_node` oder `node`, nach der ersten Sammlungsanfrage
+`node` mit `collections`). Das Vorschaubild darf das Zeitlimit nicht ausschöpfen:
+Es lässt den Anfragen nach ihm eine Reserve – 15 s für die erste (eine je
+Sammlung, eine je Workflow-Schritt), 5 s für jede weitere, höchstens 45 s; folgt
+keine, 1 s. Ist das Bild bis dahin nicht da, geht der Upload ohne Bild weiter
+(Grund in `preview.error`), statt am Zeitlimit den fertigen Node zu verlieren.
+Das Zurücklesen eines fertigen Nodes (`node_full`) läuft mit eigener Grenze
+(10 s) außerhalb des Zeitlimits.
 
 ## Kosten
 

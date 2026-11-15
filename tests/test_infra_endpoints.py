@@ -26,9 +26,9 @@ from src.infra import (
     create_internal_app,
     start_internal_server,
 )
-from src.services import llm_service as llm_module
 from src.services.llm_errors import LLMAuthForbidden
 from src.services.llm_service import LLMService, reset_provider_gates
+from conftest import use_settings
 
 
 def _settings(**overrides) -> Settings:
@@ -51,7 +51,7 @@ def _sample(name, **labels) -> float:
 
 
 def test_ready_when_the_configuration_can_work(monkeypatch):
-    monkeypatch.setattr(deps, "settings", _settings())
+    use_settings(monkeypatch, _settings())
 
     with TestClient(main.app) as client:
         response = client.get("/ready")
@@ -72,7 +72,7 @@ def test_ready_when_the_configuration_can_work(monkeypatch):
     ],
 )
 def test_not_ready_when_no_llm_call_could_succeed(monkeypatch, overrides, reason):
-    monkeypatch.setattr(deps, "settings", _settings(**overrides))
+    use_settings(monkeypatch, _settings(**overrides))
 
     with TestClient(main.app) as client:
         public = client.get("/ready")
@@ -102,7 +102,7 @@ def test_a_deployment_without_repository_can_be_ready(monkeypatch):
     settings = _settings(
         wlo_guest_username="", wlo_guest_password="", require_repository=False
     )
-    monkeypatch.setattr(deps, "settings", settings)
+    use_settings(monkeypatch, settings)
 
     with TestClient(main.app) as client:
         public = client.get("/ready")
@@ -121,9 +121,7 @@ def test_the_repository_is_required_by_default():
 
 def test_forward_mode_without_own_key_is_ready(monkeypatch):
     # The key arrives with each request through the B-API proxy.
-    monkeypatch.setattr(
-        deps, "settings", _settings(b_api_auth_mode="forward", b_api_key="")
-    )
+    use_settings(monkeypatch, _settings(b_api_auth_mode="forward", b_api_key=""))
 
     with TestClient(main.app) as client:
         assert client.get("/ready").status_code == 200
@@ -134,9 +132,7 @@ def test_auto_mode_without_own_key_stays_ready(monkeypatch):
     Behind the B-API proxy with forwardApiKey every call carries the caller's
     key; auto without B_API_KEY is a working setup (startup warning only).
     """
-    monkeypatch.setattr(
-        deps, "settings", _settings(b_api_auth_mode="auto", b_api_key="")
-    )
+    use_settings(monkeypatch, _settings(b_api_auth_mode="auto", b_api_key=""))
 
     with TestClient(main.app) as client:
         assert client.get("/ready").status_code == 200
@@ -144,7 +140,7 @@ def test_auto_mode_without_own_key_stays_ready(monkeypatch):
 
 def test_a_readiness_problem_is_logged_once(monkeypatch, caplog):
     monkeypatch.setattr(infra, "_logged_problems", [])
-    monkeypatch.setattr(deps, "settings", _settings(wlo_guest_password=""))
+    use_settings(monkeypatch, _settings(wlo_guest_password=""))
 
     with TestClient(main.app) as client:
         for _ in range(3):
@@ -253,7 +249,7 @@ def test_http_requests_are_counted_by_route_template():
 async def test_llm_calls_are_counted_by_result(monkeypatch):
     reset_provider_gates()
     cfg = _settings(llm_retry_delay=0)
-    monkeypatch.setattr(llm_module, "get_settings", lambda: cfg)
+    use_settings(monkeypatch, cfg)
     service = LLMService(llm_provider="b-api-openai")
     service.http_client = httpx.AsyncClient(
         transport=httpx.MockTransport(lambda r: httpx.Response(403, text="Forbidden"))
@@ -372,7 +368,7 @@ def test_the_api_keeps_running_when_the_internal_port_is_taken(monkeypatch, capl
         taken.bind(("0.0.0.0", 0))
         taken.listen()
         port = taken.getsockname()[1]
-        monkeypatch.setattr(deps, "settings", _settings(internal_port=port))
+        use_settings(monkeypatch, _settings(internal_port=port))
 
         with TestClient(main.app) as client:
             assert client.get("/health").status_code == 200

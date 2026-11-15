@@ -1,5 +1,7 @@
 """The OpenAPI document: request models of raw-Request endpoints, body schemas."""
 
+from typing import Any
+
 from fastapi.openapi.utils import get_openapi
 from pydantic import BaseModel
 
@@ -113,6 +115,32 @@ def documented_body_schema(model: type[BaseModel]) -> dict:
     schema.pop("examples", None)
     schema["additionalProperties"] = True
     return schema
+
+
+def success_example(value: Any) -> dict[int | str, dict[str, Any]]:
+    """
+    `responses=` of a route: the answer /docs shows for its 200 (audit API-15).
+
+    FastAPI merges this into the answer it derives from `response_model`; the
+    schema and its description stay as they are. The examples themselves are
+    in the `*_docs.py` modules beside the routers, the same JSON as in
+    docs/API.md (tests/test_openapi_response_examples.py).
+
+    No null inside an example: get_openapi drops every None of the document,
+    so the field would be missing in /docs and still stand in the reference.
+    """
+    return {200: {"content": {"application/json": {"example": value}}}}
+
+
+def success_examples(
+    named: dict[str, dict[str, Any]],
+) -> dict[int | str, dict[str, Any]]:
+    """
+    As success_example, for an operation whose 200 has answers a caller must
+    tell apart: per name `summary`, `description` and `value`. OpenAPI takes
+    `example` or `examples`, never both.
+    """
+    return {200: {"content": {"application/json": {"examples": named}}}}
 
 
 # Endpoints that write to or read from the repository with the service account

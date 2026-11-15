@@ -17,6 +17,7 @@ from src.api import deps
 from src.config import Settings
 from src.services import diagnostics
 from src.services.llm_auth import forwarded_authorization
+from conftest import use_settings
 
 BEARER = "Bearer 0123456789abcdef0123456789abcdef"
 EXTRACTOR = "http://bildungs-api-services-full-text.b-api"
@@ -124,14 +125,14 @@ async def test_the_report_names_version_mode_and_config_warnings():
 
 
 def test_the_endpoint_does_not_exist_unless_switched_on(monkeypatch):
-    monkeypatch.setattr(deps, "settings", _settings())
+    use_settings(monkeypatch, _settings())
 
     with TestClient(main.app) as client:
         assert client.get("/debug/dependencies").status_code == 404
 
 
 def test_switched_on_the_endpoint_reports(monkeypatch):
-    monkeypatch.setattr(deps, "settings", _settings(debug_endpoints=True))
+    use_settings(monkeypatch, _settings(debug_endpoints=True))
 
     async def fake_check(settings, client=None):
         return {"checks": {"llm": {"authorized": True}}}
@@ -185,3 +186,115 @@ async def test_provider_slash_model_is_not_expected_in_the_list():
     report = await diagnostics.check_dependencies(settings, _client(_router_lists("x")))
 
     assert "route_listed" not in report["checks"]["llm"]
+
+
+# ------------------------------------------------- services through the B-API
+#
+# Audit 13.11., OPS-19: text extraction and geocoder go through the B-API with
+# the key of the request. The check asked without a key and called the 401
+# "reachable" - while every URL extraction ended with 502. The geocoder was
+# not checked at all.
+
+B_API = "https://b-api.staging.openeduhub.net"
+
+
+def _through_the_b_api(**overrides) -> Settings:
+    return Settings(_env_file=None, **{"b_api_key": "own-key", **overrides})
+
+
+def _answers(seen, statuses):
+    def handler(request):
+        seen.append(request)
+        for part, status in statuses.items():
+            if part in request.url.path:
+                return httpx.Response(status, json={"data": [], "features": []})
+        return httpx.Response(200, json={"data": [], "features": []})
+
+    return handler
+
+
+@pytest.mark.asyncio
+async def test_services_behind_the_b_api_are_asked_with_the_key_of_the_request():
+    seen = []
+
+    with forwarded_authorization(BEARER):
+        report = await diagnostics.check_dependencies(
+            _through_the_b_api(), _client(_answers(seen, {}))
+        )
+
+    checks = report["checks"]
+    assert checks["text_extraction"]["authorized"] is True
+    assert checks["geocoder"]["authorized"] is True
+    by_path = {request.url.path: request for request in seen}
+    extraction = by_path["/api/v1/proxy/text-extraction/metrics"]
+    geocoder = by_path["/api/v1/proxy/photon_geocoding/api"]
+    for call in (extraction, geocoder):
+        assert call.method == "GET"
+        assert call.headers["authorization"] == BEARER
+        assert "x-api-key" not in call.headers
+    assert "0123456789abcdef" not in str(report)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [401, 403])
+async def test_a_key_without_the_proxy_rights_shows_up(status):
+    seen = []
+    statuses = {"text-extraction": status, "photon_geocoding": status}
+
+    report = await diagnostics.check_dependencies(
+        _through_the_b_api(), _client(_answers(seen, statuses))
+    )
+
+    for name in ("text_extraction", "geocoder"):
+        check = report["checks"][name]
+        assert (check["reachable"], check["status"]) == (True, status)
+        assert check["authorized"] is False
+        assert check["auth_source"] == "static"
+    assert "own-key" not in str(report)
+
+
+@pytest.mark.asyncio
+async def test_a_service_of_its_own_gets_no_key_and_photon_is_not_called():
+    seen = []
+    settings = _settings(b_api_services="direct")
+
+    with forwarded_authorization(BEARER):
+        report = await diagnostics.check_dependencies(
+            settings, _client(_answers(seen, {}))
+        )
+
+    extraction = report["checks"]["text_extraction"]
+    assert extraction["reachable"] is True and "authorized" not in extraction
+    (call,) = [r for r in seen if r.url.host == "bildungs-api-services-full-text.b-api"]
+    assert "authorization" not in call.headers and "x-api-key" not in call.headers
+    # Photon itself is a third party: no call from here, least of all one with
+    # tracing headers.
+    assert "skipped" in report["checks"]["geocoder"]
+    assert not [r for r in seen if r.url.host == "photon.komoot.io"]
+
+
+@pytest.mark.asyncio
+async def test_no_text_extraction_at_all_is_said_so():
+    seen = []
+    settings = Settings(
+        _env_file=None,
+        llm_provider="openai",
+        repository_url="https://repo.example/edu-sharing/rest",
+    )
+
+    report = await diagnostics.check_dependencies(settings, _client(_answers(seen, {})))
+
+    assert report["checks"]["text_extraction"] == {"configured": False}
+
+
+@pytest.mark.asyncio
+async def test_without_a_key_the_services_behind_the_b_api_are_not_called():
+    seen = []
+
+    report = await diagnostics.check_dependencies(
+        _through_the_b_api(b_api_key=""), _client(_answers(seen, {}))
+    )
+
+    for name in ("text_extraction", "geocoder"):
+        assert report["checks"][name]["error"] == "LLM_AUTH_MISSING"
+    assert not [r for r in seen if "/proxy/" in r.url.path]

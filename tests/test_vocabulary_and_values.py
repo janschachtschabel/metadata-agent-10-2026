@@ -15,13 +15,13 @@ import httpx
 import pytest
 
 from src.config import Settings
-from src.services import llm_service as llm_module
 from src.services.field_normalizer import FieldNormalizer
 from src.services.llm_dates_numbers import DateNumberMixin
 from src.services.llm_service import LLMService, reset_provider_gates
 from src.services.metadata_export import format_value
 from src.services.metadata_validation import _vocabulary_warnings
 from src.utils.schema_loader import get_ai_fillable_fields, get_latest_version
+from conftest import use_settings
 
 PHYSIK = "http://w3id.org/openeduhub/vocabs/discipline/460"
 
@@ -66,7 +66,7 @@ def _service(gateway, monkeypatch, **settings):
             **settings,
         },
     )
-    monkeypatch.setattr(llm_module, "get_settings", lambda: cfg)
+    use_settings(monkeypatch, cfg)
     service = LLMService(llm_provider="b-api-openai")
     service.http_client = httpx.AsyncClient(
         transport=httpx.MockTransport(gateway.handler)
@@ -464,7 +464,7 @@ def test_zero_and_false_stay_concepts_of_a_closed_vocabulary(value, expected):
         value, {"datatype": "string", "vocabulary": vocabulary}
     )
 
-    assert result is not None
+    assert result == expected
 
 
 @pytest.mark.parametrize(

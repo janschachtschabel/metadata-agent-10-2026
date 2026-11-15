@@ -6,12 +6,13 @@ from typing import TYPE_CHECKING, Any, Optional
 import httpx
 
 from ..metrics import OWN_SERVICE_HOOKS
+from ..utils.tls_context import shared_tls_context
 from .repository_curation import (
     fetch_workflow_history,
     run_workflow_steps,
 )
 from .repository_diff import compute_diff, properties_to_flat, unresolved_values
-from .repository_support import get_repository_config, repository_error
+from .repository_support import get_repository_config, repository_error, sent_record
 
 logger = logging.getLogger(__name__)
 
@@ -61,10 +62,24 @@ class ReviewMixin:
 
         base_url = config["base_url"]
 
+        # Read like the write path reads a body: flat or nested, the markers
+        # where the form has them (audit 14.11., R-07). The router looks for
+        # context and version beside `metadata` only.
+        if expected_metadata:
+            expected_metadata = sent_record(expected_metadata)
+            named_context = expected_metadata.get("contextName")
+            named_version = expected_metadata.get("schemaVersion")
+            if isinstance(named_context, str) and named_context:
+                context = named_context
+            if isinstance(named_version, str) and named_version:
+                version = named_version
+
         try:
             timeout = httpx.Timeout(30.0, connect=10.0)
             async with httpx.AsyncClient(
-                timeout=timeout, event_hooks=OWN_SERVICE_HOOKS
+                timeout=timeout,
+                event_hooks=OWN_SERVICE_HOOKS,
+                verify=shared_tls_context(),
             ) as client:
                 # Fetch node metadata
                 url = f"{base_url}/rest/node/v1/nodes/-home-/{node_id}/metadata?propertyFilter=-all-"
@@ -156,7 +171,9 @@ class ReviewMixin:
         try:
             timeout = httpx.Timeout(45.0, connect=10.0)
             async with httpx.AsyncClient(
-                timeout=timeout, event_hooks=OWN_SERVICE_HOOKS
+                timeout=timeout,
+                event_hooks=OWN_SERVICE_HOOKS,
+                verify=shared_tls_context(),
             ) as client:
                 # An outage on this read says nothing about the node: the
                 # steps then run and report their own failures, as before.

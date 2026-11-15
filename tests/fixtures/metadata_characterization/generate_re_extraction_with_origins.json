@@ -63,7 +63,7 @@
   "errors": [],
   "fields_extracted": 1,
   "fields_failed": 0,
-  "fields_total": 15,
+  "fields_total": 14,
   "llm_model": "test-model",
   "llm_provider": "b-api-openai",
   "status": "success",

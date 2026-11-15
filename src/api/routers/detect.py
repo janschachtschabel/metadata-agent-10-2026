@@ -1,8 +1,7 @@
 """Content type detection (/detect-content-type)."""
 
-import asyncio
 import time
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from ...models.schemas import (
     DetectContentTypeRequest,
@@ -10,26 +9,23 @@ from ...models.schemas import (
     ContentTypeInfo,
     LocalizedString,
 )
-from ...services.input_source_service import TextExtractionError
 from ...services.llm_errors import LLMError
-from ...utils.schema_loader import (
-    get_content_types,
-    get_latest_version,
-)
+from ...utils.schema_loader import get_content_types
 
 
 from fastapi import APIRouter
 
 from .. import deps
-from ..input_resolver import resolve_input, truncate
-from ..responses import (
-    generation_timeout_response,
-    llm_error_response,
-    text_extraction_error_response,
-)
+from ..request_body import JsonObjectRoute
+from ..disconnect import run_with_deadline
+from ..input_resolver import resolve_input, truncate, truncation_warnings
+from ..schema_resolution import concrete_version
+from ..responses import generation_timeout_response, llm_error_response
+from .extraction_docs import DETECT_CONTENT_TYPE_RESPONSES
 
 
-router = APIRouter()
+# The body is read like that of the raw-request endpoints (request_body.py).
+router = APIRouter(route_class=JsonObjectRoute)
 
 
 # ============================================================================
@@ -40,6 +36,7 @@ router = APIRouter()
 @router.post(
     "/detect-content-type",
     response_model=DetectContentTypeResponse,
+    responses=DETECT_CONTENT_TYPE_RESPONSES,
     summary="Content-Type erkennen",
     description="""Analysiert Text und erkennt automatisch den passenden Content-Type (Schema) für die Metadaten-Extraktion.
 
@@ -49,8 +46,8 @@ router = APIRouter()
 |------|-------------|------------------|
 | `text` | Direkter Text als Eingabe (Standard) | `text` |
 | `url` | Text von URL via Crawler abrufen | `source_url`, optional `extraction_method` |
-| `node_id` | Text + Metadaten von Repository-Node abrufen | `node_id`, `repository` |
-| `node_url` | Repository-Node + Crawler-Fallback (URL aus ccm:wwwurl) | `node_id`, `repository` (source_url optional) |
+| `node_id` | Text + Metadaten von Repository-Node abrufen | `node_id` |
+| `node_url` | Repository-Node + Crawler-Fallback (URL aus ccm:wwwurl) | `node_id` (source_url optional) |
 
 ## Extraction Method (extraction_method)
 
@@ -133,7 +130,7 @@ router = APIRouter()
         }
     },
 )
-async def detect_content_type(req: DetectContentTypeRequest):
+async def detect_content_type(req: DetectContentTypeRequest, request: Request):
     """
     Detect content type from text using LLM.
 
@@ -141,20 +138,19 @@ async def detect_content_type(req: DetectContentTypeRequest):
     for the specified context and version. Fetching the source and the AI call
     together end at METADATA_AGENT_GENERATE_TIMEOUT (audit P-01).
     """
-    try:
-        async with asyncio.timeout(deps.settings.generate_timeout):
-            return await _detect(req)
-    except TimeoutError:
-        return generation_timeout_response(deps.settings.generate_timeout)
+    return await run_with_deadline(
+        request,
+        _detect(req),
+        deps.settings.generate_timeout,
+        generation_timeout_response,
+    )
 
 
 async def _detect(req: DetectContentTypeRequest):
     start_time = time.time()
 
     # Cheap refusals before the source is fetched (audit API-05).
-    version = req.version
-    if version == "latest" or not version:
-        version = get_latest_version(req.context)
+    version = concrete_version(req.context, req.version)
     content_types = get_content_types(req.context, version)
     if not content_types:
         raise HTTPException(
@@ -162,18 +158,20 @@ async def _detect(req: DetectContentTypeRequest):
             detail=f"No content types defined for context '{req.context}' version '{version}'",
         )
     deps.check_provider_override(req.llm_provider)
+    deps.check_model_override(req.llm_provider, req.llm_model)
 
-    try:
-        resolved = await resolve_input(req)
-    except TextExtractionError as e:
-        return text_extraction_error_response(e)
+    # A TextExtractionError has its own answer (UnexpectedErrorMiddleware).
+    resolved = await resolve_input(req)
     text = resolved.text
     input_warnings = resolved.warnings
 
     if not text or not text.strip():
         raise HTTPException(status_code=400, detail="Text cannot be empty")
 
-    text = truncate(text)
+    # Said in the answer, as /generate does (audit 14.11., list S-N).
+    cut = truncate(text)
+    input_warnings = input_warnings + truncation_warnings(text, cut)
+    text = cut
 
     # Build available list
     available = []
@@ -204,8 +202,7 @@ async def _detect(req: DetectContentTypeRequest):
     except LLMError as e:
         return llm_error_response(e)
     finally:
-        # Close non-default LLM service HTTP client to prevent leak
-        if req.llm_provider is not None or req.llm_model is not None:
+        if deps.has_own_llm_client(req):
             await service.llm_service.close()
     detected_schema = detection["schema_file"]
 

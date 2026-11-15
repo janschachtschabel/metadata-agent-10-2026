@@ -11,6 +11,22 @@ from ..utils.dates_numbers import (
 )
 
 
+def impossible_dates(value: Any) -> list[str]:
+    """
+    The entries of a date answer that are written like a date but name none:
+    "30.02.2026", and "03/15/2025" - month first, which is not guessed.
+    _normalize_date leaves them out; the caller says so (audit 14.11., L-N).
+    """
+    found = []
+    for entry in value if isinstance(value, list) else [value]:
+        if isinstance(entry, str):
+            try:
+                read_date(entry)
+            except ImpossibleDate:
+                found.append(entry)
+    return found
+
+
 class DateNumberMixin:
     """
     Normalizing numbers, dates and times (part of LLMService).

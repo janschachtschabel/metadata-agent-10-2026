@@ -16,7 +16,7 @@ import time
 
 import pytest
 
-from src.services import field_normalizer as field_normalizer_module
+from src.services import vocabulary_matching
 from src.services.metadata_service import MetadataService
 
 PHYSIK = "http://w3id.org/openeduhub/vocabs/discipline/460"
@@ -64,15 +64,13 @@ async def test_a_legacy_concept_of_the_caller_is_kept(monkeypatch):
 @pytest.mark.asyncio
 async def test_many_invalid_caller_values_are_not_fuzzy_matched(monkeypatch):
     calls = {"count": 0}
-    original = field_normalizer_module.FieldNormalizer._find_fuzzy_match
+    original = vocabulary_matching.nearest_label
 
-    def counting(self, value, concepts):
+    def counting(text, labels):
         calls["count"] += 1
-        return original(self, value, concepts)
+        return original(text, labels)
 
-    monkeypatch.setattr(
-        field_normalizer_module.FieldNormalizer, "_find_fuzzy_match", counting
-    )
+    monkeypatch.setattr(vocabulary_matching, "nearest_label", counting)
     service = _service(monkeypatch, {"cclom:title": "Titel"})
     values = [f"Unbekannt {i}" for i in range(1000)]
 

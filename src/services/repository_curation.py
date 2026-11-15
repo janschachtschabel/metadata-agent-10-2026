@@ -72,9 +72,16 @@ async def set_collections(
     base_url: str,
     node_id: str,
     collection_ids: list[str],
+    results: Optional[list[dict[str, Any]]] = None,
 ) -> dict:
-    """Reference the node in the given collections."""
-    results = []
+    """
+    Reference the node in the given collections.
+
+    `results` is filled entry by entry: a caller that is cut off in between
+    still knows which collections were linked (audit 14.11., R-01).
+    """
+    if results is None:
+        results = []
 
     for collection_id in collection_ids:
         # Metadata can carry anything a caller typed; only a node id may become
@@ -98,13 +105,19 @@ async def set_collections(
                     "Accept": "application/json",
                 },
             )
-            success = response.status_code in (200, 201)
+            # 409: the node is referenced there already, which is what was
+            # asked for (a retry, or the same collection named twice by URL
+            # and by id) - not "not linked" (audit 14.11., R-N).
+            success = response.status_code in (200, 201, 409)
             entry: dict[str, Any] = {
                 "collectionId": collection_id,
                 "success": success,
             }
             if success:
-                logger.info(f"📚 Referenced in collection {collection_id}")
+                logger.info(
+                    f"📚 Referenced in collection {collection_id} "
+                    f"(HTTP {response.status_code})"
+                )
             else:
                 entry["error"] = repository_error(response)
                 logger.warning(

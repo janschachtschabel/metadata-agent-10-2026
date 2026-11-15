@@ -217,16 +217,16 @@ Gleiche `instance-id` → geteilter State. Events feuern nur von der **ersten re
 
 **Details:**
 
-- **Lesen:** `startNodeIdExtraction()` ruft `POST /generate` mit `input_source: "node_id"`, `node_id`, `include_core: true`, `enable_geocoding: true`, `normalize: true` und — falls schon Felder gefüllt sind — `existing_metadata`. Serverseitig holt `InputSourceService` `…/node/v1/nodes/-home-/{id}/metadata` + `…/textContent`. `input_source: "node_url"` nimmt zusätzlich die `ccm:wwwurl` als Crawler-Fallback, wenn kein Volltext hinterlegt ist.
+- **Lesen:** `startNodeIdExtraction()` ruft `POST /generate` mit `input_source: "node_id"`, `node_id`, `include_core: true`, `enable_geocoding: true`, `normalize: true` und — falls schon Felder gefüllt sind — `existing_metadata`. Serverseitig holt `InputSourceService` `…/node/v1/nodes/-home-/{id}/metadata` + `…/textContent`. `input_source: "node_url"` nimmt zusätzlich die `ccm:wwwurl` als Crawler-Fallback, wenn kein Volltext hinterlegt ist. Aus dem Node übernommen werden nur Properties, die ein Schema des Kontexts führt (nie `ccm:oeh_extended*`); der Volltext wird auf 150.000 Zeichen gekürzt (Hinweis in `processing.warnings`). Ein Node ganz ohne Text antwortet `422`.
 - **Kein `node-id`-Attribut.** Die Input-Liste des Custom Elements enthält `text`, `url`, `inputMode` — aber **kein** `nodeId` und kein `sourceUrl`; `GET /widget/info` listet beide auch nicht. Node-ID ist derzeit nur über das UI-Eingabefeld setzbar.
-- **Speichern (Widget):** Der Upload-Button ruft `POST /upload`. Das legt einen **neuen Node** im konfigurierten Inbox-Ordner an (`_create_node` → `_ensure_aspects` → `_set_metadata` → Collections → Extended Data → Workflow). Mit `node_id` schreibt `/upload` in einen Node, den `POST /node` kurz vorher angelegt hat (zweistufiger Upload, README).
+- **Speichern (Widget):** Der Upload-Button ruft `POST /upload`. Das legt einen **neuen Node** im konfigurierten Inbox-Ordner an (`_create_node` → `_ensure_aspects` → `_set_metadata` → Extended Data → Vorschaubild → Collections → Workflow). Mit `node_id` schreibt `/upload` in einen Node, den `POST /node` kurz vorher angelegt hat (zweistufiger Upload, README).
 - **Speichern (API): `POST /nodes`** legt an (ohne `node_id`) oder **aktualisiert** einen vorhandenen Node (mit `node_id`) und antwortet immer mit dem vollständigen Node (`node_full`, `node_created`):
   - Nur die mitgeschickten Felder ändern sich; leere Werte löschen nichts.
   - `write_extended_data` ist standardmäßig **aus**, weil `ccm:oeh_extendedData` als Ganzes ersetzt würde.
   - **Zwei-Stunden-Fenster:** Updates nur bis 2 Stunden nach `cm:created`, danach `403`; unbekannter Node `404`, fehlende Zugangsdaten `503`.
   - `metadataset` immer mitschicken, sonst fallen typspezifische Felder weg.
-  - Details und Statuscodes: README, Abschnitt `POST /nodes`.
-- **Duplikatlogik:** `check_duplicates: true` sucht per `ccm:wwwurl`. Bei Treffer bricht der Upload ab (`duplicate: true` + vorhandene `nodeId`). Der Widget-Dialog bietet dann „trotzdem hochladen" — das erzeugt einen **zweiten Node**, kein Update.
+  - Details und Statuscodes: [docs/API.de.md](docs/API.de.md#post-nodes).
+- **Duplikatlogik:** `check_duplicates: true` sucht per `ccm:wwwurl` – über die Suche und unter den 25 neuesten Nodes des Eingangsordners, damit auch ein eben angelegter Node gefunden wird. Bei Treffer bricht der Upload ab (`duplicate: true` + vorhandene `nodeId`). Der Widget-Dialog bietet dann „trotzdem hochladen" — das erzeugt einen **zweiten Node**, kein Update.
 - **Gegenprüfen:** `POST /upload/verify/{node_id}` — ohne Body reines Auslesen, mit Body SOLL/IST-Diff je Feld (`match`, `mismatch`, `missing_in_repo`, `extra_in_repo`, `not_written`).
 
 **Round-trip für ein Update:** `POST /generate` (`input_source: node_id`) → im Canvas bearbeiten → `POST /nodes` mit derselben `node_id` und `metadataset`. Nicht direkt gegen edu-sharing schreiben: Das umginge das Zwei-Stunden-Fenster, das die Arbeit der Redaktion schützt. Ältere Nodes ändert die Redaktionsoberfläche.
@@ -275,12 +275,12 @@ Nur die gelisteten Felder werden neu extrahiert, der Rest kommt unverändert aus
 
 ---
 
-## 7. API-Endpunkte (Auswahl; `/ready` und `/debug/*` siehe README)
+## 7. API-Endpunkte (Auswahl; alle Endpunkte in docs/API.de.md)
 
 | Methode | Pfad | Zweck |
 |---|---|---|
 | GET | `/health` | Health Check |
-| GET | `/widget/info` | Einbettungs-Infos: Attribute, Layouts, Aliase und Events wie im Build |
+| GET | `/widget/info` | Einbettungs-Infos: Attribute, Layouts, Aliase und Events wie im Build; URLs als relative Verweise, Snippets mit dem Platzhalter `{AGENT_URL}` |
 | GET | `/widget/i18n/{lang}.json` | UI-Übersetzungen |
 | GET | `/info/schemata` | Verfügbare Kontexte |
 | GET | `/info/schemas/{context}/{version}` | Schemas eines Kontexts |
@@ -340,7 +340,19 @@ mit dem Build überein: keine Attribute `node-id`, `source-url`, `show-input`,
 (`minimal.html` ist nur ein Einbettungsbeispiel mit `layout="default"`; ein
 unbekannter Layout-Name fällt still auf `default` zurück), keine Events
 `extractionComplete`/`contentTypeDetected`. Die Beispielseiten unter
-`/widget/examples` nutzen seit 3.0.0 nur noch diese Namen. Was leicht anders erwartet wird:
+`/widget/examples` nutzen seit 3.0.0 nur noch diese Namen.
+
+Die Adressen in der Antwort von `GET /widget/info` sind relative Verweise und
+gegen die Adresse aufzulösen, unter der `/widget/info` aufgerufen wurde:
+`dist_base_url` ist `dist`, die Scripts heißen `dist/runtime.js`,
+`dist/polyfills.js`, `dist/main.js`, die Beispiele `examples/full.html` usw.
+(also `…/widget/dist/main.js`, `…/widget/examples/full.html`). Der Dienst baut
+keine Adresse mehr aus der Anfrage; hinter einem Proxy mit Pfad-Präfix stimmen
+die Verweise deshalb ohne weitere Einstellung. In den `snippet`-Texten steht
+`{AGENT_URL}` für die Basis-URL des Dienstes und ist vor dem Einfügen zu
+ersetzen. `/widget/info/` mit angehängtem Schrägstrich antwortet `404`.
+
+Was leicht anders erwartet wird:
 
 | Erwartung | Realität im Build |
 |---|---|

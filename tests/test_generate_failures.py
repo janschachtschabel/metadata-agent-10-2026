@@ -14,7 +14,6 @@ from fastapi.testclient import TestClient
 from src import main
 from src.api import deps
 from src.config import Settings
-from src.services import llm_service as llm_module
 from src.services import metadata_service as metadata_module
 from src.services.llm_errors import LLMUpstreamError
 from src.services.llm_service import (
@@ -23,6 +22,7 @@ from src.services.llm_service import (
     reset_provider_gates,
 )
 from src.services.metadata_service import MetadataService
+from conftest import use_settings
 
 FORBIDDEN = (
     '{"status":403,"error":"Forbidden","trace":"...AuthorizationDeniedException..."}'
@@ -53,8 +53,7 @@ def stack(monkeypatch):
         cfg = Settings(
             _env_file=None, b_api_key="own-key", llm_retry_delay=0, **settings_overrides
         )
-        monkeypatch.setattr(llm_module, "get_settings", lambda: cfg)
-        monkeypatch.setattr(deps, "settings", cfg)
+        use_settings(monkeypatch, cfg)
         llm = LLMService(llm_provider="b-api-openai", llm_model="gpt-6-luna")
         llm.http_client = httpx.AsyncClient(
             transport=httpx.MockTransport(gateway.handler)

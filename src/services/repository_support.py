@@ -5,7 +5,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from .repository_result import SCHEMA_UNAVAILABLE
+from ..config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -23,20 +23,32 @@ def build_auth_header(username: str, password: str) -> Optional[str]:
     return f"Basic {encoded}"
 
 
-def get_repository_config() -> dict:
-    """Build repository config from settings (single configured URL)."""
-    from ..config import get_settings
+def repository_root(repository_url: str) -> str:
+    """
+    The configured repository URL without '/rest' and without a trailing slash.
 
-    settings = get_settings()
-
-    # Derive upload base URL from settings (strip '/rest' suffix if present,
-    # because the upload endpoints append '/rest/...' themselves)
-    base = settings.repository_url.rstrip("/")
+    The one place that reads METADATA_AGENT_REPOSITORY_URL's form: the setting
+    is documented with '/rest', and one without it wrote nodes but answered
+    every read of one with 404 (audit 14.11., R-12).
+    """
+    base = repository_url.rstrip("/")
     if base.endswith("/rest"):
         base = base[: -len("/rest")]
+    return base
 
+
+def rest_base(repository_url: str) -> str:
+    """The base of the repository's REST API: '<root>/rest'."""
+    return f"{repository_root(repository_url)}/rest"
+
+
+def get_repository_config() -> dict:
+    """Build repository config from settings (single configured URL)."""
+    settings = get_settings()
+
+    # Without '/rest': the upload endpoints append '/rest/...' themselves.
     return {
-        "base_url": base,
+        "base_url": repository_root(settings.repository_url),
         "inbox_id": settings.wlo_inbox_id,
     }
 
@@ -57,29 +69,6 @@ def text_value(value: Any) -> Optional[str]:
     """
     value = first_value(value)
     return None if value is None else str(value)
-
-
-def no_writable_fields_result(
-    context: str, version: str, schema_file: Optional[str]
-) -> dict:
-    """
-    The answer when the schemas name no field that may be written.
-
-    That only happens when the schema could not be loaded (unknown context or
-    version, unreadable file). Writing anyway would create a node holding just
-    its title and report it as a success.
-    """
-    schemas = f"core.json + {schema_file}" if schema_file else "core.json"
-    return {
-        "success": False,
-        "error_code": SCHEMA_UNAVAILABLE,
-        "step": "schema",
-        "error": (
-            f"Für Kontext '{context}', Version '{version}' ({schemas}) ist kein "
-            "Repository-Feld bekannt — das Schema ließ sich nicht laden. Es wurde "
-            "nichts geschrieben."
-        ),
-    }
 
 
 def duplicate_skipped(warning: str) -> str:
@@ -130,6 +119,8 @@ def partial_problems(
             else "Erweiterte Daten (ccm:oeh_extendedType/Data/Text) konnten "
             "nicht geschrieben werden"
         )
+    if extended_result is not None and extended_result.get("note"):
+        problems.append(extended_result["note"])
     failed_collections = [
         str(entry["collectionId"])
         for entry in (collection_result or {}).get("results", [])
@@ -159,7 +150,9 @@ def identifying_url(metadata: dict) -> Optional[str]:
     latter, so the duplicate check has to look at the same fallback — and the
     search API takes a list of strings, not a list holding a list.
     """
-    return first_value(metadata.get("ccm:wwwurl") or metadata.get("schema:url")) or None
+    # As text: the body is not type-checked field by field, and a number here
+    # failed the answer model after the node was written (audit 13.11., API-13).
+    return text_value(metadata.get("ccm:wwwurl") or metadata.get("schema:url")) or None
 
 
 def node_created_at(node: dict[str, Any]) -> Optional[datetime]:
@@ -244,6 +237,38 @@ ENVELOPE_KEYS = frozenset(
 )
 
 
+SCHEMA_MARKERS = ("contextName", "schemaVersion", "metadataset")
+
+# The options a flat /upload body carries beside the fields, and those of
+# /nodes: no metadata either. The routers lift them out by name; a comparison
+# with what was sent has to leave out the same ones (audit 14.11., R-08).
+UPLOAD_OPTION_KEYS = (
+    "node_id",
+    "repository",
+    "check_duplicates",
+    "start_workflow",
+    "source",
+    "preview_url",
+    "screenshot_method",
+    "write_extended_data",
+    "extended_text",
+    "return_full_node",
+    "collection_id",
+    "workflow_steps",
+    "workflow_comment",
+    "workflow_receiver",
+)
+SAVE_NODE_OPTION_KEYS = (
+    "node_id",
+    "collection_id",
+    "write_extended_data",
+    "extended_text",
+    "preview",
+    "start_review_workflow",
+    "start_quality_workflow",
+)
+
+
 def is_metadata_key(key: str) -> bool:
     return key not in ENVELOPE_KEYS and not key.startswith("_")
 
@@ -253,3 +278,22 @@ def metadata_fields(metadata: dict) -> dict:
     inner = metadata.get("metadata")
     source = inner if isinstance(inner, dict) else metadata
     return {k: v for k, v in source.items() if is_metadata_key(k)}
+
+
+def sent_record(body: dict) -> dict:
+    """
+    A body as the write path reads it: the fields flat, the schema markers with them.
+
+    /upload takes the fields flat, under `metadata` or under `metadata.metadata`
+    (web component); markers beside `metadata` move in unless it has its own,
+    as the routers do it. /upload/verify compared the nested forms as if they
+    had no fields (audit 14.11., R-07).
+    """
+    record = body
+    for _ in range(2):
+        inner = record.get("metadata")
+        if not isinstance(inner, dict):
+            break
+        markers = {m: record[m] for m in SCHEMA_MARKERS if m in record}
+        record = {**markers, **inner}
+    return record

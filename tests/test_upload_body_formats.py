@@ -5,7 +5,7 @@ The three shapes a caller can post to /upload must mean the same thing.
 everything downstream looks for them *inside* it: main reads contextName and
 schemaVersion off the metadata dict, and RepositoryService reads metadataset
 from it to decide which schema's repo_fields apply. Posting the /generate
-response verbatim — which the README calls the simple way to use this endpoint —
+response verbatim — the form docs/API.md recommends ("Metadata body") —
 therefore used to fall back to core.json alone: for an event that silently drops
 ccm:oeh_event_begin, ccm:oeh_event_end, ccm:price and ccm:competence, with
 success: true and no warning.
@@ -51,8 +51,8 @@ class _StubRepositoryService:
         self.upload_calls = []
         self.result = {"success": True, "node": {"nodeId": NODE_ID}}
 
-    async def upload_metadata(self, **kwargs):
-        self.upload_calls.append(kwargs)
+    async def write_node(self, job, deadline=None):
+        self.upload_calls.append(vars(job))
         return self.result
 
 
@@ -200,8 +200,15 @@ def test_an_option_in_the_flat_shape_reaches_the_service(client, option):
     """Not being swallowed is half of it — the value has to arrive as well."""
     call = _upload(client, {**BODIES["flat"], option: OPTION_VALUES[option]})
     expected = OPTION_VALUES[option]
-    # The service names this one differently than the request does.
-    key = {"collection_id": "collection_ids"}.get(option, option)
+    # The write (NodeWrite) names these differently than the request does;
+    # a workflow switched off is a write without states.
+    key = {
+        "collection_id": "collection_ids",
+        "return_full_node": "read_back",
+        "start_workflow": "workflow_steps",
+    }.get(option, option)
+    if option == "start_workflow":
+        expected = []
 
     assert call[key] == expected
 

@@ -23,6 +23,7 @@ from fastapi.responses import JSONResponse
 from .config import Settings
 from .metrics import metrics_response, precreate_alert_series
 from .utils.request_id import current_request_id
+from .utils.security_headers import ScreenshotBrowserRefusalMiddleware
 from .utils.schema_loader import get_available_contexts
 
 logger = logging.getLogger(__name__)
@@ -113,6 +114,9 @@ def readiness_response(settings: Settings, detailed: bool = True) -> JSONRespons
 def create_internal_app(get_settings: Callable[[], Settings]) -> FastAPI:
     """The app of the internal port: health, ready, metrics - no API spec."""
     app = FastAPI(openapi_url=None, docs_url=None, redoc_url=None)
+    # On loopback no NetworkPolicy applies: a page being captured must not read
+    # /metrics or /ready through the screenshot browser (audit 13.11., S-23).
+    app.add_middleware(ScreenshotBrowserRefusalMiddleware)
     # Before the first scrape, so the critical alerts see the first failure.
     precreate_alert_series(get_settings())
 
@@ -144,19 +148,24 @@ def _bind(host: str, port: int) -> socket.socket:
     lifespan can report.
     """
     family = socket.AF_INET6 if ":" in host else socket.AF_INET
-    sock = socket.socket(family, socket.SOCK_STREAM)
-    if os.name != "nt":
-        # A restart must not wait for TIME_WAIT. On Windows the option would
-        # let a second process bind the same port, hiding the conflict.
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock = None
     try:
+        # Inside the try: on a host without IPv6 "::" already fails here
+        # (audit 14.11., O-37).
+        sock = socket.socket(family, socket.SOCK_STREAM)
+        if os.name != "nt":
+            # A restart must not wait for TIME_WAIT. On Windows the option would
+            # let a second process bind the same port, hiding the conflict.
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind((host, port))
     except OSError as e:
-        sock.close()
+        if sock is not None:
+            sock.close()
         raise InternalPortUnavailable(
-            f"Interner Port {port} ist belegt oder nicht verfügbar ({e.strerror or e}). "
-            "METADATA_AGENT_INTERNAL_PORT braucht einen freien Port und genau einen "
-            "Worker je Container."
+            f"Interner Port {port} auf {host} ist belegt oder nicht verfügbar "
+            f"({e.strerror or e}). METADATA_AGENT_INTERNAL_PORT braucht einen "
+            "freien Port und genau einen Worker je Container, "
+            "METADATA_AGENT_INTERNAL_HOST eine Adresse, die der Host kennt."
         ) from e
     return sock
 

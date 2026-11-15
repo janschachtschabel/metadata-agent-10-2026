@@ -12,12 +12,13 @@ from fastapi.testclient import TestClient
 from src import main
 from src.api import deps
 from src.config import Settings
+from conftest import use_settings
 
 
 @pytest.fixture
 def allow(monkeypatch):
     def configure(models: str) -> None:
-        monkeypatch.setattr(deps, "settings", Settings(allowed_llm_models=models))
+        use_settings(monkeypatch, Settings(allowed_llm_models=models))
 
     return configure
 

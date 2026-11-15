@@ -25,6 +25,24 @@ class ContentTypeDetection:
     problem: Optional[str] = None
 
 
+def _named_type(result: Any) -> Optional[str]:
+    """The content type a parsed answer names, or None when it names none."""
+    # The system prompt (shared with field extraction) asks for "value";
+    # some models follow it instead of the "content_type" asked for here.
+    answer = (
+        (result.get("content_type") or result.get("value"))
+        if isinstance(result, dict)
+        else None
+    )
+    # One type wrapped in a list still names one type; anything else that
+    # is not a plain string is no answer (and must not raise).
+    if isinstance(answer, list) and len(answer) == 1:
+        answer = answer[0]
+    if not isinstance(answer, str):
+        answer = None
+    return answer
+
+
 class ContentTypeMixin:
     """
     Content type detection by the model (part of LLMService).
@@ -67,6 +85,56 @@ class ContentTypeMixin:
             ct.get("schema_file") for ct in content_types if ct.get("schema_file")
         }
 
+        prompt = self._detection_prompt(text, content_types, language, prompt_hint)
+
+        try:
+            response = await self._call_llm(
+                messages=[
+                    {"role": "system", "content": self._get_system_prompt(language)},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.1,
+                max_tokens=100,
+            )
+            choice = response.get("choices", [{}])[0]
+            content = choice.get("message", {}).get("content", "")
+            # Cut off at the token limit: said in the reason, as extract_field
+            # does - it was "no usable answer" (audit 14.11., L-N).
+            truncated = choice.get("finish_reason") == "length"
+            result = self._parse_json_response(content)
+        except LLMError as e:
+            if e.fatal:
+                raise
+            return ContentTypeDetection(None, f"KI-Dienst nicht nutzbar: {e.message}")
+        except Exception as e:
+            # Not a model answer but a fault in the agent: the keyword fallback
+            # still runs, the traceback goes to the log.
+            logger.exception("Content-type detection failed")
+            return ContentTypeDetection(
+                None, f"Antwort nicht lesbar ({type(e).__name__})"
+            )
+
+        answer = _named_type(result)
+        if answer in allowed:
+            return ContentTypeDetection(answer)
+        if truncated:
+            return ContentTypeDetection(
+                None,
+                "die Antwort des KI-Diensts wurde an der Tokengrenze abgeschnitten "
+                "(finish_reason=length)",
+            )
+        if answer:
+            return ContentTypeDetection(None, f"unbekannte Inhaltsart '{answer}'")
+        return ContentTypeDetection(None, "keine auswertbare Antwort")
+
+    def _detection_prompt(
+        self,
+        text: str,
+        content_types: list[dict[str, Any]],
+        language: str,
+        prompt_hint: Optional[str],
+    ) -> str:
+        """The question: the start of the text and the content types on offer."""
         # Truncate text for content type detection — only first ~5000 chars needed
         detection_text = text[:5000] if len(text) > 5000 else text
 
@@ -114,50 +182,4 @@ Allowed values (choose EXACTLY ONE of the following schema_file values):
 --- END ---
 
 Respond with JSON: {{"content_type": "<schema_file>"}}"""
-
-        try:
-            response = await self._call_llm(
-                messages=[
-                    {"role": "system", "content": self._get_system_prompt(language)},
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.1,
-                max_tokens=100,
-            )
-            content = (
-                response.get("choices", [{}])[0].get("message", {}).get("content", "")
-            )
-            result = self._parse_json_response(content)
-        except LLMError as e:
-            if e.fatal:
-                raise
-            return ContentTypeDetection(None, f"KI-Dienst nicht nutzbar: {e.message}")
-        except Exception as e:
-            # Not a model answer but a fault in the agent: the keyword fallback
-            # still runs, the traceback goes to the log.
-            logger.exception("Content-type detection failed")
-            return ContentTypeDetection(
-                None, f"Antwort nicht lesbar ({type(e).__name__})"
-            )
-
-        # The system prompt (shared with field extraction) asks for "value";
-        # some models follow it instead of the "content_type" asked for here.
-        answer = (
-            (result.get("content_type") or result.get("value"))
-            if isinstance(result, dict)
-            else None
-        )
-        # One type wrapped in a list still names one type; anything else that
-        # is not a plain string is no answer (and must not raise).
-        if isinstance(answer, list) and len(answer) == 1:
-            answer = answer[0]
-        if not isinstance(answer, str):
-            answer = None
-        if answer in allowed:
-            return ContentTypeDetection(answer)
-        if answer:
-            return ContentTypeDetection(None, f"unbekannte Inhaltsart '{answer}'")
-        return ContentTypeDetection(None, "keine auswertbare Antwort")
-
-
-# Singleton instance (default config)
+        return prompt

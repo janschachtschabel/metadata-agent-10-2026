@@ -124,6 +124,8 @@ def _optional_strings(model):
 
 # What each model needs before it will build at all.
 REQUEST_MODELS = [
+    # The input block /generate, /detect-content-type and /extract-field share.
+    (schemas.InputSourceRequest, {}),
     (schemas.GenerateRequest, {}),
     (schemas.DetectContentTypeRequest, {}),
     (
@@ -141,17 +143,31 @@ REQUEST_MODELS = [
 ]
 
 
+def _blank_fields(model, required) -> list[str]:
+    return [name for name in _optional_strings(model) if name not in required]
+
+
+# Only the models that have such a field: the others skipped on every run, for
+# a reason no run could change (audit 14.11., Q-14). A model that gains an
+# optional text field enters the list by itself.
+WITH_OPTIONAL_TEXT = [
+    (model, required)
+    for model, required in REQUEST_MODELS
+    if _blank_fields(model, required)
+]
+
+
 @pytest.mark.parametrize(
-    "model, required", REQUEST_MODELS, ids=[m.__name__ for m, _ in REQUEST_MODELS]
+    "model, required",
+    WITH_OPTIONAL_TEXT,
+    ids=[m.__name__ for m, _ in WITH_OPTIONAL_TEXT],
 )
 def test_every_optional_string_left_blank_ends_up_unset(model, required):
     """
     Not merely 'does not raise' — the value must be None afterwards, because
     that is what every downstream `if x is not None` is written against.
     """
-    blanks = {name: "" for name in _optional_strings(model) if name not in required}
-    if not blanks:
-        pytest.skip(f"{model.__name__} hat keine optionalen Textfelder")
+    blanks = {name: "" for name in _blank_fields(model, required)}
 
     request = model(**required, **blanks)
 
@@ -230,6 +246,14 @@ def test_an_empty_step_list_is_rejected_rather_than_guessed():
 
     with pytest.raises(ValidationError, match="start_workflow=false"):
         UploadRequest(metadata={"cclom:title": "x"}, workflow_steps=[])
+
+
+def test_the_sweep_finds_the_optional_text_fields():
+    """An empty list would pass: the two models this file started with are in it."""
+    swept = {model for model, _ in WITH_OPTIONAL_TEXT}
+
+    assert {UploadRequest, WorkflowRequest} <= swept
+    assert "workflow_comment" in _blank_fields(UploadRequest, {})
 
 
 def test_the_model_list_covers_every_request_model():

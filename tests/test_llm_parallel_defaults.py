@@ -4,6 +4,11 @@ Parallelism: provider defaults, shared ENV overrides and the /generate worker de
 The OpenAI paths may run 20 requests at once, AcademicCloud keeps its measured
 2/2. A request without max_workers takes METADATA_AGENT_DEFAULT_MAX_WORKERS —
 before, a fixed request default of 10 silently ignored that setting.
+
+On 2026-11-15 the B-API answered 60 and 100 calls at the same moment without a
+429, and 60 workers took 4.6 s where 20 take 5.2 s. The limit stays at 20 all
+the same (decision of that day): half a second is not worth tripling the load
+on a shared key before it is tried in production.
 """
 
 import asyncio
@@ -17,13 +22,18 @@ from fastapi.testclient import TestClient
 from src import main
 from src.api import deps
 from src.config import Settings
-from src.services import llm_service as llm_module
 from src.services.llm_service import LLMService, reset_provider_gates
+from conftest import use_settings
 
 
 @pytest.mark.parametrize(
     "provider, expected",
-    [("b-api-openai", 20), ("openai", 20), ("b-api-academiccloud", 2)],
+    [
+        ("b-api-openai", 20),
+        ("b-api-router", 20),
+        ("openai", 20),
+        ("b-api-academiccloud", 2),
+    ],
 )
 @pytest.mark.parametrize("unset", [None, "", "  "])
 def test_unset_override_uses_the_provider_default(provider, expected, unset):
@@ -73,7 +83,7 @@ async def test_the_openai_path_runs_twenty_calls_in_parallel(monkeypatch):
     ):
         monkeypatch.delenv(name, raising=False)
     # A developer's .env must not decide this test.
-    monkeypatch.setattr(llm_module, "get_settings", lambda: Settings(_env_file=None))
+    use_settings(monkeypatch, Settings(_env_file=None))
     reset_provider_gates()
     service = LLMService(llm_provider="b-api-openai")
     active = peak = 0
@@ -125,9 +135,7 @@ async def test_the_openai_path_runs_twenty_calls_in_parallel(monkeypatch):
 def test_generate_uses_the_env_worker_default_unless_the_request_overrides(
     monkeypatch, mode, configured, explicit, expected
 ):
-    monkeypatch.setattr(
-        deps, "settings", Settings(_env_file=None, default_max_workers=configured)
-    )
+    use_settings(monkeypatch, Settings(_env_file=None, default_max_workers=configured))
     generate = AsyncMock(
         return_value={
             "contextName": "default",
@@ -158,4 +166,4 @@ def test_generate_uses_the_env_worker_default_unless_the_request_overrides(
             response = client.post("/generate", json=body)
 
     assert response.status_code == 200, response.text
-    assert generate.await_args.kwargs["max_workers"] == expected
+    assert generate.await_args.kwargs["options"].max_workers == expected

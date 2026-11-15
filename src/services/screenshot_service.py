@@ -16,6 +16,7 @@ from typing import Any, Optional
 from urllib.parse import urljoin, urlsplit
 from weakref import WeakKeyDictionary
 
+from ..config import get_settings
 from ..utils.loggable import loggable_text, loggable_url
 from ..utils.public_url import PublicUrlError, require_public_http_url
 from ..utils.security_headers import (
@@ -103,6 +104,29 @@ def _public_requests_only(redirect_hops: list[str]):
     return handle
 
 
+# Answers to requests with a body that a page being captured sends itself.
+MAX_POST_ANSWER_BYTES = 5 * 1024 * 1024
+POST_ANSWER_TIMEOUT_MS = 15_000
+
+
+def _announced_length(response) -> int:
+    try:
+        return int(response.headers.get("content-length", 0))
+    except ValueError:
+        return 0
+
+
+async def _too_large(response) -> bool:
+    """
+    An answer over MAX_POST_ANSWER_BYTES - by the length it announces, else by
+    its body. A chunked answer announces none, a compressed one the smaller
+    one: both passed the check of the header alone (audit 14.11., S-41).
+    """
+    if _announced_length(response) > MAX_POST_ANSWER_BYTES:
+        return True
+    return len(await response.body()) > MAX_POST_ANSWER_BYTES
+
+
 async def _one_hop_at_a_time(route, allowed, redirect_hops: list[str]) -> None:
     """
     Send a request with a body without following a redirect; check the target.
@@ -113,18 +137,25 @@ async def _one_hop_at_a_time(route, allowed, redirect_hops: list[str]) -> None:
     passes the handler again, and any other request with a body is not
     redirected at all - a 307/308 would resend the body to the new target.
     route.fetch() buffers the answer in the driver; bodies of answers to POSTs
-    are small, unlike a direct link to a file (see _public_requests_only).
+    are small, unlike a direct link to a file (see _public_requests_only). The
+    page decides that, though: the wait is bounded, and an answer larger than
+    MAX_POST_ANSWER_BYTES is not copied into the page as well (audit 13.11.,
+    S-21; _too_large).
     """
     from playwright.async_api import Error as PlaywrightError
 
     request = route.request
     try:
-        response = await route.fetch(max_redirects=0)
+        response = await route.fetch(max_redirects=0, timeout=POST_ANSWER_TIMEOUT_MS)
     except PlaywrightError as e:
         logger.info(
             f"📸 {loggable_url(request.url)} could not be fetched: {loggable_text(e)}"
         )
         await route.abort("failed")
+        return
+    if await _too_large(response):
+        logger.info(f"📸 {loggable_url(request.url)}: answer to a POST too large")
+        await route.abort("blockedbyclient")
         return
     location = response.headers.get("location")
     if not (300 <= response.status < 400 and location):
@@ -261,11 +292,9 @@ class ScreenshotService:
 
     def __init__(self, settings=None):
         if settings is None:
-            from ..config import get_settings
-
             settings = get_settings()
 
-        self.default_method = settings.screenshot_method
+        self.default_method = LOCAL_METHODS[0]
         self.default_width = settings.screenshot_width
         self.default_height = settings.screenshot_height
         self.default_format = settings.screenshot_format
@@ -352,6 +381,9 @@ class ScreenshotService:
                         device_scale_factor=1,
                         # Service workers fetch outside the request check below.
                         service_workers="block",
+                        # A page could fill /tmp with downloads it starts itself
+                        # until the pod is evicted (audit 13.11., S-21).
+                        accept_downloads=False,
                         # On every request, redirect hops included: the API
                         # refuses it (security_headers.py, audit S-15).
                         extra_http_headers={

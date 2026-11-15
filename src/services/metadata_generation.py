@@ -10,19 +10,60 @@ import copy
 import json
 import logging
 import re
-from typing import Any, Optional
+from dataclasses import dataclass
+from typing import Any, Collection, Optional
 
+from ..config import MAX_WORKERS
 from ..utils.schema_loader import get_ai_fillable_fields, get_schema_fields
 
 logger = logging.getLogger(__name__)
 
+
+@dataclass
+class GenerationOptions:
+    """What one run of MetadataService.generate_metadata extracts, and how."""
+
+    context: str = "default"
+    version: str = "latest"
+    # A schema file, or 'auto' for detection.
+    schema_file: str = "auto"
+    # Existing metadata to update.
+    existing_metadata: Optional[dict[str, Any]] = None
+    language: str = "de"
+    # Parallel worker count.
+    max_workers: int = MAX_WORKERS
+    # Include core fields (title, description, etc.).
+    include_core: bool = True
+    # Convert location addresses to coordinates.
+    enable_geocoding: bool = True
+    # Apply normalization to extracted values.
+    normalize_output: bool = True
+    # Normalize vocabulary values using fuzzy matching.
+    normalize_vocabularies: bool = True
+    # Field IDs to regenerate (re-extract).
+    regenerate_fields: Optional[list[str]] = None
+    # Re-extract fields that are empty in existing_metadata.
+    regenerate_empty: bool = False
+    # Existing field origins (field_id -> 'ai'|'user').
+    origins: Optional[dict[str, str]] = None
+    # Loop time the whole run must end by (the /generate deadline); geocoding
+    # gets only what is left of it.
+    deadline: Optional[float] = None
+
+
 UPDATE_MARKER_WARNING = "Text-basierte Metadaten-Übergabe erkannt: [IST-STAND]/[UPDATE]"
 
-# [IST-STAND] <json> [UPDATE] <text>, and the English spellings.
+# [IST-STAND] <json> [UPDATE] <text>, and the English spellings: the marker
+# the text starts with, and the one that ends the JSON. Searched as literals -
+# one pattern for the whole shape tried every split of a run of blanks between
+# its quantifiers and held the event loop for minutes (audit 13.11., P-08).
 _UPDATE_MARKERS = [
-    re.compile(r"\[IST-STAND\]\s*(.*?)\s*\[UPDATE\]\s*(.*)", re.IGNORECASE | re.DOTALL),
-    re.compile(r"\[CURRENT\]\s*(.*?)\s*\[UPDATE\]\s*(.*)", re.IGNORECASE | re.DOTALL),
-    re.compile(r"\[EXISTING\]\s*(.*?)\s*\[NEW\]\s*(.*)", re.IGNORECASE | re.DOTALL),
+    (start, re.compile(re.escape(end), re.IGNORECASE))
+    for start, end in (
+        ("[IST-STAND]", "[UPDATE]"),
+        ("[CURRENT]", "[UPDATE]"),
+        ("[EXISTING]", "[NEW]"),
+    )
 ]
 # Header keys of an exported record; not metadata to carry over.
 _RECORD_HEADER_KEYS = (
@@ -67,18 +108,23 @@ def parse_update_text(text: str) -> tuple[str, Optional[dict[str, Any]]]:
     Returns (update text, existing metadata from the JSON before the marker),
     or (text, None) when there is no marker or the part before it is no JSON object.
     """
-    for pattern in _UPDATE_MARKERS:
-        match = pattern.match(text.strip())
-        if not match:
+    stripped = text.strip()
+    for start, end in _UPDATE_MARKERS:
+        if stripped[: len(start)].upper() != start:
+            continue
+        found = end.search(stripped, len(start))
+        if not found:
             continue
         try:
-            existing_metadata = json.loads(match.group(1).strip())
-        except json.JSONDecodeError:
+            existing_metadata = json.loads(stripped[len(start) : found.start()])
+        except (json.JSONDecodeError, RecursionError):
+            # Thousands of nested brackets are no record either; uncaught,
+            # the RecursionError was a 500 (audit 14.11., L-38).
             continue
         if isinstance(existing_metadata, dict):
             for key in _RECORD_HEADER_KEYS:
                 existing_metadata.pop(key, None)
-            return (match.group(2).strip(), existing_metadata)
+            return (stripped[found.end() :].strip(), existing_metadata)
 
     return (text, None)
 
@@ -90,11 +136,15 @@ def apply_update_markers(
     Text and existing metadata after [IST-STAND]/[UPDATE] markers.
 
     Metadata from the markers wins over existing_metadata. The third value says
-    whether markers were found.
+    whether markers were found. An empty record between them ("{}") is one:
+    the text is split, and existing_metadata stays what it was - taken as "no
+    markers", the markers went to the model as text (audit 14.11., L-38).
     """
     update_text, parsed = parse_update_text(text)
-    if not parsed:
+    if parsed is None:
         return text, existing_metadata, False
+    if not parsed:
+        return update_text, existing_metadata, True
     merged = {**existing_metadata, **parsed} if existing_metadata else parsed
     return update_text, merged, True
 
@@ -124,6 +174,8 @@ def load_extraction_fields(
     The AI-fillable fields: core first (when wanted), then the content type's.
 
     A failing content-type schema raises; a failing core schema is a warning.
+    A field both declare is the content type's: asked for twice, the later
+    answer won (audit 14.11., L-35).
     """
     fields = get_ai_fillable_fields(context, version, schema_file)
     core_fields = []
@@ -132,7 +184,8 @@ def load_extraction_fields(
             core_fields = get_ai_fillable_fields(context, version, "core.json")
         except Exception as e:
             warnings.append(f"Could not load core fields: {str(e)}")
-    return core_fields + fields
+    own_ids = {field.get("id") for field in fields}
+    return [f for f in core_fields if f.get("id") not in own_ids] + fields
 
 
 def _is_blank(value: Any) -> bool:
@@ -245,14 +298,15 @@ def merge_extracted(
 
 
 def log_re_extraction(extracted_values: dict[str, Any]) -> None:
-    """Trace what a re-extraction got back (first five values)."""
+    """Trace what a re-extraction got back: how many, and which fields first."""
     extracted_keys = [k for k, v in extracted_values.items() if v is not None]
     null_count = sum(1 for v in extracted_values.values() if v is None)
     logger.info(
         f"🔄 RE-EXTRACTION: LLM extracted {len(extracted_keys)} non-null values, {null_count} null values"
     )
-    for fid in extracted_keys[:5]:
-        logger.info(f"  📝 {fid}: {str(extracted_values[fid])[:100]}")
+    # Field ids only: the values are content, and content stays out of the log.
+    if extracted_keys:
+        logger.info(f"  📝 {', '.join(extracted_keys[:5])}")
 
 
 def _schema_fields_or_none(context: str, version: str, schema_file: str) -> list[dict]:
@@ -299,13 +353,28 @@ def final_origins(
     ordered_metadata: dict[str, Any],
     field_origins: dict[str, str],
     extracted_values: dict[str, Any],
+    asked: Collection[str] = (),
 ) -> dict[str, str]:
-    """An origin for every returned field; without one, 'ai' if it was asked for, else 'user'."""
+    """
+    An origin for every returned field. Without a recorded one: 'ai' for a
+    field the model answered, and for one it was asked for (`asked`) that is
+    empty - nobody entered that; in a first run every empty field came back
+    as the editor's (audit 14.11., L-N). Else 'user': a value the caller
+    brought and the model did not replace.
+    """
+
+    def origin(field_id: str, value: Any) -> str:
+        if field_id in field_origins:
+            return field_origins[field_id]
+        if field_id in extracted_values:
+            return "ai"
+        if field_id in asked and is_effectively_empty(value):
+            return "ai"
+        return "user"
+
     return {
-        field_id: field_origins.get(
-            field_id, "ai" if field_id in extracted_values else "user"
-        )
-        for field_id in ordered_metadata
+        field_id: origin(field_id, value)
+        for field_id, value in ordered_metadata.items()
     }
 
 
@@ -326,7 +395,11 @@ def run_outcome(
     fields_extracted = len(
         [v for v in extracted_values.values() if not is_effectively_empty(v)]
     )
-    fields_failed = len(extraction.get("errors", [])) + extraction.get("skipped", 0)
+    fields_failed = (
+        len(extraction.get("errors", []))
+        + extraction.get("skipped", 0)
+        + len(extraction.get("timed_out", []))
+    )
     if fatal_error is not None:
         fields_failed += 1
     status = generation_status(fields_extracted, fields_failed)

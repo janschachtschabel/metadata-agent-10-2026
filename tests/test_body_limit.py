@@ -2,7 +2,7 @@
 Request bodies have an upper bound.
 
 Without one, a large body is read into memory in full, and an invalid one is
-then walked character by character by sanitize_json_string on the event loop —
+then walked character by character by the JSON repair on the event loop —
 the whole worker stalls. Both the declared length and a streamed (chunked)
 body count.
 """

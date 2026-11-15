@@ -10,7 +10,13 @@ from ...services.repository_curation import (
     DEFAULT_WORKFLOW_STATUS,
     QUALITY_WORKFLOW_STATUS,
 )
+from ...services.repository_preview_upload import fetched_preview
 from ...services.repository_result import WriteResult
+from ...services.repository_support import (
+    SAVE_NODE_OPTION_KEYS,
+    UPLOAD_OPTION_KEYS,
+)
+from ...services.repository_write import NodeWrite
 
 
 from fastapi import APIRouter
@@ -23,11 +29,16 @@ from ..deps import (
     require_repository_service,
 )
 from ..openapi import documented_body_schema
-from .request_body import invalid_body
-from .upload import refused_write
+from ..request_body import invalid_body, refuse_foreign_options
+from ..responses import refused_write
+from .repository_docs import SAVE_NODE_RESPONSES
 
 
 router = APIRouter()
+
+# The options of a flat body: one list with the comparison of /upload/verify
+# (audit 14.11., R-08). Anything added to SaveNodeRequest belongs there too.
+_SAVE_NODE_OPTIONS = SAVE_NODE_OPTION_KEYS
 
 
 # ============================================================================
@@ -38,6 +49,7 @@ router = APIRouter()
 @router.post(
     "/nodes",
     response_model=SaveNodeResponse,
+    responses=SAVE_NODE_RESPONSES,
     tags=["Repository"],
     summary="Node speichern — anlegen oder aktualisieren",
     description="""Schreibt Metadaten ins WLO edu-sharing Repository: legt einen Node an oder aktualisiert einen bestehenden.
@@ -78,7 +90,7 @@ mit `502`, wenn das Repository ihn wegen eines Fehlers nicht liefern konnte.
 
 Wurde nichts geschrieben, kommt kein `200`, sondern das Fehlerformat wie bei
 `/upload`: `422` `VALIDATION_ERROR` (Objektform eines Felds verletzt),
-`422` `SCHEMA_UNAVAILABLE` (Kontext/Version unbekannt), `502` `UPSTREAM_ERROR`
+`422` `SCHEMA_UNAVAILABLE` (Kontext, Version oder `metadataset` unbekannt, `step: schema`), `502` `UPSTREAM_ERROR`
 (Repository lehnte Anlegen oder alle Metadaten ab oder war nicht erreichbar;
 `discarded_node`/`node` nennen einen dabei angelegten Node, `field_errors` die
 abgelehnten Felder). `200` mit `success: false` bleibt für Teilergebnisse, bei
@@ -142,6 +154,11 @@ hat.
 erstmaligen Hochladen sinnvoll ist: Dublettenprüfung, Screenshot/Vorschaubild
 und die Wahl, ob der Node zurückgelesen wird. Der vollständige Node wird
 **immer** als `node_full` mitgeliefert.
+
+Optionen, die es nur bei `/upload` gibt (`check_duplicates`, `start_workflow`,
+`workflow_steps`, `preview_url`, `source` …), werden mit `422` abgelehnt und
+nicht stillschweigend übergangen — ebenso ein unbekannter Schlüssel neben
+einem verschachtelten `metadata`. `repository` wird weiterhin ignoriert.
 
 ## Response
 
@@ -223,25 +240,15 @@ async def save_node(request: Request):
     """Create a node or update an existing one, and answer with the full node."""
     data = parse_json_object(await request.body(), '{"cclom:title": "…"}')
 
+    refuse_foreign_options(
+        data, "/nodes", _SAVE_NODE_OPTIONS, "/upload", UPLOAD_OPTION_KEYS
+    )
     # The flat form puts options and metadata fields on the same level, so the
     # options have to be lifted out by name before the rest becomes the metadata
-    # dict. A name missing from this list is not rejected — it is filed away as a
-    # metadata field and silently does nothing. Anything added to SaveNodeRequest
-    # belongs here too.
+    # dict. A name missing from the list is not rejected — it is filed away as a
+    # metadata field and silently does nothing.
     if not isinstance(data.get("metadata"), dict):
-        options = {
-            key: data.pop(key)
-            for key in (
-                "node_id",
-                "collection_id",
-                "write_extended_data",
-                "extended_text",
-                "preview",
-                "start_review_workflow",
-                "start_quality_workflow",
-            )
-            if key in data
-        }
+        options = {key: data.pop(key) for key in _SAVE_NODE_OPTIONS if key in data}
         data = {"metadata": data, **options}
     else:
         carry_schema_markers(data)
@@ -253,8 +260,9 @@ async def save_node(request: Request):
 
     repo_service = require_repository_service()
 
-    context = req.metadata.get("contextName", "default")
-    version = req.metadata.get("schemaVersion", "latest")
+    # `or`: a marker that is null means the default, as on /validate.
+    context = req.metadata.get("contextName") or "default"
+    version = req.metadata.get("schemaVersion") or "latest"
 
     # Handover first, release second — the order the editorial process runs in.
     workflow_steps = []
@@ -263,22 +271,26 @@ async def save_node(request: Request):
     if req.start_quality_workflow:
         workflow_steps.append(QUALITY_WORKFLOW_STATUS)
 
-    raw = await repo_service.save_node(
+    job = NodeWrite(
         metadata=req.metadata,
-        node_id=req.node_id,
         context=context,
         version=version,
+        node_id=req.node_id or None,
+        read_back=True,
         write_extended_data=req.write_extended_data,
         extended_text=req.extended_text,
         collection_ids=req.collection_id,
         workflow_steps=workflow_steps,
-        preview=req.preview,
+        preview_source=fetched_preview(req.preview) if req.preview else None,
+    )
+    raw = await repo_service.write_node(
+        job,
         # METADATA_AGENT_UPLOAD_TIMEOUT from now; the service reports what
         # happened to the node when it hits (audit D-04).
-        deadline=asyncio.get_running_loop().time() + deps.settings.upload_timeout,
+        asyncio.get_running_loop().time() + deps.settings.upload_timeout,
     )
     result = WriteResult.from_service(raw)
-    refusal = refused_write(result)
+    refusal = refused_write(result, deps.settings.upload_timeout)
     if refusal is not None:
         return refusal
     return result.response(SaveNodeResponse, result.preview)

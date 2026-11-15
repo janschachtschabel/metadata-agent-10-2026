@@ -6,6 +6,8 @@ HTTP client; everything above it - property conversion, the text fallbacks,
 the status a caller sees - runs for real.
 """
 
+from contextlib import asynccontextmanager
+
 import httpx
 import pytest
 from fastapi.testclient import TestClient
@@ -44,6 +46,11 @@ class _Repository:
             200, json={"node": {"properties": self.properties}}, request=request
         )
 
+    @asynccontextmanager
+    async def stream(self, method, url, headers=None):
+        # The text content is read as a stream (audit 14.11., R-N).
+        yield await self.get(url, headers=headers)
+
     async def aclose(self):
         pass
 
@@ -80,8 +87,11 @@ async def test_without_full_text_title_description_and_keywords_stand_in():
     )
 
 
-def test_a_node_without_any_text_is_a_502_not_a_500(monkeypatch):
-    """The source could not deliver - not the request's fault, not a crash."""
+def test_a_node_without_any_text_is_a_422_that_says_so(monkeypatch):
+    """
+    No crash, and no fault of the repository either: the node holds nothing to
+    read (it was a 502 "Failed to fetch input: ValueError"; audit 14.11., S-N).
+    """
     empty = _service(properties={"ccm:wwwurl": ["https://example.org/"]})
     monkeypatch.setattr(deps, "get_input_source_service", lambda: empty)
 
@@ -90,8 +100,8 @@ def test_a_node_without_any_text_is_a_502_not_a_500(monkeypatch):
             "/generate", json={"input_source": "node_id", "node_id": NODE_ID}
         )
 
-    assert response.status_code == 502, response.text
-    assert response.json()["error"]["code"]
+    assert response.status_code == 422, response.text
+    assert "keinen Text" in response.json()["detail"]
 
 
 @pytest.mark.parametrize("keywords", ["Ein Schlagwort", []])

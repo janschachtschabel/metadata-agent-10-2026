@@ -3,7 +3,11 @@
 import logging
 from typing import Any, Optional
 
-from ..utils.schema_loader import load_schema, schema_file_of
+from ..utils.schema_loader import (
+    get_content_type_label,
+    load_schema,
+    schema_file_of,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +21,10 @@ def export_to_markdown(
     include_empty: bool = False,
 ) -> str:
     """
-    Core fields first, then the content type's, one section per group.
+    Every field of core.json and of the content type once, one section per
+    group - the groups of core.json first - and a last section for the fields
+    of a group neither schema declares (audit 14.11., L-39). The title is the
+    name of the content type.
 
     Groups and fields without a value are left out unless `include_empty`.
     """
@@ -36,13 +43,41 @@ def export_to_markdown(
     for field in fields:
         fields_by_group.setdefault(field.get("group", "other"), []).append(field)
 
-    schema_label = localized(schema.get("label", {}), language) if schema else None
-    lines = [f"# {schema_label or schema_file}", ""]
+    lines = [f"# {_title(schema, schema_file, context, version, language)}", ""]
     for group in groups:
         lines.extend(
             _group_section(group, fields_by_group, metadata, language, include_empty)
         )
+    declared = {group.get("id", "") for group in groups}
+    rest = {
+        "id": _OTHER_FIELDS,
+        "label": {"de": "Weitere Angaben", "en": "Further details"},
+    }
+    others = [
+        field
+        for group_id, group_fields in fields_by_group.items()
+        if group_id not in declared
+        for field in group_fields
+    ]
+    lines.extend(
+        _group_section(rest, {_OTHER_FIELDS: others}, metadata, language, include_empty)
+    )
     return "\n".join(lines)
+
+
+# No group id of a schema: a section of its own for fields of undeclared groups.
+_OTHER_FIELDS = "\x00other"
+
+
+def _title(schema, schema_file: str, context: str, version: str, language: str) -> str:
+    """
+    The name of the content type: the schema files carry no label, the
+    content-type concept in core.json does. The file name for what is none.
+    """
+    label = (schema or {}).get("label") or get_content_type_label(
+        schema_file, context, version
+    )
+    return (localized(label, language) if label else "") or schema_file
 
 
 def _try_load(context: str, version: str, schema_file: str):
@@ -55,17 +90,26 @@ def _try_load(context: str, version: str, schema_file: str):
 
 
 def _groups_and_fields(core_schema, schema) -> tuple[list, list]:
-    """Groups of both schemas without duplicates (core first), and all their fields."""
-    groups, fields, seen = [], [], set()
+    """
+    Groups of both schemas without duplicates (core first), and their fields.
+
+    A field both declare is the content type's, as in the extraction: the
+    audience stood in the export twice.
+    """
+    groups, seen = [], set()
     for source in (core_schema, schema):
-        if not source:
-            continue
-        for group in source.get("groups", []):
+        for group in (source or {}).get("groups", []):
             if group.get("id") not in seen:
                 groups.append(group)
                 seen.add(group.get("id"))
-        fields.extend(source.get("fields", []))
-    return groups, fields
+    own = (schema or {}).get("fields", [])
+    own_ids = {field.get("id") for field in own}
+    core = [
+        field
+        for field in (core_schema or {}).get("fields", [])
+        if field.get("id") not in own_ids
+    ]
+    return groups, core + own
 
 
 def _group_section(
@@ -96,16 +140,16 @@ def _group_section(
 
 
 def has_meaningful_value(value: Any) -> bool:
-    """Not None, '', [] or a list/object of nothing but empty entries."""
-    if value is None or value == "" or value == []:
+    """
+    Not None, '', [] or a list/object of nothing but empty entries. 0 and
+    False are values, also inside a list or an object.
+    """
+    if value is None or (isinstance(value, str) and value == ""):
         return False
     if isinstance(value, list):
-        return any(
-            item and (not isinstance(item, dict) or any(v for v in item.values()))
-            for item in value
-        )
+        return any(has_meaningful_value(item) for item in value)
     if isinstance(value, dict):
-        return any(v for v in value.values())
+        return any(has_meaningful_value(item) for item in value.values())
     return True
 
 

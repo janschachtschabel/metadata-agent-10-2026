@@ -12,6 +12,8 @@ spec:
   selector:
     matchLabels:
       {{- include "metadata-agent.selectorLabels" . | nindent 6 }}
+      # Only the Service of the internal port (service.yaml).
+      app.kubernetes.io/component: internal
   endpoints:
     - port: internal
       path: /metrics

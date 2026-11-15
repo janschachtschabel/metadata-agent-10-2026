@@ -152,9 +152,7 @@ def test_every_font_the_stylesheet_names_is_served_as_woff2(styles_source):
 def test_widget_info_advertises_no_external_font_stylesheet(info):
     """The fonts arrive with styles.css; nothing else has to be linked."""
     assert info["scripts"]["fonts"] == []
-    assert any(
-        url.endswith("/widget/dist/styles.css") for url in info["scripts"]["styles"]
-    )
+    assert any(url.endswith("dist/styles.css") for url in info["scripts"]["styles"])
 
 
 def test_no_example_page_loads_google_fonts():

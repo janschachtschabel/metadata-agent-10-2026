@@ -1,7 +1,6 @@
 {
  "_asked": [
   [
-   "cclom:title",
    "ccm:oeh_publisher",
    "cclom:title",
    "cclom:general_description",
@@ -70,7 +69,7 @@
   ],
   "fields_extracted": 0,
   "fields_failed": 2,
-  "fields_total": 15,
+  "fields_total": 14,
   "llm_model": "test-model",
   "llm_provider": "b-api-openai",
   "status": "failed",

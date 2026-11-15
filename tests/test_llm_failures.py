@@ -13,7 +13,6 @@ import httpx
 import pytest
 
 from src.config import Settings
-from src.services import llm_service as llm_module
 from src.services.llm_auth import forwarded_authorization
 from src.services.llm_errors import (
     LLMAuthForbidden,
@@ -25,6 +24,7 @@ from src.services.llm_errors import (
     LLMUpstreamError,
 )
 from src.services.llm_service import LLMService, reset_provider_gates
+from conftest import use_settings
 
 B_API_403_BODY = (
     '{"timestamp":"2026-10-14T13:44:36.107Z","status":403,"error":"Forbidden",'
@@ -58,7 +58,7 @@ def _fresh_gates():
 
 def _service(gateway, monkeypatch, **settings):
     cfg = Settings(_env_file=None, llm_retry_delay=0, b_api_key="own-key", **settings)
-    monkeypatch.setattr(llm_module, "get_settings", lambda: cfg)
+    use_settings(monkeypatch, cfg)
     service = LLMService(llm_provider="b-api-openai", llm_model="gpt-6-luna")
     service.http_client = httpx.AsyncClient(
         transport=httpx.MockTransport(gateway.handler)

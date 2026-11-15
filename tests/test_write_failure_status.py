@@ -222,10 +222,7 @@ class _Service:
     def __init__(self, result):
         self.result = result
 
-    async def upload_metadata(self, **kwargs):
-        return dict(self.result)
-
-    async def save_node(self, **kwargs):
+    async def write_node(self, job, deadline=None):
         return dict(self.result)
 
 

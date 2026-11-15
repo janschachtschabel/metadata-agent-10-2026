@@ -24,8 +24,6 @@ from typing import Iterator, Optional
 
 from .llm_errors import LLMCredentialsMissing
 
-AUTH_MODES = ("static", "forward", "auto")
-
 _forwarded: ContextVar[Optional[str]] = ContextVar(
     "forwarded_b_api_authorization", default=None
 )
@@ -112,6 +110,23 @@ def b_api_auth(settings) -> tuple[dict[str, str], str]:
     if mode != "forward" and settings.b_api_key:
         return {"X-API-KEY": settings.b_api_key}, "static"
     raise LLMCredentialsMissing(_missing_message(mode))
+
+
+def b_api_headers_for(url: str, settings) -> dict[str, str]:
+    """
+    The key header for a call to `url` - only if it is an address of the B-API.
+
+    Text extraction and geocoder are called through the B-API's proxy paths
+    with the same key as the LLM calls; a service at any other address never
+    sees it.
+
+    Raises:
+        LLMCredentialsMissing: an address of the B-API, and no key to send.
+    """
+    base = settings.b_api_base_url
+    if not base or not (url == base or url.startswith(f"{base}/")):
+        return {}
+    return b_api_auth(settings)[0]
 
 
 def current_auth_source(settings) -> Optional[str]:

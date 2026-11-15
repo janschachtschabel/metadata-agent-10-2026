@@ -10,6 +10,7 @@ The expected files were written from the code before the split. A deliberate
 behaviour change updates them on purpose; a refactoring never does.
 """
 
+from contextlib import asynccontextmanager
 import importlib
 import json
 from pathlib import Path
@@ -258,8 +259,19 @@ class _LLM:
         self.values, self.errors, self.skipped = values, list(errors), skipped
         self.asked = []
 
+    @asynccontextmanager
+    async def text_cache_primer(self, text, language, start=True):
+        yield None
+
     async def extract_fields_parallel(
-        self, fields, text, existing_metadata, language, max_workers
+        self,
+        fields,
+        text,
+        existing_metadata,
+        language,
+        max_workers,
+        deadline=None,
+        primer=None,
     ):
         self.asked.append([f["id"] for f in fields])
         return {

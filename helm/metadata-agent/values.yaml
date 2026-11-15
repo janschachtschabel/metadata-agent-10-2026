@@ -1,28 +1,53 @@
 # Metadata Agent API. All settings: ENV-PARAMETER.md; every env key here is
-# checked against the code (tests/test_helm_chart.py).
+# checked against the code, and every value has its "## @param" line
+# (tests/test_helm_chart.py).
 
 image:
-  # Required, e.g. <registry>/projects/wlo/meta-services/metadata-agent-api.
+  ## @param image.repository Registry path of the image, required (e.g. <registry>/projects/wlo/meta-services/metadata-agent-api)
   repository: ""
-  tag: v3.0.1
+  ## @param image.tag Image tag; the chart version names the service version it deploys
+  tag: v4.0.0
+  # Set, the image is pulled as <repository>@<digest> and the tag is not used:
+  # a tag can be moved to another image, a digest cannot.
+  ## @param image.digest Digest of the image (sha256:...) to pin it; empty: pulled by tag
+  digest: ""
+  ## @param image.pullPolicy Kubernetes image pull policy
   pullPolicy: IfNotPresent
+## @param imagePullSecrets Names of the pull secrets for a private registry
 imagePullSecrets: []
 
 # Stateless; one worker per container, so scale here. The GWDG limit of the
 # AcademicCloud models is shared by all replicas (sharedLlmLimit below).
+## @param replicaCount Number of pods
 replicaCount: 2
 
 # Spread the replicas over nodes, but never leave a pod pending for it.
 topologySpread:
+  ## @param topologySpread.enabled Spread the pods over nodes
   enabled: true
+  ## @param topologySpread.maxSkew Largest difference in pods between two nodes
   maxSkew: 1
+  ## @param topologySpread.topologyKey Node label the spread is counted by
   topologyKey: kubernetes.io/hostname
+  ## @param topologySpread.whenUnsatisfiable ScheduleAnyway: never leave a pod pending for the spread
   whenUnsatisfiable: ScheduleAnyway
 
 service:
+  ## @param service.type Kubernetes Service type
   type: ClusterIP
-  port: 8000          # API, /docs, /widget/* - the only port behind the ingress
-  internalPort: 9000  # /health, /ready, /metrics - never behind the ingress
+  ## @param service.port Public port: API, /docs, /widget/* - the only port behind the ingress
+  port: 8000
+  # It has a Service of its own, "<name>-internal", always ClusterIP: type
+  # above never publishes it. The ServiceMonitor scrapes that Service.
+  ## @param service.internalPort Internal port (1-65535): /health, /ready, /metrics - never behind the ingress
+  internalPort: 9000
+
+# The address both ports listen on. "::" on a cluster whose pods have IPv6
+# addresses (IPv6 only, or dual-stack with IPv6 first): probes and Services
+# then reach the pod over IPv6, and 0.0.0.0 does not listen there. With "::"
+# the API port listens on IPv6 only.
+## @param listenHost Address the API port and the internal port listen on: 0.0.0.0 (IPv4) or "::" (IPv6)
+listenHost: "0.0.0.0"
 
 # Behind the B-API (variant A) the service must NOT be reachable from the
 # internet: the B-API proxy calls the Service inside the cluster. With an
@@ -33,31 +58,72 @@ service:
 # namespace (e.g. ingress-nginx) to networkPolicy.ingressNamespaces, or the
 # policy blocks the controller and the Ingress answers 502/504.
 ingress:
+  ## @param ingress.enabled Create an Ingress (off behind the B-API)
   enabled: false
+  ## @param ingress.className Ingress class
   className: nginx
+  ## @param ingress.host Host name of the Ingress (example value)
   host: metadata-agent.example
+  ## @param ingress.tlsSecretName Secret with the TLS certificate; empty: no TLS section
   tlsSecretName: ""
   annotations:
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "320"  # /generate takes up to 300 s
+    ## @param ingress.annotations.nginx.ingress.kubernetes.io/proxy-read-timeout Seconds; /generate takes up to 300 s
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "320"
+    ## @param ingress.annotations.nginx.ingress.kubernetes.io/proxy-send-timeout Seconds, as the read timeout
     nginx.ingress.kubernetes.io/proxy-send-timeout: "320"
-    nginx.ingress.kubernetes.io/proxy-body-size: "20m"     # = METADATA_AGENT_MAX_REQUEST_BYTES
+    # Must name the size of env.METADATA_AGENT_MAX_REQUEST_BYTES ("40m" for
+    # 41943040; a size that is no whole megabyte in bytes) - the chart stops
+    # otherwise.
+    ## @param ingress.annotations.nginx.ingress.kubernetes.io/proxy-body-size Largest request body, = METADATA_AGENT_MAX_REQUEST_BYTES
+    nginx.ingress.kubernetes.io/proxy-body-size: "20m"
 
 env:
-  METADATA_AGENT_LLM_PROVIDER: b-api-openai         # or b-api-router
-  METADATA_AGENT_B_API_AUTH_MODE: auto              # forwarded key, else B_API_KEY
+  ## @param env.METADATA_AGENT_LLM_PROVIDER LLM access: b-api-openai, b-api-router, b-api-academiccloud or openai
+  METADATA_AGENT_LLM_PROVIDER: b-api-openai
+  ## @param env.METADATA_AGENT_B_API_AUTH_MODE auto: forwarded key of the caller, else B_API_KEY; forward or static force one of them
+  METADATA_AGENT_B_API_AUTH_MODE: auto
+  # Both addresses are required: empty, the agent would take the defaults of
+  # its code, which are staging. B-API and repository must belong to the same
+  # environment (the agent warns at start when they do not).
+  ## @param env.METADATA_AGENT_B_API_BASE_URL Address of the B-API, required
   METADATA_AGENT_B_API_BASE_URL: https://b-api.prod.openeduhub.net
+  ## @param env.METADATA_AGENT_REPOSITORY_URL REST address of the edu-sharing repository, required
   METADATA_AGENT_REPOSITORY_URL: https://redaktion.openeduhub.net/edu-sharing/rest
-  METADATA_AGENT_TEXT_EXTRACTION_API_URL: http://bildungs-api-services-full-text.b-api
-  METADATA_AGENT_REQUEST_TIMEOUT: "90"              # per LLM call, below the 300 s deadline
-  METADATA_AGENT_GENERATE_TIMEOUT: "300"            # whole /generate, below the ingress 320 s
-  METADATA_AGENT_UPLOAD_TIMEOUT: "100"              # /upload, /nodes; + discard + preStop < 320 s
-  METADATA_AGENT_MAX_REQUEST_BYTES: "20971520"      # 20 MB
-  METADATA_AGENT_DEBUG_ENDPOINTS: "false"           # /debug/* answers 404
+  # The folder new nodes are created in. This is the default of the code; it
+  # must be checked against the target repository (does the folder exist
+  # there, may the account in the Secret write to it?) before the first
+  # install - a wrong id only shows as a failing /upload.
+  ## @param env.METADATA_AGENT_WLO_INBOX_ID Node id of the inbox folder in the repository; check it against the target repository
+  METADATA_AGENT_WLO_INBOX_ID: 21144164-30c0-4c01-ae16-264452197063
+  # Text extraction and geocoder are called through the B-API's proxy paths,
+  # so they always belong to the B-API above, with the same key as the LLM
+  # calls: the key needs the rights for the proxy services text-extraction and
+  # photon_geocoding. To call the text extraction inside the cluster instead,
+  # name it here, e.g. http://bildungs-api-services-full-text.b-api.
+  ## @param env.METADATA_AGENT_B_API_SERVICES auto, proxy or direct: how text extraction and geocoder are reached
+  METADATA_AGENT_B_API_SERVICES: auto
+  ## @param env.METADATA_AGENT_TEXT_EXTRACTION_API_URL Address of a text extraction of your own; empty: chosen by METADATA_AGENT_B_API_SERVICES
+  METADATA_AGENT_TEXT_EXTRACTION_API_URL: ""
+  ## @param env.METADATA_AGENT_REQUEST_TIMEOUT Seconds per LLM call, below the 300 s deadline
+  METADATA_AGENT_REQUEST_TIMEOUT: "90"
+  ## @param env.METADATA_AGENT_GENERATE_TIMEOUT Seconds for a whole /generate, below the ingress 320 s
+  METADATA_AGENT_GENERATE_TIMEOUT: "300"
+  ## @param env.METADATA_AGENT_UPLOAD_TIMEOUT Seconds for /upload and /nodes; + discard + preStop < 320 s
+  METADATA_AGENT_UPLOAD_TIMEOUT: "100"
+  ## @param env.METADATA_AGENT_MAX_REQUEST_BYTES Largest request body in bytes (20 MB)
+  METADATA_AGENT_MAX_REQUEST_BYTES: "20971520"
+  ## @param env.METADATA_AGENT_DEBUG_ENDPOINTS false: /debug/* answers 404
+  METADATA_AGENT_DEBUG_ENDPOINTS: "false"
   # false: a deployment that only generates is ready without WLO_GUEST_* in the
   # Secret (as with 2.1.1); /upload and /nodes then answer 503.
+  ## @param env.METADATA_AGENT_REQUIRE_REPOSITORY true: /ready needs the repository credentials
   METADATA_AGENT_REQUIRE_REPOSITORY: "true"
+  ## @param env.METADATA_AGENT_LOG_FORMAT json (one object per line) or text
   METADATA_AGENT_LOG_FORMAT: json
+  ## @param env.METADATA_AGENT_LOG_LEVEL DEBUG, INFO, WARNING or ERROR
   METADATA_AGENT_LOG_LEVEL: INFO
+  ## @param env.METADATA_AGENT_SERVICE_NAME Service id, the "service" field of every log line
+  METADATA_AGENT_SERVICE_NAME: metadata-agent
 
 # AcademicCloud (b-api-academiccloud, or a b-api-router route of AcademicCloud
 # models): GWDG limits the B-API key, the agent throttles each pod. With N
@@ -72,8 +138,11 @@ env:
 # Deployment by hand (kubectl scale, an HPA) bypasses the division. Leave it
 # off for b-api-openai and openai; their limits are per pod.
 sharedLlmLimit:
+  ## @param sharedLlmLimit.enabled Divide a limit shared by all pods by replicaCount (AcademicCloud)
   enabled: false
+  ## @param sharedLlmLimit.concurrentRequests LLM calls in flight, all pods together
   concurrentRequests: 2
+  ## @param sharedLlmLimit.requestsPerMinute LLM calls per minute, all pods together
   requestsPerMinute: 10
 
 # Secret values never go into this file.
@@ -82,59 +151,100 @@ sharedLlmLimit:
 # Deployment). After a change: kubectl rollout restart deployment/<name> (the
 # name helm install prints in its notes).
 secret:
-  # Name of an existing Secret holding the keys below. Empty: the chart
-  # expects "<release>-metadata-agent", created with create: true.
+  # Empty: the chart expects "<release>-metadata-agent", created with
+  # create: true.
+  ## @param secret.existingSecret Name of an existing Secret holding the keys below
   existingSecret: ""
-  # Create the Secret from --set secret.values.<KEY>=... (e.g. in CI).
+  ## @param secret.create Create the Secret from --set secret.values.<KEY>=... (e.g. in CI)
   create: false
+  # B_API_KEY: not needed with METADATA_AGENT_B_API_AUTH_MODE=forward.
+  # WLO_GUEST_USERNAME and WLO_GUEST_PASSWORD: both required, without them
+  # /ready answers 503.
+  ## @param secret.keys Secret keys passed to the container as environment variables (names only)
   keys:
-    - B_API_KEY            # not needed with METADATA_AGENT_B_API_AUTH_MODE=forward
-    - WLO_GUEST_USERNAME   # both required: without them /ready answers 503
+    - B_API_KEY
+    - WLO_GUEST_USERNAME
     - WLO_GUEST_PASSWORD
+  ## @param secret.values Values for secret.create, set with --set, never in this file
   values: {}
 
 # Estimated, not measured under load; peaks come from Chromium (screenshots).
 resources:
-  requests: {cpu: 500m, memory: 512Mi}
-  limits: {cpu: "2", memory: 2Gi}
+  requests:
+    ## @param resources.requests.cpu CPU request (estimated)
+    cpu: 500m
+    ## @param resources.requests.memory Memory request (estimated)
+    memory: 512Mi
+  limits:
+    ## @param resources.limits.cpu CPU limit (estimated)
+    cpu: "2"
+    ## @param resources.limits.memory Memory limit (estimated)
+    memory: 2Gi
 
 # The writable emptyDirs (/tmp and /home/appuser: Chromium's profile, caches,
 # screenshots in flight). Above the limit the kubelet evicts the pod instead of
 # letting it fill the node's disk.
 scratchVolumes:
+  ## @param scratchVolumes.tmpSizeLimit Size limit of the emptyDir at /tmp
   tmpSizeLimit: 1Gi
+  ## @param scratchVolumes.homeSizeLimit Size limit of the emptyDir at /home/appuser
   homeSizeLimit: 512Mi
 
 # A running /generate takes up to 300 s; uvicorn finishes it after SIGTERM.
+# The agent is told the value (METADATA_AGENT_GRACE_PERIOD_SECONDS) and warns
+# at start when METADATA_AGENT_GENERATE_TIMEOUT or _UPLOAD_TIMEOUT do not fit.
+## @param terminationGracePeriodSeconds Seconds a pod gets to finish running requests
 terminationGracePeriodSeconds: 320
 
 podSecurityContext:
+  ## @param podSecurityContext.runAsNonRoot Refuse to start as root
   runAsNonRoot: true
-  runAsUser: 1000       # appuser in the image
+  ## @param podSecurityContext.runAsUser User id, appuser in the image
+  runAsUser: 1000
+  ## @param podSecurityContext.runAsGroup Group id of appuser
   runAsGroup: 1000
-  seccompProfile: {type: RuntimeDefault}
+  seccompProfile:
+    ## @param podSecurityContext.seccompProfile.type Seccomp profile (Pod Security "restricted")
+    type: RuntimeDefault
 securityContext:
+  ## @param securityContext.allowPrivilegeEscalation No privilege escalation in the container
   allowPrivilegeEscalation: false
-  capabilities: {drop: [ALL]}
+  capabilities:
+    ## @param securityContext.capabilities.drop Linux capabilities taken from the container
+    drop: [ALL]
   # Writable: /tmp and /home/appuser (emptyDir, deployment.yaml) - Chromium's
   # profile and caches. The application writes nothing.
+  ## @param securityContext.readOnlyRootFilesystem Root file system read-only
   readOnlyRootFilesystem: true
 
 # Proxies whose X-Forwarded-Proto/-For uvicorn trusts (uvicorn's
-# FORWARDED_ALLOW_IPS). Behind a TLS ingress the default 127.0.0.1 made
-# /widget/info answer with http:// URLs. "*" is safe only because the
-# NetworkPolicy lets nothing but the B-API (and Prometheus) reach the pod; with
-# networkPolicy.enabled=false set the proxies' addresses here.
+# FORWARDED_ALLOW_IPS): from them it takes over the scheme and the client
+# address of a request. No answer of the agent depends on either today -
+# /widget/info returns relative references, the agent sends no redirect, and
+# its request log names no client address. The setting decides what code that
+# reads them would see: the caller's side behind the proxy, or the proxy. "*"
+# is safe only because the NetworkPolicy lets nothing but the B-API (and
+# Prometheus) reach the pod; with networkPolicy.enabled=false set the proxies'
+# addresses here.
+## @param forwardedAllowIps Proxies whose X-Forwarded-* headers uvicorn trusts
 forwardedAllowIps: "*"
 
-# Needs the Prometheus Operator CRDs (e.g. kube-prometheus-stack). Labels:
-# whatever the Prometheus' serviceMonitorSelector / ruleSelector expects.
+# Needs the Prometheus Operator CRDs (e.g. kube-prometheus-stack). Without
+# them helm install stops with 'no matches for kind "ServiceMonitor" in version
+# "monitoring.coreos.com/v1"': install the CRDs first, or set both enabled
+# values below to false. Labels: whatever the Prometheus'
+# serviceMonitorSelector / ruleSelector expects.
 serviceMonitor:
+  ## @param serviceMonitor.enabled Create a ServiceMonitor for /metrics on the internal port
   enabled: true
+  ## @param serviceMonitor.interval Scrape interval
   interval: 30s
+  ## @param serviceMonitor.labels Labels the Prometheus' serviceMonitorSelector expects
   labels: {}
 prometheusRule:
+  ## @param prometheusRule.enabled Create the PrometheusRule with the alert rules (files/alerts.yaml)
   enabled: true
+  ## @param prometheusRule.labels Labels the Prometheus' ruleSelector expects
   labels: {}
 
 # Only the B-API proxy may reach the API (port 8000), only Prometheus the
@@ -155,16 +265,25 @@ prometheusRule:
 # - egressPorts are the ports of the target pods (targetPort), not of the
 #   Service: policies apply after the Service's address translation.
 networkPolicy:
+  ## @param networkPolicy.enabled Create the NetworkPolicy
   enabled: true
+  ## @param networkPolicy.ingressNamespaces Namespaces that may call the API (port 8000): the B-API
   ingressNamespaces: [b-api]
+  ## @param networkPolicy.prometheusNamespaces Namespaces that may reach the internal port: monitoring
   prometheusNamespaces: [monitoring]
+  ## @param networkPolicy.egressNamespaces Namespaces the agent may call inside the cluster
   egressNamespaces: [b-api]
+  ## @param networkPolicy.egressPorts Ports of the target pods in egressNamespaces
   egressPorts: [80, 443, 8000, 8080]
   # The cluster DNS. With NodeLocal DNSCache (a link-local address on the
   # node) set namespace to "": port 53 is then open to every address.
   dns:
+    ## @param networkPolicy.dns.namespace Namespace of the cluster DNS; empty: port 53 open to every address
     namespace: kube-system
-    podLabels: {k8s-app: kube-dns}
+    podLabels:
+      ## @param networkPolicy.dns.podLabels.k8s-app Label of the cluster DNS pods
+      k8s-app: kube-dns
+  ## @param networkPolicy.egressExceptCidrs Private ranges excluded from the egress to the internet
   egressExceptCidrs:
     - 10.0.0.0/8
     - 172.16.0.0/12
@@ -174,9 +293,14 @@ networkPolicy:
 
 # Keeps one pod running while nodes are drained (only with replicaCount > 1).
 podDisruptionBudget:
+  ## @param podDisruptionBudget.enabled Create a PodDisruptionBudget
   enabled: true
+  ## @param podDisruptionBudget.minAvailable Pods that must stay up during a drain
   minAvailable: 1
 
+## @param nodeSelector Node labels the pods need
 nodeSelector: {}
+## @param tolerations Tolerations of the pods
 tolerations: []
+## @param affinity Affinity rules of the pods
 affinity: {}

@@ -269,8 +269,8 @@ class _StubRepositoryService:
         self.upload_calls = []
         self.workflow_calls = []
 
-    async def upload_metadata(self, **kwargs):
-        self.upload_calls.append(kwargs)
+    async def write_node(self, job, deadline=None):
+        self.upload_calls.append(vars(job))
         return {
             "success": True,
             "node": {"nodeId": NODE_ID},
@@ -370,7 +370,8 @@ def test_upload_without_collections_keeps_the_previous_response_shape(client):
 
     call = client.stub.upload_calls[0]
     assert call["collection_ids"] is None
-    assert call["workflow_steps"] is None
+    # No state named, the workflow on by default: the single handover state.
+    assert call["workflow_steps"] == [DEFAULT_WORKFLOW_STATUS]
 
 
 def test_workflow_endpoint_runs_the_requested_steps(client):

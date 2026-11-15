@@ -266,12 +266,24 @@ def test_the_vocabulary_still_matches_the_published_one():
     """
     The single test that talks to the network. It is what makes the number above
     mean something — 220 is only correct as long as the published vocabulary says
-    so. Runs only with RUN_NETWORK_TESTS=1 (test runs stay offline and
-    deterministic), and skips when offline rather than failing, because a broken
-    build on a train is worse than a stale count.
+    so.
+
+    A manual test: no test run and no CI job executes it (they stay offline and
+    deterministic), it is skipped there on purpose. Run it by hand when the
+    vocabulary snapshot is renewed or a release is prepared:
+
+        RUN_NETWORK_TESTS=1 python -m pytest tests/test_learning_resource_type.py -m slow
+
+    (PowerShell: `$env:RUN_NETWORK_TESTS = "1"` first.) Even then it skips when
+    the vocabulary server cannot be reached rather than failing, because a
+    broken build on a train is worse than a stale count.
     """
     if os.environ.get(NETWORK_SWITCH) != "1":
-        pytest.skip(f"Netzwerktest: nur mit {NETWORK_SWITCH}=1")
+        pytest.skip(
+            "Manueller Test (spricht mit vocabs.openeduhub.de), in keinem "
+            f"Testlauf enthalten. Von Hand: {NETWORK_SWITCH}=1 python -m pytest "
+            "tests/test_learning_resource_type.py -m slow"
+        )
 
     def flatten(concepts, out):
         for concept in concepts:

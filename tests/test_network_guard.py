@@ -21,10 +21,15 @@ PUBLIC = ("93.184.216.34", 80)
 
 
 @pytest.fixture
-def forget_refusals():
-    """These tests provoke refusals on purpose; the autouse check must not count them."""
+def forget_refusals(request):
+    """
+    These tests provoke refusals on purpose; the autouse check must not count
+    them. Only their own: another test's refusal still fails the run.
+    """
     yield
-    conftest._external_connects.clear()
+    conftest._external_connects[:] = [
+        e for e in conftest._external_connects if e[0] != request.node.nodeid
+    ]
 
 
 def test_a_blocking_connection_to_the_internet_is_refused(forget_refusals):
@@ -59,11 +64,11 @@ def test_loopback_stays_open():
 
 
 # A thread that outlives its test (review 18.10.): its refusal belongs to the
-# test that started it, not to the one running when it connects.
-_leftover: dict = {}
-
-
-def test_a_thread_outlives_its_test():
+# test that started it, not to the one running when it connects. One test, so
+# the result does not depend on the order of two (audit 14.11., Q-04).
+def test_a_late_refusal_belongs_to_the_test_that_started_the_thread(
+    forget_refusals, request, monkeypatch
+):
     go = threading.Event()
 
     def connect_later():
@@ -73,19 +78,9 @@ def test_a_thread_outlives_its_test():
 
     thread = threading.Thread(target=connect_later, daemon=True)
     thread.start()
-    _leftover.update(thread=thread, go=go)
+    # The thread connects while pytest reports the next test as running.
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "tests/test_next.py::test_next (call)")
+    go.set()
+    thread.join(10)
 
-
-def test_its_late_refusal_is_not_blamed_on_the_next_test(request):
-    if "thread" not in _leftover:
-        pytest.skip("runs after test_a_thread_outlives_its_test")
-    _leftover["go"].set()
-    _leftover["thread"].join(10)
-
-    starter = (
-        request.node.nodeid.rsplit("::", 1)[0] + "::test_a_thread_outlives_its_test"
-    )
-    try:
-        assert conftest._external_connects == [(starter, str(PUBLIC))]
-    finally:
-        conftest._external_connects.clear()
+    assert conftest._external_connects == [(request.node.nodeid, str(PUBLIC))]

@@ -113,7 +113,9 @@ def parse_german_number(text: str) -> Optional[int]:
     The whole word must be a number: 'hundertjährig' or 'tausendfach' are none.
     """
     text = text.strip().lower()
-    if not text:
+    # "ein" alone is the article ("ein Workshop"), not the number; inside a
+    # number word ("einhundert") it counts (audit 14.11., L-N).
+    if not text or text == "ein":
         return None
     head, sep, rest = text.partition("tausend")
     if not sep:
@@ -134,6 +136,9 @@ def parse_german_number(text: str) -> Optional[int]:
 _GERMAN_THOUSANDS = re.compile(
     r"^[+-]?[1-9]\d{0,2}(?:(?:\.\d{3}){2,}(?:,\d+)?|\.\d{3}(?:\.\d{3})*,\d+)$"
 )
+# The ambiguous one dot group. An integer field has no decimals, so there it
+# groups thousands: "1.500" visitors were 2 (audit 14.11., L-N).
+_ONE_DOT_GROUP = re.compile(r"^[+-]?[1-9]\d{0,2}\.\d{3}$")
 
 
 def to_number(value: Any, integer: bool) -> Optional[float | int]:
@@ -158,7 +163,10 @@ def to_number(value: Any, integer: bool) -> Optional[float | int]:
     if word is not None:
         return word
     text = text.replace(" ", "")
-    if _GERMAN_THOUSANDS.match(text):
+    # float() takes Python's "1_000"; nobody writes a number that way.
+    if "_" in text:
+        return None
+    if _GERMAN_THOUSANDS.match(text) or (integer and _ONE_DOT_GROUP.match(text)):
         text = text.replace(".", "")
     try:
         number = float(text.replace(",", "."))
@@ -173,18 +181,6 @@ def _rounded(number: float) -> int:
     return math.floor(number + 0.5)
 
 
-def iso_date(year: int, month: int, day: int) -> Optional[str]:
-    """YYYY-MM-DD for a date that exists between 1900 and 2100, else None."""
-    if not (1 <= month <= 12 and 1 <= day <= 31 and 1900 <= year <= 2100):
-        return None
-    days_in_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-    if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0):
-        days_in_month[1] = 29
-    if day > days_in_month[month - 1]:
-        return None
-    return f"{year}-{month:02d}-{day:02d}"
-
-
 # (pattern, order of the groups as (day, month, year))
 _NUMERIC_DATES = [
     (re.compile(r"^(\d{1,2})\.(\d{1,2})\.(\d{4})$"), False),
@@ -192,8 +188,12 @@ _NUMERIC_DATES = [
     (re.compile(r"^(\d{1,2})/(\d{1,2})/(\d{4})$"), False),
     (re.compile(r"^(\d{1,2})-(\d{1,2})-(\d{4})$"), False),
 ]
-_DAY_MONTH_NAME = re.compile(r"^(\d{1,2})\.?\s*([a-zäöü]+)\s+(\d{4})$", re.IGNORECASE)
-_MONTH_NAME_DAY = re.compile(r"^([a-z]+)\s+(\d{1,2}),?\s*(\d{4})$", re.IGNORECASE)
+# "15. März 2025", "1. Sept. 2025" and "März 15, 2025": a month name may have
+# an umlaut and, abbreviated, a dot (audit 14.11., L-N).
+_DAY_MONTH_NAME = re.compile(
+    r"^(\d{1,2})\.?\s*([a-zäöü]+)\.?\s+(\d{4})$", re.IGNORECASE
+)
+_MONTH_NAME_DAY = re.compile(r"^([a-zäöü]+)\.?\s+(\d{1,2}),?\s*(\d{4})$", re.IGNORECASE)
 
 
 class ImpossibleDate(ValueError):
@@ -233,10 +233,7 @@ def read_date(text: str) -> Optional[str]:
 
 
 def _checked_iso(year: int, month: int, day: int) -> str:
-    """
-    An ISO date that exists; any year (an ISO date is meant as written, unlike
-    the 1900-2100 guard for German spellings in iso_date).
-    """
+    """An ISO date that exists; any year - it is meant as written."""
     try:
         return date(year, month, day).isoformat()
     except ValueError:
@@ -244,10 +241,15 @@ def _checked_iso(year: int, month: int, day: int) -> str:
 
 
 def _checked(day: int, month: int, year: int) -> str:
-    iso = iso_date(year, month, day)
-    if iso is None:
-        raise ImpossibleDate(f"{day}.{month}.{year}")
-    return iso
+    """
+    A date in German spelling that exists. Its year is written out in full or
+    was read into 1950-2049, so it is meant as it stands: 28.08.1749 is a date
+    like 1749-08-28 (audit 13.11., L-20).
+    """
+    try:
+        return date(year, month, day).isoformat()
+    except ValueError:
+        raise ImpossibleDate(f"{day}.{month}.{year}") from None
 
 
 def read_time(text: str) -> Optional[str]:
@@ -273,9 +275,15 @@ def read_datetime(text: str) -> Optional[str]:
     read as local time. A date or time that does not exist gives None.
     """
     val = text.strip()
+    if len(val) > MAX_DATETIME_LENGTH:
+        return None
     match = _ISO_DATETIME.match(val)
     if match:
         return _checked_iso_datetime(match)
+    # An ISO date-time with something else behind it ("…T14:30garbage") is
+    # unreadable. Read on, its date alone would make it midnight.
+    if _ISO_DATE_AND_T.match(val):
+        return None
 
     try:
         day = read_date(val)
@@ -295,8 +303,9 @@ def read_datetime(text: str) -> Optional[str]:
 
 _ISO_DATETIME = re.compile(
     r"^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?"
-    r"(Z|[+-]\d{2}:?\d{2})?"
+    r"(Z|[+-]\d{2}:?\d{2})?$"
 )
+_ISO_DATE_AND_T = re.compile(r"^\d{4}-\d{2}-\d{2}T")
 
 
 def _checked_iso_datetime(match: re.Match[str]) -> Optional[str]:
@@ -310,6 +319,11 @@ def _checked_iso_datetime(match: re.Match[str]) -> Optional[str]:
         return None
     return f"{day_part}T{hour:02d}:{minute:02d}{match.group(7) or ''}"
 
+
+# No date-time is longer ("Samstag, den 15. März 2025, um 14:30 Uhr" has 41
+# characters). _TRAILING_TIME splits a run of blanks between three quantifiers:
+# on a value of 2,000 characters that took 102 s (audit 13.11., P-09).
+MAX_DATETIME_LENGTH = 100
 
 _TRAILING_TIME = re.compile(
     r"^(.+?)\s*(?:,\s*|\s+)(?:um\s+)?(\d{1,2}(?::\d{2}){0,2}(?:\s*[Uu]hr(?:\s*\d{2})?)?)$"

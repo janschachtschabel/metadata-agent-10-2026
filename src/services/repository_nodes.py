@@ -3,12 +3,15 @@
 import asyncio
 import logging
 import re
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
-from typing import Any, Optional
+from typing import Any, AsyncIterator, Optional
 
 import httpx
 
 from ..metrics import OWN_SERVICE_HOOKS
+from ..utils.schema_loader import get_repo_fields
+from ..utils.tls_context import shared_tls_context
 
 from .repository_support import (
     first_value,
@@ -16,6 +19,7 @@ from .repository_support import (
     node_created_at,
     node_modified_at,
     repository_error,
+    text_value,
 )
 
 logger = logging.getLogger(__name__)
@@ -62,16 +66,55 @@ LOST_NODE_CLOCK_SKEW = timedelta(seconds=3)
 LOST_NODE_UNTOUCHED = timedelta(seconds=5)
 
 
+# What the create request puts on a node (_create_node), beside ccm:linktype
+# and cm:name. A lost node of ours carries nothing else a write sets.
+CREATE_FIELDS = (
+    "cclom:title",
+    "cclom:general_description",
+    "cclom:general_keyword",
+    "ccm:wwwurl",
+    "cclom:general_language",
+)
+
+# What a write puts on a node beside the schema's repo fields: the extended
+# data and the properties derived from other fields (repository_values).
+_WRITTEN_BESIDE_SCHEMA = (
+    "ccm:oeh_extendedType",
+    "ccm:oeh_extendedData",
+    "ccm:oeh_extendedText",
+    "ccm:oeh_lrt",
+    "ccm:commonlicense_key",
+    "ccm:commonlicense_cc_version",
+    "ccm:lifecyclecontributer_author",
+    "cm:latitude",
+    "cm:longitude",
+)
+
+
+def _carries_metadata(props: dict, repo_field_ids: Any) -> bool:
+    """Whether a node holds anything the steps after its creation write."""
+    written = (set(repo_field_ids or ()) | set(_WRITTEN_BESIDE_SCHEMA)) - set(
+        CREATE_FIELDS
+    )
+    return any(first_value(props.get(name)) not in (None, "") for name in written)
+
+
 def _same_new_node(
-    node: dict, not_before: datetime, wanted_url: Optional[str], wanted_title: Any
+    node: dict,
+    not_before: datetime,
+    wanted_url: Optional[str],
+    wanted_title: Any,
+    repo_field_ids: Any = None,
 ) -> bool:
     """
     Created after the request went out, with the same URL (or, without one, title).
 
-    A node another upload works on - one with a workflow status, or one
-    modified after its creation (or of unknown modification time) - is never
-    taken for the lost one: discarding it would bin a concurrent upload of the
-    same URL. Unsure means no candidate; the caller then reports the node.
+    A node another upload works on - one with a workflow status, one
+    modified after its creation (or of unknown modification time), or one that
+    carries metadata beyond what the create request sets - is never
+    taken for the lost one: discarding it would bin another save of the
+    same URL (audit 14.11., R-03). Unsure means no candidate; the caller then
+    reports that a node may exist.
     """
     created = node_created_at(node)
     if created is None or created < not_before:
@@ -82,9 +125,86 @@ def _same_new_node(
     props = node.get("properties") or {}
     if first_value(props.get("ccm:wf_status")):
         return False
+    if _carries_metadata(props, repo_field_ids):
+        return False
     if wanted_url:
         return first_value(props.get("ccm:wwwurl")) == wanted_url
     return bool(wanted_title) and first_value(props.get("cclom:title")) == wanted_title
+
+
+def _duplicate_hit(node: dict) -> dict:
+    """
+    The existing node of a duplicate check.
+
+    "Exists" hangs on the hit, not on what it carries: one without a title
+    used to raise, count as "check not possible" and let a second node be
+    created (audit 14.11., R-14).
+    """
+    props = node.get("properties") or {}
+    return {
+        "exists": True,
+        "nodeId": (node.get("ref") or {}).get("id"),
+        "title": text_value(node.get("title") or props.get("cclom:title")),
+        "description": text_value(props.get("cclom:general_description")),
+    }
+
+
+# How many of the newest inbox children are read directly: for a lost node of
+# this request, and for a duplicate the index does not know yet (more, since
+# other uploads may have arrived in between).
+LOST_NODE_LOOK = 10
+DUPLICATE_LOOK = 25
+
+
+def newest_children_url(base_url: str, folder_id: str, count: int) -> str:
+    return (
+        f"{base_url}/rest/node/v1/nodes/-home-/{folder_id}/children"
+        f"?maxItems={count}&skipCount=0&sortProperties=cm:created"
+        "&sortAscending=false&propertyFilter=-all-"
+    )
+
+
+class KeyedLocks:
+    """
+    One asyncio.Lock per key, kept only while somebody holds or awaits it.
+
+    The table cannot grow with the number of URLs ever uploaded: an entry
+    leaves with its last user, also when that user is cancelled while waiting.
+    """
+
+    def __init__(self) -> None:
+        self._entries: dict[str, tuple[asyncio.Lock, int]] = {}
+
+    def keys_in_use(self) -> int:
+        return len(self._entries)
+
+    @asynccontextmanager
+    async def holding(self, key: str) -> AsyncIterator[None]:
+        lock, users = self._entries.get(key) or (asyncio.Lock(), 0)
+        self._entries[key] = (lock, users + 1)
+        try:
+            async with lock:
+                yield
+        finally:
+            lock, users = self._entries[key]
+            if users <= 1:
+                del self._entries[key]
+            else:
+                self._entries[key] = (lock, users - 1)
+
+
+# Check-and-create of one URL runs one request after the other within this
+# process (audit 14.11., R-05). Several workers or pods are not covered: there
+# the direct look into the inbox is what narrows the window.
+url_locks = KeyedLocks()
+
+
+def url_lock_key(url: str) -> str:
+    """
+    Coarser than the repository's comparison on purpose: sharing a lock costs
+    a moment's wait, missing one a second node.
+    """
+    return url.strip().lower().split("#")[0].rstrip("/")
 
 
 class NodeMixin:
@@ -110,6 +230,7 @@ class NodeMixin:
                 httpx.AsyncClient(
                     timeout=httpx.Timeout(DISCARD_TIMEOUT_SECONDS),
                     event_hooks=OWN_SERVICE_HOOKS,
+                    verify=shared_tls_context(),
                 ) as client,
             ):
                 response = await client.delete(
@@ -136,6 +257,7 @@ class NodeMixin:
         inbox_id: str,
         clean_metadata: dict,
         created_after: datetime,
+        repo_field_ids: Any = None,
     ) -> Optional[str]:
         """
         The node a create request made although its answer never arrived (audit D-01).
@@ -143,13 +265,12 @@ class NodeMixin:
         Reads the newest children of the inbox straight from the repository (no
         search index, which lags behind a node created a second ago) and picks
         the one created after the request went out that carries the same URL -
-        or, without a URL, the same title. Never raises; None when unsure.
+        or, without a URL, the same title - and nothing a write sets after the
+        create (`repo_field_ids`: the fields of the write's schema; without
+        them core.json's). Never raises; None when unsure.
         """
-        url = (
-            f"{base_url}/rest/node/v1/nodes/-home-/{inbox_id}/children"
-            "?maxItems=10&skipCount=0&sortProperties=cm:created"
-            "&sortAscending=false&propertyFilter=-all-"
-        )
+        url = newest_children_url(base_url, inbox_id, LOST_NODE_LOOK)
+        repo_field_ids = repo_field_ids or get_repo_fields("default", "latest")
         wanted_url = identifying_url(clean_metadata)
         wanted_title = first_value(
             clean_metadata.get("cclom:title") or clean_metadata.get("schema:name")
@@ -162,6 +283,7 @@ class NodeMixin:
                 httpx.AsyncClient(
                     timeout=httpx.Timeout(DISCARD_TIMEOUT_SECONDS),
                     event_hooks=OWN_SERVICE_HOOKS,
+                    verify=shared_tls_context(),
                 ) as client,
             ):
                 response = await client.get(
@@ -176,7 +298,9 @@ class NodeMixin:
             candidates = [
                 node
                 for node in response.json().get("nodes") or []
-                if _same_new_node(node, not_before, wanted_url, wanted_title)
+                if _same_new_node(
+                    node, not_before, wanted_url, wanted_title, repo_field_ids
+                )
             ]
             # Two candidates: a concurrent upload or a retry of the same URL made
             # the other one. Unsure which is ours - report, do not discard.
@@ -187,9 +311,53 @@ class NodeMixin:
         return None
 
     async def _check_duplicate(
+        self,
+        client: httpx.AsyncClient,
+        base_url: str,
+        url: str,
+        inbox_id: Optional[str] = None,
+    ) -> dict:
+        """
+        Check if URL already exists in repository.
+
+        The search first; with `inbox_id` also the newest children of the
+        inbox, read directly: the index does not know a node created a moment
+        ago, so a double click or a retry passed the search (audit 14.11., R-05).
+        """
+        found = await self._search_duplicate(client, base_url, url)
+        if found.get("exists") or not inbox_id:
+            return found
+        in_inbox = await self._inbox_duplicate(client, base_url, inbox_id, url)
+        return _duplicate_hit(in_inbox) if in_inbox else found
+
+    async def _inbox_duplicate(
+        self, client: httpx.AsyncClient, base_url: str, inbox_id: str, url: str
+    ) -> Optional[dict]:
+        """A node with this URL among the newest of the inbox. Never raises."""
+        try:
+            response = await client.get(
+                newest_children_url(base_url, inbox_id, DUPLICATE_LOOK),
+                headers={
+                    "Authorization": self._auth_header,
+                    "Accept": "application/json",
+                },
+            )
+            if response.status_code != 200:
+                # The search has answered: the check ran, only not this part.
+                logger.warning(f"⚠️ Inbox not readable: HTTP {response.status_code}")
+                return None
+            for node in response.json().get("nodes") or []:
+                props = node.get("properties") or {}
+                if text_value(props.get("ccm:wwwurl")) == url:
+                    return node
+        except Exception as e:
+            logger.warning(f"⚠️ Reading the inbox failed: {type(e).__name__}: {e}")
+        return None
+
+    async def _search_duplicate(
         self, client: httpx.AsyncClient, base_url: str, url: str
     ) -> dict:
-        """Check if URL already exists in repository."""
+        """The duplicate check against the search index."""
         try:
             search_url = f"{base_url}/rest/search/v1/queries/-home-/mds_oeh/ngsearch"
 
@@ -210,21 +378,8 @@ class NodeMixin:
                 logger.warning(f"⚠️ Duplicate check failed: {response.status_code}")
                 return {"exists": False, "warning": f"HTTP {response.status_code}"}
 
-            data = response.json()
-
-            if data.get("nodes") and len(data["nodes"]) > 0:
-                node = data["nodes"][0]
-                props = node.get("properties", {})
-                return {
-                    "exists": True,
-                    "nodeId": node["ref"]["id"],
-                    "title": node.get("title") or props.get("cclom:title", [""])[0],
-                    "description": props.get("cclom:general_description", [""])[0]
-                    if props.get("cclom:general_description")
-                    else None,
-                }
-
-            return {"exists": False}
+            nodes = response.json().get("nodes") or []
+            return _duplicate_hit(nodes[0]) if nodes else {"exists": False}
 
         except Exception as e:
             logger.warning(f"⚠️ Duplicate check error: {e}")
@@ -267,11 +422,11 @@ class NodeMixin:
         # Supplied only in that gap: with a URL present the repository builds the
         # name itself ('example.org_b'), which is what every node uploaded so far
         # carries, and overriding that would rename them all.
-        supplied_name = metadata.get("cm:name")
+        # A supplied name is cleaned like a derived one: Alfresco refuses the
+        # same characters in both (audit 14.11., R-N).
+        supplied_name = first_value(metadata.get("cm:name"))
         if supplied_name:
-            clean_metadata["cm:name"] = (
-                supplied_name if isinstance(supplied_name, list) else [supplied_name]
-            )
+            clean_metadata["cm:name"] = [derive_node_name(supplied_name)]
         elif not clean_metadata.get("ccm:wwwurl"):
             title = first_value(clean_metadata.get("cclom:title"))
             if title:

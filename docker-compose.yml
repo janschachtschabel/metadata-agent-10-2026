@@ -2,9 +2,8 @@ services:
   # =========================================
   # Default: B-API OpenAI (recommended)
   # =========================================
-  # Docker image includes Playwright + Chromium for
-  # privacy-safe screenshots (screenshot_method=playwright).
-  # The legacy 'pageshot' method captures locally as well — no external service.
+  # Docker image includes Playwright + Chromium: screenshots are captured
+  # locally, whichever method a request names — no external service.
   metadata-agent-api:
     build: .
     container_name: metadata-agent-api
@@ -52,7 +51,10 @@ services:
       # External Service URLs (Default: Staging)
       # For Prod, change to the respective prod URLs (see .env.template)
       - METADATA_AGENT_B_API_BASE_URL=${METADATA_AGENT_B_API_BASE_URL:-https://b-api.staging.openeduhub.net}
-      - METADATA_AGENT_TEXT_EXTRACTION_API_URL=${METADATA_AGENT_TEXT_EXTRACTION_API_URL:-https://text-extraction.staging.openeduhub.net}
+      # Text extraction and geocoder: through the B-API's paths (auto), so they
+      # belong to the B-API above; an empty address is chosen that way.
+      - METADATA_AGENT_B_API_SERVICES=${METADATA_AGENT_B_API_SERVICES:-auto}
+      - METADATA_AGENT_TEXT_EXTRACTION_API_URL=${METADATA_AGENT_TEXT_EXTRACTION_API_URL:-}
       - METADATA_AGENT_REPOSITORY_URL=${METADATA_AGENT_REPOSITORY_URL:-https://repository.staging.openeduhub.net/edu-sharing/rest}
 
       # Native OpenAI (only used when provider=openai)
@@ -86,9 +88,13 @@ services:
       - METADATA_AGENT_LLM_RETRY_DELAY=${METADATA_AGENT_LLM_RETRY_DELAY:-1.0}
 
       # Only sent to reasoning models (GPT-5/GPT-6 families, o-series); older models
-      # reject both. Empty means the parameter is not sent at all.
-      - METADATA_AGENT_LLM_VERBOSITY=${METADATA_AGENT_LLM_VERBOSITY:-low}
-      - METADATA_AGENT_LLM_REASONING_EFFORT=${METADATA_AGENT_LLM_REASONING_EFFORT:-low}
+      # reject both. Empty means the parameter is not sent at all — hence "-"
+      # and not ":-", which would put the default back for an empty value.
+      - METADATA_AGENT_LLM_VERBOSITY=${METADATA_AGENT_LLM_VERBOSITY-low}
+      - METADATA_AGENT_LLM_REASONING_EFFORT=${METADATA_AGENT_LLM_REASONING_EFFORT-low}
+      # Cache breakpoint after the page text (OpenAI prompt cache): auto (gpt-6
+      # models only), on, off.
+      - METADATA_AGENT_LLM_CACHE_BREAKPOINT=${METADATA_AGENT_LLM_CACHE_BREAKPOINT:-auto}
 
       # Throughput limits of the LLM gateway, enforced process-wide.
       # Empty means the provider default: b-api-openai/openai 20 in flight, no rate cap;
@@ -106,9 +112,6 @@ services:
       # Whole /upload or /nodes; then 504 UPLOAD_TIMEOUT
       - METADATA_AGENT_UPLOAD_TIMEOUT=${METADATA_AGENT_UPLOAD_TIMEOUT:-100}
 
-      # Default Schema Settings
-      - METADATA_AGENT_DEFAULT_CONTEXT=${METADATA_AGENT_DEFAULT_CONTEXT:-default}
-
       # WLO Repository Inbox ID (where new upload nodes are created)
       - METADATA_AGENT_WLO_INBOX_ID=${METADATA_AGENT_WLO_INBOX_ID:-21144164-30c0-4c01-ae16-264452197063}
 
@@ -117,7 +120,8 @@ services:
       - METADATA_AGENT_LOG_LEVEL=${METADATA_AGENT_LOG_LEVEL:-INFO}
       - METADATA_AGENT_MAX_REQUEST_BYTES=${METADATA_AGENT_MAX_REQUEST_BYTES:-20971520}
       - METADATA_AGENT_DEBUG_ENDPOINTS=${METADATA_AGENT_DEBUG_ENDPOINTS:-false}
-      - METADATA_AGENT_CORS_ORIGINS=${METADATA_AGENT_CORS_ORIGINS:-*}
+      # "-", not ":-": an empty value means no origin may call.
+      - METADATA_AGENT_CORS_ORIGINS=${METADATA_AGENT_CORS_ORIGINS-*}
       # Second, internal port for /health, /ready and /metrics. Not set here: an
       # empty value is no valid port. To use it, uncomment and add "9000:9000" to
       # ports — or better, keep it unpublished and scrape it inside the network.

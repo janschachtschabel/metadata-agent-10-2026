@@ -34,7 +34,10 @@ def no_outbound_http(monkeypatch):
 
 
 def test_screenshot_defaults_are_local_and_generation_still_opts_out():
-    assert Settings.model_fields["screenshot_method"].default == "playwright"
+    # The setting is gone (audit 14.11., O-45); the service's own fallback.
+    assert module.ScreenshotService(Settings(_env_file=None)).default_method == (
+        "playwright"
+    )
     assert ScreenshotRequest(url=URL).method.value == "playwright"
     assert UploadRequest(metadata={}).screenshot_method.value == "playwright"
     assert UploadRequest(metadata={}, screenshot_method="").screenshot_method.value == (
@@ -122,7 +125,7 @@ def test_formats_the_browser_cannot_produce_are_labelled_as_what_is_delivered():
 
 async def test_only_a_few_browsers_run_at_once(monkeypatch, public_url):
     """Each capture starts its own Chromium; a burst must queue, not exhaust memory."""
-    # The documented limit (README, CHANGELOG, DEPLOYMENT).
+    # The documented limit (docs/API.md "Limits and timeouts", DEPLOYMENT).
     assert module.MAX_PARALLEL_CAPTURES == 2
     service = module.ScreenshotService()
     active = peak = 0

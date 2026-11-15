@@ -5,9 +5,10 @@ This product ships, in its container image, third-party components under
 their own licenses. They are listed below. The license texts travel with the
 components: in the image under /app/.venv/lib/python3.13/site-packages/
 *.dist-info/ (Python packages), /usr/share/doc/<package>/copyright (Debian
-packages) and next to the browser in /opt/playwright-browsers.
+packages), next to the browser in /opt/playwright-browsers and, for the
+driver of playwright, in .../site-packages/playwright/driver.
 
-Licenses were read from the installed package metadata (uv.lock, 2026-10-18)
+Licenses were read from the installed package metadata (uv.lock, 2026-11-14)
 where available; entries marked "upstream" could not be read locally and are
 taken from the project's own declaration - check them in the built image.
 
@@ -20,7 +21,6 @@ annotated-types              MIT
 anyio                        MIT
 certifi                      MPL-2.0 (unmodified; source: github.com/certifi/python-certifi)
 click                        BSD-3-Clause
-colorama                     BSD-3-Clause
 fastapi                      MIT
 greenlet                     MIT AND PSF-2.0
 h11                          MIT
@@ -36,23 +36,23 @@ pydantic-core                MIT
 pydantic-settings            MIT
 pyee                         MIT
 python-dotenv                BSD-3-Clause
-pyyaml                       MIT
 starlette                    BSD-3-Clause
 typing-extensions            PSF-2.0
 typing-inspection            MIT
 uvicorn                      BSD-3-Clause
 uvloop                       MIT OR Apache-2.0 (upstream; Linux only, not installed locally)
-watchfiles                   MIT
-websockets                   BSD-3-Clause
 
 
 Browser
 -------
 
-Chromium (Chrome for Testing and Chrome Headless Shell, the build that the
-playwright version in uv.lock installs via `playwright install chromium`)
+Chromium (Chrome Headless Shell, the build that the playwright version in
+uv.lock installs via `playwright install --only-shell chromium`)
                              BSD-3-Clause, with the third-party notices of the
                              Chromium project (chrome://credits)
+FFmpeg (the build playwright installs next to the browser,
+/opt/playwright-browsers/ffmpeg-*)
+                             LGPL-2.1-or-later (upstream)
 
 
 Runtime and system packages
@@ -60,11 +60,16 @@ Runtime and system packages
 
 Python 3.13 (base image python:3.13-slim)
                              PSF-2.0
-Debian 13 "trixie" packages of the base image and the Chromium libraries
-installed in the Dockerfile (libnss3, libnspr4, libdbus-1-3, libatk1.0-0,
-libatk-bridge2.0-0, libcups2, libdrm2, libxkbcommon0, libatspi2.0-0,
-libxcomposite1, libxdamage1, libxfixes3, libxrandr2, libgbm1, libpango-1.0-0,
-libcairo2, libasound2, libx11-xcb1)
+Node.js (the runtime of the playwright driver, inside the playwright package:
+.../site-packages/playwright/driver/node)
+                             MIT, with the notices of its bundled components
+                             (V8, OpenSSL, ICU and others) in the LICENSE
+                             file beside it
+Debian 13 "trixie" packages of the base image, the init process tini and the
+Chromium libraries installed in the Dockerfile (libnss3, libnspr4,
+libdbus-1-3, libatk1.0-0, libatk-bridge2.0-0, libcups2, libdrm2,
+libxkbcommon0, libatspi2.0-0, libxcomposite1, libxdamage1, libxfixes3,
+libxrandr2, libgbm1, libpango-1.0-0, libcairo2, libasound2, libx11-xcb1)
                              various free licenses, see
                              /usr/share/doc/<package>/copyright in the image
 

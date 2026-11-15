@@ -29,8 +29,8 @@ from .api.routers import (
     docs,
     extract,
     generate,
-    infra as infra_router,
     nodes,
+    operations,
     save_node,
     schemata,
     screenshot,
@@ -41,6 +41,7 @@ from .api.routers import (
 )
 from .infra import InternalPortUnavailable, create_internal_app, start_internal_server
 from .metrics import HttpMetricsMiddleware
+from .services.lifecycle import close_services
 from .services.llm_auth import ForwardedAuthorizationMiddleware
 from .utils.body_limit import BodySizeLimitMiddleware
 from .utils.logging_setup import configure_logging
@@ -58,14 +59,17 @@ async def lifespan(app: FastAPI):
     logger.info(f"Starting {deps.settings.app_name} v{deps.settings.app_version}")
     logger.info(f"LLM Provider: {deps.settings.llm_provider}")
     logger.info(f"LLM Model: {llm_config['model']}")
-    logger.info(f"LLM API Base: {llm_config['api_base']}")
-    logger.info(f"B-API Base URL: {deps.settings.b_api_base_url}")
+    # Without user and password, should a URL setting carry them.
+    urls = deps.settings.loggable_urls()
+    logger.info(f"LLM API Base: {urls['LLM API Base']}")
+    logger.info(f"B-API Base URL: {urls['B-API Base URL']}")
     logger.info(
         f"B-API Auth Mode: {deps.settings.b_api_auth_mode} "
         f"(B_API_KEY {'gesetzt' if deps.settings.b_api_key else 'nicht gesetzt'})"
     )
-    logger.info(f"Text Extraction URL: {deps.settings.text_extraction_api_url}")
-    logger.info(f"Repository URL: {deps.settings.repository_url}")
+    logger.info(f"Text Extraction URL: {urls['Text Extraction URL']}")
+    logger.info(f"Geocoder URL: {urls['Geocoder URL']}")
+    logger.info(f"Repository URL: {urls['Repository URL']}")
     for warning in deps.settings.config_warnings():
         logger.warning(f"⚠️ {warning}")
 
@@ -110,18 +114,7 @@ async def lifespan(app: FastAPI):
         await stop_internal_server()
 
     # Shutdown - close HTTP clients
-    from .services.llm_service import _llm_service
-
-    if _llm_service:
-        await _llm_service.close()
-    from .services.metadata_service import _metadata_service
-
-    if _metadata_service and _metadata_service.llm_service:
-        await _metadata_service.llm_service.close()
-    from .services.input_source_service import _input_source_service
-
-    if _input_source_service:
-        await _input_source_service.close()
+    await close_services()
     logger.info("Shutting down...")
 
 
@@ -134,7 +127,9 @@ def get_internal_settings():
 
 
 # stdout, text or JSON lines (METADATA_AGENT_LOG_FORMAT / _LOG_LEVEL)
-configure_logging(deps.settings.log_level, deps.settings.log_format)
+configure_logging(
+    deps.settings.log_level, deps.settings.log_format, deps.settings.service_name
+)
 app = FastAPI(
     title=deps.settings.app_name,
     version=deps.settings.app_version,
@@ -166,6 +161,9 @@ konfigurierten Service-Account (`WLO_GUEST_USERNAME`).
     # Google Fonts). /docs is served below from src/static/docs instead.
     docs_url=None,
     redoc_url=None,
+    # "/generate/" was answered with a 307 to an absolute address built from
+    # the request's Host header (audit 14.11., S-43). No route ends in a slash.
+    redirect_slashes=False,
 )
 
 
@@ -205,8 +203,9 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
-    # Lets an embedding page on another origin read the id of a failed call.
-    expose_headers=[REQUEST_ID_HEADER],
+    # Lets an embedding page on another origin read the id of a failed call
+    # and how long a 429 or 503 asks it to wait.
+    expose_headers=[REQUEST_ID_HEADER, "Retry-After"],
 )
 
 # Gzip compression for all responses >= 500 bytes (widget JS/CSS + API JSON)
@@ -216,7 +215,8 @@ app.add_middleware(GZipMiddleware, minimum_size=500)
 # of this request pass it on (METADATA_AGENT_B_API_AUTH_MODE, llm_auth.py).
 app.add_middleware(ForwardedAuthorizationMiddleware)
 
-# Requests by route template, for /metrics on the internal port.
+# Requests by route template, for /metrics on the internal port - and one log
+# line per request, in place of uvicorn's access log.
 app.add_middleware(HttpMetricsMiddleware)
 
 
@@ -258,10 +258,10 @@ if _widget_dir.exists():
             name="widget-dist",
         )
 
-# Same order as the endpoints were defined before 3.0.0 - the spec lists them so.
+# The order of the endpoints in the OpenAPI document.
 for _router in (
     widget,
-    infra_router,
+    operations,
     schemata,
     detect,
     extract,
@@ -279,4 +279,6 @@ for _router in (
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # log_config=None: uvicorn would configure its logging again after the
+    # import above and bring its access log back (audit 13.11., L-25).
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_config=None)

@@ -1,16 +1,25 @@
 """Service for fetching input data from various sources (URL, NodeID, etc.)."""
 
 import httpx
+import json
 import logging
-from typing import Any, Optional
+import re
+from functools import lru_cache
+from typing import Any, Callable, Optional
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
 from ..config import get_settings
 from ..utils.loggable import loggable_url
 from ..utils.public_url import PublicUrlError, require_public_http_url
+from ..utils.schema_loader import get_available_schemas, get_schema_fields
+from ..utils.tls_context import shared_tls_context
 from ..metrics import OWN_SERVICE_HOOKS
+from .llm_auth import b_api_headers_for
+from .llm_errors import LLMCredentialsMissing
+from .repository_diff import WRITTEN_AS
 from .repository_service import build_auth_header
+from .repository_support import rest_base
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +42,180 @@ class TextExtractionError(Exception):
         return {"code": self.code, "message": self.message}
 
 
+class NodeWithoutText(Exception):
+    """
+    The node holds nothing to read: no stored text, no title, description or
+    keywords, no page that can be fetched. The caller's choice of node, not a
+    fault of the repository - and an exception of its own, so that no other
+    ValueError from below passes for it (audit 14.11., list S-N).
+    """
+
+
+# Not a problem of the page: a key the B-API refuses, no key, no service. The
+# fallback to a node's title and description must not cover these up (L-16).
+SETUP_ERROR_CODES = frozenset(
+    {
+        "TEXT_EXTRACTION_AUTH_REFUSED",
+        "TEXT_EXTRACTION_AUTH_MISSING",
+        "TEXT_EXTRACTION_NOT_CONFIGURED",
+    }
+)
+
+
+# The stored text of a node is cut like every other source text: the same
+# number as MAX_TEXT_LENGTH of the API layer, which cuts again with the source
+# URL in front.
+MAX_NODE_TEXT_LENGTH = 150_000
+# How much of a textContent answer is read. JSON takes up to six bytes for a
+# character (\uXXXX); what lies beyond cannot be part of the text that is kept.
+MAX_NODE_TEXT_BYTES = 6 * MAX_NODE_TEXT_LENGTH
+
+_TEXT_KEY = re.compile(r'"(text|html|raw)"\s*:\s*"')
+_HALF_SURROGATE_AT_END = re.compile(r"[\ud800-\udbff]+$")
+
+# Properties the write path stores under another name than the schema's.
+_SCHEMA_NAME_OF = {written: name for name, written in WRITTEN_AS.items()}
+
+
+@lru_cache(maxsize=16)
+def _fields_declared_in(context: str, version: str) -> frozenset[str]:
+    declared: set[str] = set()
+    for schema in get_available_schemas(context, version):
+        for schema_field in get_schema_fields(context, version, schema["file"]):
+            declared.add(schema_field.get("id", ""))
+            declared.add((schema_field.get("system") or {}).get("path") or "")
+    return frozenset(declared - {""})
+
+
+def _declared_fields(context: str, version: str) -> frozenset[str]:
+    """
+    Every field a schema of the context declares, as the repository names it.
+
+    A context or version that cannot be read falls back to the default
+    schemata: the request is refused for it elsewhere, the read stays usable.
+    """
+    try:
+        return _fields_declared_in(context, version)
+    except Exception as e:
+        logger.warning(f"⚠️ Schemata of {context!r} {version!r} not readable: {e}")
+        return _fields_declared_in("default", "latest")
+
+
+async def _read_up_to(response: httpx.Response, limit: int) -> tuple[bytes, bool]:
+    """(the first `limit` bytes of the body, whether that was all of it)."""
+    chunks: list[bytes] = []
+    size = 0
+    async for chunk in response.aiter_bytes():
+        chunks.append(chunk)
+        size += len(chunk)
+        if size > limit:
+            return b"".join(chunks)[:limit], False
+    return b"".join(chunks), True
+
+
+def text_of_cut_json(prefix: str) -> Optional[str]:
+    """
+    The text of a textContent answer that was read only in part.
+
+    The answer is one JSON object with `text`, `html` and `raw`; cut off it
+    does not parse. The value of the first of them that starts inside
+    `prefix` is decoded up to its end or the cut (a quote inside a JSON string
+    is escaped, so the key pattern only matches real keys).
+    """
+    starts: dict[str, int] = {}
+    for match in _TEXT_KEY.finditer(prefix):
+        starts.setdefault(match.group(1), match.end())
+    for key in ("text", "html", "raw"):
+        if key in starts:
+            return _json_string_from(prefix, starts[key])
+    return None
+
+
+def _json_string_from(source: str, start: int) -> Optional[str]:
+    """The JSON string starting at `start`, up to its quote or the end of `source`."""
+    end = len(source)
+    position = start
+    while position < len(source):
+        character = source[position]
+        if character == '"':
+            end = position
+            break
+        if character == "\\":
+            width = 6 if source[position + 1 : position + 2] == "u" else 2
+            if position + width > len(source):
+                # Cut inside an escape: it does not belong to the text.
+                end = position
+                break
+            position += width
+        else:
+            position += 1
+    try:
+        text = json.loads(f'"{source[start:end]}"')
+    except ValueError:
+        return None
+    # Half of a surrogate pair at the cut cannot be encoded later.
+    return _HALF_SURROGATE_AT_END.sub("", text)
+
+
+def _stored_text_warnings(text: Optional[str]) -> list[str]:
+    """What the caller must be told about a stored text that fills the limit."""
+    if not text or len(text) < MAX_NODE_TEXT_LENGTH:
+        return []
+    return [
+        f"Gespeicherter Volltext des Nodes auf {MAX_NODE_TEXT_LENGTH} Zeichen gekürzt."
+    ]
+
+
+def _text_from_metadata(
+    e: Exception, existing_metadata: dict[str, Any], node_id: str
+) -> tuple[str, str]:
+    """
+    (text, warning) for a node whose page could not be fetched: what the
+    repository entry says about it. Raises NodeWithoutText when that is nothing.
+    """
+    # Final fallback: build text from metadata - and say so. A result
+    # from title and description alone must not pass for one from
+    # the page.
+    cause = (
+        e.message
+        if isinstance(e, TextExtractionError)
+        else (str(e) or type(e).__name__)
+    )
+    logger.warning(f"URL extraction failed: {cause}")
+    # Callers see the code; the message names internal hosts and
+    # stays in the log.
+    reported = e.code if isinstance(e, TextExtractionError) else cause
+    title = existing_metadata.get("cclom:title", "")
+    description = existing_metadata.get("cclom:general_description", "")
+    keywords = existing_metadata.get("cclom:general_keyword", [])
+
+    if isinstance(keywords, list):
+        keywords_text = ", ".join(keywords)
+    else:
+        keywords_text = keywords or ""
+
+    text_parts = []
+    if title:
+        text_parts.append(title)
+    if description:
+        text_parts.append(description)
+    if keywords_text:
+        text_parts.append(f"Keywords: {keywords_text}")
+
+    text = "\n\n".join(text_parts)
+
+    if not text:
+        raise NodeWithoutText(
+            f"No text content available for node {node_id} and URL extraction failed: {reported}"
+        )
+
+    logger.info(f"Using fallback text from metadata: {len(text)} chars")
+    return text, (
+        f"Webseitentext nicht abrufbar ({reported}) – generiert wurde nur aus "
+        "Titel, Beschreibung und Schlagworten des Repository-Eintrags."
+    )
+
+
 @dataclass
 class InputData:
     """Result from input source fetch."""
@@ -53,7 +236,9 @@ class InputSourceService:
         self.settings = get_settings()
         self.timeout = httpx.Timeout(30.0, connect=10.0)
         self.http_client = httpx.AsyncClient(
-            timeout=self.timeout, event_hooks=OWN_SERVICE_HOOKS
+            timeout=self.timeout,
+            event_hooks=OWN_SERVICE_HOOKS,
+            verify=shared_tls_context(),
         )
 
     async def close(self):
@@ -62,8 +247,8 @@ class InputSourceService:
             await self.http_client.aclose()
 
     def _get_repository_base_url(self, repository: str = "") -> str:
-        """Get the configured repository base URL (repository param is ignored)."""
-        return self.settings.repository_url
+        """The repository's REST base, as the write path builds it (param ignored)."""
+        return rest_base(self.settings.repository_url)
 
     def _repository_headers(self) -> dict[str, str]:
         """
@@ -106,7 +291,23 @@ class InputSourceService:
         # this URL is checked: redirects and subresources the remote crawler
         # follows itself need egress rules on the crawler's side.
         url = await require_public_http_url(url)
+        if not self.settings.text_extraction_api_url:
+            raise TextExtractionError(
+                "TEXT_EXTRACTION_NOT_CONFIGURED",
+                "Für diese Installation ist kein Textextraktionsdienst eingerichtet "
+                "(METADATA_AGENT_TEXT_EXTRACTION_API_URL).",
+                503,
+            )
         api_url = f"{self.settings.text_extraction_api_url}/from-url"
+        try:
+            # Through the B-API: the same key as for the LLM calls.
+            auth = b_api_headers_for(api_url, self.settings)
+        except LLMCredentialsMissing as e:
+            raise TextExtractionError(
+                "TEXT_EXTRACTION_AUTH_MISSING",
+                f"Kein Schlüssel für die Textextraktion über die B-API: {e}",
+                502,
+            ) from e
 
         payload = {
             "url": url,
@@ -127,6 +328,38 @@ class InputSourceService:
             logger.warning(f"{code}: {message} [{service}]")
             return TextExtractionError(code, message, status)
 
+        response = await self._post_extraction(api_url, payload, auth, failure)
+
+        try:
+            data = response.json()
+            text = data.get("text", "")
+        except (ValueError, AttributeError):
+            # A proxy's error page with status 200, or JSON that is no object.
+            raise failure(
+                "TEXT_EXTRACTION_FAILED",
+                "Der Textextraktionsdienst lieferte keine lesbare Antwort.",
+                502,
+            ) from None
+
+        if not text:
+            raise TextExtractionError(
+                "TEXT_EXTRACTION_EMPTY",
+                f"Für {loggable_url(url)} hat der Textextraktionsdienst keinen Text "
+                "geliefert.",
+                422,
+            )
+
+        logger.info(f"Extracted {len(text)} characters from URL")
+        return text
+
+    async def _post_extraction(
+        self,
+        api_url: str,
+        payload: dict[str, Any],
+        auth: dict[str, str],
+        failure: Callable[[str, str, int], TextExtractionError],
+    ) -> httpx.Response:
+        """The request to the text extraction; whatever goes wrong is `failure`'s."""
         try:
             response = await self.http_client.post(
                 api_url,
@@ -134,8 +367,29 @@ class InputSourceService:
                 headers={
                     "Content-Type": "application/json",
                     "accept": "application/json",
+                    **auth,
                 },
             )
+            if auth and response.status_code in (401, 403):
+                raise failure(
+                    "TEXT_EXTRACTION_AUTH_REFUSED",
+                    "Die B-API hat den Schlüssel für die Textextraktion abgelehnt "
+                    f"(HTTP {response.status_code}): "
+                    + (
+                        "Sie kennt ihn nicht, oder er ist ungültig "
+                        "(Proxy-Dienst text-extraction)."
+                        if response.status_code == 401
+                        else "Ihm fehlt das Recht für den Proxy-Dienst text-extraction."
+                    ),
+                    502,
+                )
+            if response.status_code == 429:
+                # Like a throttled LLM call: worth trying again later.
+                raise failure(
+                    "TEXT_EXTRACTION_RATE_LIMITED",
+                    "Der Textextraktionsdienst ist gerade gedrosselt (HTTP 429).",
+                    503,
+                )
             response.raise_for_status()
         except httpx.ConnectTimeout as e:
             raise failure(
@@ -170,20 +424,7 @@ class InputSourceService:
                 f"Textextraktionsdienst: Abruf fehlgeschlagen ({type(e).__name__}).",
                 502,
             ) from e
-
-        data = response.json()
-        text = data.get("text", "")
-
-        if not text:
-            raise TextExtractionError(
-                "TEXT_EXTRACTION_EMPTY",
-                f"Für {loggable_url(url)} hat der Textextraktionsdienst keinen Text "
-                "geliefert.",
-                422,
-            )
-
-        logger.info(f"Extracted {len(text)} characters from URL")
-        return text
+        return response
 
     async def fetch_node_metadata(
         self, node_id: str, repository: str = "staging"
@@ -231,47 +472,62 @@ class InputSourceService:
 
         logger.info(f"Fetching node text content: {node_id} from {repository}")
 
-        response = await self.http_client.get(
-            api_url, headers=self._repository_headers()
-        )
-        response.raise_for_status()
+        # Streamed: the answer of a node with a book as its text is not held
+        # in memory before it is cut (audit 14.11., R-N).
+        async with self.http_client.stream(
+            "GET", api_url, headers=self._repository_headers()
+        ) as response:
+            if response.status_code in (403, 404):
+                # The metadata read has answered for the node itself: this is
+                # "no stored text", and the fallbacks run (audit 14.11., R-11).
+                logger.info(f"No text content for node (HTTP {response.status_code})")
+                return None
+            response.raise_for_status()
+            body, complete = await _read_up_to(response, MAX_NODE_TEXT_BYTES)
 
-        data = response.json()
-
-        # Try text, then html, then raw
-        text = data.get("text") or data.get("html") or data.get("raw")
+        if complete:
+            data = json.loads(body)
+            # Try text, then html, then raw
+            text = data.get("text") or data.get("html") or data.get("raw")
+        else:
+            text = text_of_cut_json(body.decode("utf-8", errors="ignore"))
 
         if text:
             logger.info(f"Fetched {len(text)} characters of text content from node")
         else:
             logger.info("No text content available for node")
 
-        return text
+        return text[:MAX_NODE_TEXT_LENGTH] if isinstance(text, str) else text
 
     def _convert_node_properties_to_metadata(
-        self, properties: dict[str, Any]
+        self,
+        properties: dict[str, Any],
+        context: str = "default",
+        version: str = "latest",
     ) -> dict[str, Any]:
         """
         Convert repository node properties to flat metadata format.
 
         The repository returns properties as arrays (e.g., {"cclom:title": ["My Title"]}).
         We convert single-item arrays to scalar values.
+
+        Only what a schema of the context declares is metadata. Everything
+        else on a node is the repository's bookkeeping (sys:, cm:, virtual:,
+        _DISPLAYNAME, workflow, permission history, VCARDs) and would travel
+        through /generate into the next upload's ccm:oeh_extendedData (audit
+        14.11., R-06) - as would the extended fields of the last upload.
         """
         metadata = {}
-
-        # cm: properties to keep (valid metadata fields)
-        CM_KEEP = {"cm:author"}
+        declared = _declared_fields(context, version)
 
         for key, value in properties.items():
-            # Skip internal/system properties
-            if key.startswith("sys:") or key.startswith("virtual:"):
+            if key.startswith("ccm:oeh_extended"):
                 continue
-            if key.startswith("cm:") and key not in CM_KEEP:
-                continue
-
-            # Skip DISPLAYNAME variants (we want the URI values)
-            if key.endswith("_DISPLAYNAME"):
-                continue
+            if key not in declared:
+                # Stored under the repository's name, declared under the schema's.
+                key = _SCHEMA_NAME_OF.get(key, key)
+                if key not in declared:
+                    continue
 
             if isinstance(value, list):
                 if len(value) == 1:
@@ -285,7 +541,11 @@ class InputSourceService:
         return metadata
 
     async def fetch_from_node_id(
-        self, node_id: str, repository: str = "staging"
+        self,
+        node_id: str,
+        repository: str = "staging",
+        context: str = "default",
+        version: str = "latest",
     ) -> InputData:
         """
         Fetch input data from repository by NodeID.
@@ -293,6 +553,8 @@ class InputSourceService:
         Args:
             node_id: The NodeID to fetch
             repository: 'prod' or 'staging'
+            context, version: the schemata that say which of the node's
+                properties are metadata
 
         Returns:
             InputData with text and existing metadata
@@ -302,7 +564,9 @@ class InputSourceService:
         properties = node_data.get("properties", {})
 
         # Convert properties to flat metadata
-        existing_metadata = self._convert_node_properties_to_metadata(properties)
+        existing_metadata = self._convert_node_properties_to_metadata(
+            properties, context, version
+        )
 
         # Get the source URL from properties
         source_url = None
@@ -312,6 +576,7 @@ class InputSourceService:
 
         # Fetch text content
         text = await self.fetch_node_text_content(node_id, repository)
+        warnings = _stored_text_warnings(text)
 
         if not text:
             # Try to build text from title and description
@@ -335,7 +600,7 @@ class InputSourceService:
             text = "\n\n".join(text_parts)
 
             if not text:
-                raise ValueError(f"No text content available for node {node_id}")
+                raise NodeWithoutText(f"No text content available for node {node_id}")
 
             logger.info(f"Built text from metadata: {len(text)} characters")
 
@@ -345,6 +610,7 @@ class InputSourceService:
             source_url=source_url,
             node_id=node_id,
             repository=repository,
+            warnings=warnings,
         )
 
     async def fetch_from_node_url(
@@ -355,6 +621,8 @@ class InputSourceService:
         extraction_method: str = "browser",
         lang: str = "auto",
         output_format: str = "markdown",
+        context: str = "default",
+        version: str = "latest",
     ) -> InputData:
         """
         Fetch input data using NodeID for metadata and URL for text (fallback only).
@@ -382,7 +650,9 @@ class InputSourceService:
         # Step 1: Fetch metadata
         node_data = await self.fetch_node_metadata(node_id, repository)
         properties = node_data.get("properties", {})
-        existing_metadata = self._convert_node_properties_to_metadata(properties)
+        existing_metadata = self._convert_node_properties_to_metadata(
+            properties, context, version
+        )
 
         # Step 2: Get URL from metadata if not provided
         caller_url = bool(source_url)
@@ -396,7 +666,7 @@ class InputSourceService:
 
         # Step 3: Check for stored fulltext in repository
         stored_text = await self.fetch_node_text_content(node_id, repository)
-        warnings: list[str] = []
+        warnings = _stored_text_warnings(stored_text)
 
         if stored_text and stored_text.strip():
             # Step 4: Fulltext exists - use it (no crawler needed)
@@ -407,7 +677,7 @@ class InputSourceService:
         else:
             # Step 5: No fulltext - use crawler as fallback
             if not source_url:
-                raise ValueError(
+                raise NodeWithoutText(
                     f"No stored fulltext and no URL available for node {node_id}"
                 )
             logger.info(
@@ -426,47 +696,10 @@ class InputSourceService:
                 # not: it falls back like any other failed fetch (review #12).
                 if caller_url and isinstance(e, PublicUrlError):
                     raise
-                # Final fallback: build text from metadata - and say so. A result
-                # from title and description alone must not pass for one from
-                # the page.
-                cause = (
-                    e.message
-                    if isinstance(e, TextExtractionError)
-                    else (str(e) or type(e).__name__)
-                )
-                logger.warning(f"URL extraction failed: {cause}")
-                # Callers see the code; the message names internal hosts and
-                # stays in the log.
-                reported = e.code if isinstance(e, TextExtractionError) else cause
-                title = existing_metadata.get("cclom:title", "")
-                description = existing_metadata.get("cclom:general_description", "")
-                keywords = existing_metadata.get("cclom:general_keyword", [])
-
-                if isinstance(keywords, list):
-                    keywords_text = ", ".join(keywords)
-                else:
-                    keywords_text = keywords or ""
-
-                text_parts = []
-                if title:
-                    text_parts.append(title)
-                if description:
-                    text_parts.append(description)
-                if keywords_text:
-                    text_parts.append(f"Keywords: {keywords_text}")
-
-                text = "\n\n".join(text_parts)
-
-                if not text:
-                    raise ValueError(
-                        f"No text content available for node {node_id} and URL extraction failed: {reported}"
-                    )
-
-                logger.info(f"Using fallback text from metadata: {len(text)} chars")
-                warnings.append(
-                    f"Webseitentext nicht abrufbar ({reported}) – generiert wurde nur aus "
-                    "Titel, Beschreibung und Schlagworten des Repository-Eintrags."
-                )
+                if isinstance(e, TextExtractionError) and e.code in SETUP_ERROR_CODES:
+                    raise
+                text, warning = _text_from_metadata(e, existing_metadata, node_id)
+                warnings.append(warning)
 
         return InputData(
             text=text,

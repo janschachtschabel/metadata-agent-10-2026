@@ -1,16 +1,18 @@
 """
 Shared dependencies of the routers.
 
-Routers look these up at call time (`deps.settings`, `deps.get_metadata_service(...)`),
-so one replacement here - in tests via monkeypatch - reaches every endpoint.
+Routers look these up at call time (`deps.get_metadata_service(...)`), so one
+replacement here - in tests via monkeypatch - reaches every endpoint.
+`deps.settings` is the settings object of the process (config.get_settings).
 """
 
 import json
+from typing import Any
 from fastapi import HTTPException
 
 from ..services.repository_curation import is_valid_node_id
 
-from ..config import get_settings
+from ..config import Settings, get_settings
 from ..services.diagnostics import check_dependencies
 from ..services.input_source_service import get_input_source_service
 from ..services.metadata_service import get_metadata_service as _get_metadata_service
@@ -21,11 +23,19 @@ from ..services.screenshot_service import (
 )
 
 
-# Same instance as get_settings(): read once, shared by app, routers and lifespan.
-settings = get_settings()
+def __getattr__(name: str) -> Settings:
+    """
+    `deps.settings` is get_settings(), looked up at every use.
+
+    No attribute of its own that could be replaced on its own: routers and
+    services read the one settings object (audit 14.11., Q-09).
+    """
+    if name == "settings":
+        return get_settings()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
-    "settings",
     "get_metadata_service",
     "get_repository_service",
     "get_llm_service",
@@ -33,10 +43,11 @@ __all__ = [
     "get_screenshot_service",
     "check_dependencies",
     "carry_schema_markers",
-    "sanitize_json_string",
+    "loads_lenient",
     "check_provider_override",
     "check_model_override",
     "parse_json_object",
+    "has_own_llm_client",
     "require_repository_service",
     "require_node_id",
 ]
@@ -74,26 +85,28 @@ def carry_schema_markers(data: dict) -> dict:
 MAX_REPAIR_CHARS = 1_000_000
 
 
-def sanitize_json_string(raw_body: str) -> str:
-    """
-    Sanitize raw JSON string by escaping control characters in string values.
-    This allows malformed JSON with literal newlines in strings to be parsed.
-    Handles multi-line text input that wasn't properly escaped.
+def _no_json_constant(name: str) -> Any:
+    """NaN and Infinity are no JSON; Python's parser would take them."""
+    raise ValueError(f"{name} ist kein gültiger JSON-Wert")
 
-    Bodies over MAX_REPAIR_CHARS come back unrepaired.
+
+def loads_lenient(raw_body: str) -> Any:
     """
-    # Remove BOM if present
+    Parse a JSON body, repairing literal line breaks inside strings.
+
+    A valid body is parsed once. NaN and Infinity raise ValueError: left in,
+    they fail the answer after the whole run (audit 13.11., L-19). Bodies over
+    MAX_REPAIR_CHARS are not repaired.
+    """
     raw_body = raw_body.lstrip("\ufeff")
-
-    # First, try to parse as-is
     try:
-        json.loads(raw_body)
-        return raw_body  # Already valid JSON
+        return json.loads(raw_body, parse_constant=_no_json_constant)
     except json.JSONDecodeError:
-        pass
-    if len(raw_body) > MAX_REPAIR_CHARS:
-        return raw_body
-    return _repair_control_characters(raw_body)
+        if len(raw_body) > MAX_REPAIR_CHARS:
+            raise
+    return json.loads(
+        _repair_control_characters(raw_body), parse_constant=_no_json_constant
+    )
 
 
 def _repair_control_characters(raw_body: str) -> str:
@@ -147,12 +160,12 @@ def check_provider_override(provider: str | None) -> None:
     B_API_AUTH_MODE=forward. It stays available where it is what the operator
     configured.
     """
-    if provider == "openai" and settings.llm_provider != "openai":
+    if provider == "openai" and get_settings().llm_provider != "openai":
         raise HTTPException(
             status_code=422,
             detail=(
                 "llm_provider 'openai' ist nur erlaubt, wenn der Dienst selbst mit "
-                f"Provider openai läuft (hier: {settings.llm_provider})."
+                f"Provider openai läuft (hier: {get_settings().llm_provider})."
             ),
         )
 
@@ -165,6 +178,7 @@ def check_model_override(provider: str | None, model: str | None) -> None:
     is forwarded (audit 18.10. final, S-19). The provider's configured default
     is always allowed; the answer names no setting.
     """
+    settings = get_settings()
     allowed = settings.allowed_llm_model_names()
     if not allowed or model is None:
         return
@@ -188,18 +202,35 @@ def get_llm_service(llm_provider: str | None = None, llm_model: str | None = Non
     return _get_llm_service(llm_provider=llm_provider, llm_model=llm_model)
 
 
+def has_own_llm_client(req) -> bool:
+    """
+    Whether the request got an LLM service of its own, whose HTTP client the
+    endpoint has to close on every way out.
+
+    A request that names provider or model gets its own LLMService with its
+    own client; nobody else closes it. The shared service keeps its client.
+    `req` has llm_provider and llm_model.
+    """
+    return req.llm_provider is not None or req.llm_model is not None
+
+
 def parse_json_object(raw_body: bytes, example: str) -> dict:
     """
     Parse a request body that has to be a JSON object, or answer 400.
 
     Invalid UTF-8, invalid JSON and a valid JSON value of the wrong kind (a
     list, a number) are all the caller's mistake. Left to the endpoint they
-    surfaced as 500s from `"metadata" in data` or `data.pop(...)`.
+    surfaced as 500s from `"metadata" in data` or `data.pop(...)`. So is JSON
+    nested deeper than the parser goes (audit 14.11., S-42).
     """
     try:
-        data = json.loads(sanitize_json_string(raw_body.decode("utf-8")))
-    except (UnicodeDecodeError, json.JSONDecodeError) as e:
+        data = loads_lenient(raw_body.decode("utf-8"))
+    except ValueError as e:  # invalid UTF-8, invalid JSON, NaN
         raise HTTPException(status_code=400, detail=f"Ungültiger JSON-Body: {e}") from e
+    except RecursionError as e:
+        raise HTTPException(
+            status_code=400, detail="Ungültiger JSON-Body: zu tief verschachtelt"
+        ) from e
     if not isinstance(data, dict):
         raise HTTPException(
             status_code=400, detail=f"Body muss ein JSON-Objekt sein, z.B. {example}."

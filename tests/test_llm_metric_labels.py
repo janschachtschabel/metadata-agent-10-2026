@@ -17,10 +17,10 @@ import pytest
 from prometheus_client import REGISTRY
 
 from src.config import Settings
-from src.services import llm_service as llm_module
 from src.services.llm_auth import forwarded_authorization
 from src.services.llm_errors import LLMAuthForbidden, LLMCredentialsMissing
 from src.services.llm_service import LLMService, reset_provider_gates
+from conftest import use_settings
 
 MESSAGES = [{"role": "user", "content": "x"}]
 OK = {"choices": [{"message": {"content": '{"value": "ok"}'}}]}
@@ -37,7 +37,7 @@ def _service(monkeypatch, response, provider=None, model=None, **settings):
     cfg = Settings(
         _env_file=None, **{"b_api_key": "own-key", "llm_retry_delay": 0, **settings}
     )
-    monkeypatch.setattr(llm_module, "get_settings", lambda: cfg)
+    use_settings(monkeypatch, cfg)
     service = LLMService(llm_provider=provider, llm_model=model)
     service.http_client = httpx.AsyncClient(
         transport=httpx.MockTransport(lambda r: response)

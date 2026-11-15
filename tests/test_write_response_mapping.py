@@ -30,6 +30,7 @@ FULL_RESULT = {
     },
     "fields_written": 12,
     "fields_skipped": 2,
+    "skipped_fields": ["schema:unbekannt", "virtual:x"],
     "collections": [{"collectionId": COLLECTION_ID, "success": False, "error": "x"}],
     "workflow": [
         {"status": "200_tocheck", "success": True},
@@ -50,6 +51,7 @@ EXPECTED_COMMON = {
     "step": None,
     "fields_written": 12,
     "fields_skipped": 2,
+    "skipped_fields": ["schema:unbekannt", "virtual:x"],
     "node_created": True,
     "schema_used": "learning_material.json",
     "repo_fields_available": 34,
@@ -79,10 +81,7 @@ class _Service:
     def __init__(self, result):
         self.result = result
 
-    async def upload_metadata(self, **kwargs):
-        return dict(self.result)
-
-    async def save_node(self, **kwargs):
+    async def write_node(self, job, deadline=None):
         return dict(self.result)
 
 

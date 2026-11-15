@@ -7,6 +7,7 @@ and a 502 in the third (API-01), and /generate dropped a correction instruction
 whenever the text was fetched, or cut it off with a long text (L-02).
 """
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -342,6 +343,81 @@ def test_a_refused_provider_is_refused_before_the_source_is_fetched(monkeypatch,
         response = client.post(
             path,
             json={"input_source": "url", "source_url": URL, "llm_provider": "openai"},
+        )
+
+    assert response.status_code == 422, response.text
+    assert fetched == []
+
+
+# ------------------------------------------------- audit 13.11.2026, API-14
+
+
+def _repository_answers(status):
+    request = httpx.Request("GET", "https://repo.example/node")
+    return httpx.HTTPStatusError(
+        "refused", request=request, response=httpx.Response(status, request=request)
+    )
+
+
+@pytest.mark.parametrize("path", ENDPOINTS)
+@pytest.mark.parametrize("status", [403, 404])
+def test_a_node_the_repository_does_not_have_is_a_404(monkeypatch, path, status):
+    """
+    A typo in node_id looked like a repository outage (502 "Failed to fetch
+    input: HTTPStatusError") and counted towards the 5xx alert; /nodes,
+    /workflow and /upload/verify answered 404 for the same node.
+    """
+    source = _Input(fail=_repository_answers(status))
+    monkeypatch.setattr(deps, "get_input_source_service", lambda: source)
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            path,
+            json={**ENDPOINTS[path], "input_source": "node_id", "node_id": NODE_ID},
+        )
+
+    assert response.status_code == 404, response.text
+    assert response.json()["error"]["code"] == "NOT_FOUND"
+
+
+@pytest.mark.parametrize("path", ENDPOINTS)
+def test_a_repository_that_fails_stays_a_502(monkeypatch, path):
+    source = _Input(fail=_repository_answers(500))
+    monkeypatch.setattr(deps, "get_input_source_service", lambda: source)
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            path,
+            json={**ENDPOINTS[path], "input_source": "node_id", "node_id": NODE_ID},
+        )
+
+    assert response.status_code == 502
+
+
+@pytest.mark.parametrize("path", ENDPOINTS)
+def test_a_model_that_is_not_released_is_refused_before_the_source_is_fetched(
+    monkeypatch, path
+):
+    """A model outside the allow list cost a page fetch before it was refused."""
+    fetched = []
+
+    class _Counting(_Input):
+        async def fetch_from_url(self, url, method=None, **kwargs):
+            fetched.append(url)
+            return await super().fetch_from_url(url, method, **kwargs)
+
+    monkeypatch.setattr(deps, "get_input_source_service", lambda: _Counting())
+    monkeypatch.setattr(deps.settings, "allowed_llm_models", "gpt-6-luna")
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            path,
+            json={
+                **ENDPOINTS[path],
+                "input_source": "url",
+                "source_url": URL,
+                "llm_model": "gpt-teuer",
+            },
         )
 
     assert response.status_code == 422, response.text

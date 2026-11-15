@@ -2,20 +2,28 @@
 Comparing sent metadata against what the repository stored.
 
 Backs the SOLL/IST report of `/upload/verify`. The comparison is deliberately
-looser than equality: edu-sharing returns every value as an array, is
-case-insensitive in practice, and converts dates to epoch milliseconds — a
-strict comparison would report those as mismatches.
+looser than equality: edu-sharing returns every value as an array, resolves
+vocabulary values whatever their case, and converts dates to epoch
+milliseconds — a strict comparison would report those as mismatches. Free
+text is compared as written.
 
 No HTTP, no state — the read lives in `repository_service`.
 """
 
 import logging
 import json
+from datetime import datetime, timezone
 from functools import lru_cache
 from typing import Any
 
 from ..utils.schema_loader import get_repo_fields, get_schema_fields
-from .repository_support import is_metadata_key
+from .repository_licenses import license_from_custom
+from .repository_support import (
+    SAVE_NODE_OPTION_KEYS,
+    UPLOAD_OPTION_KEYS,
+    is_metadata_key,
+    sent_record,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -212,18 +220,20 @@ def compute_diff(
     Returns:
         Tuple of (diff_list, summary_counts)
     """
-    # The fields that were sent: the same rule as the write path, minus the
-    # upload options a flat body carries next to them.
+    # The fields that were sent: the same rule as the write path (flat or
+    # nested body), minus the options a flat body carries next to them.
+    expected = sent_record(expected)
     clean_expected = {
         k: v
         for k, v in expected.items()
-        if is_metadata_key(k) and k not in _UPLOAD_OPTION_KEYS
+        if is_metadata_key(k) and k not in _OPTION_KEYS
     }
 
     schema_file = expected.get("metadataset")
     check = _DiffCheck(
         actual=actual,
         repo_field_ids=get_repo_fields(context, version, schema_file),
+        vocabulary=vocabulary_fields(context, version, schema_file) | {_LICENSE_KEY},
         resolution_of=lambda field_id: (
             None
             if properties is None
@@ -282,19 +292,32 @@ def compute_diff(
     return diff, summary
 
 
-# Upload options a flat body may carry next to the fields (routers/upload.py).
-_UPLOAD_OPTION_KEYS = frozenset(
-    {"repository", "check_duplicates", "start_workflow", "preview_url", "preview:url"}
-)
+# Options a flat body may carry next to the fields - all of them, or the rest
+# shows up as fields that were "not written" (audit 14.11., R-08).
+_OPTION_KEYS = frozenset(UPLOAD_OPTION_KEYS + SAVE_NODE_OPTION_KEYS + ("preview:url",))
+
+_CUSTOM_LICENSE = "ccm:custom_license"
+# What the write path derives from other fields: on the node without having
+# been sent under these names, so not "extra".
+_DERIVED_FROM = {
+    _CUSTOM_LICENSE: ("ccm:commonlicense_key", "ccm:commonlicense_cc_version"),
+    "cm:author": (
+        "ccm:lifecyclecontributer_author",
+        "ccm:lifecyclecontributer_authorFN",
+    ),
+}
 
 
 class _DiffCheck:
     """The verdict for one expected field against the node (compute_diff)."""
 
-    def __init__(self, actual: dict, repo_field_ids, resolution_of):
+    def __init__(self, actual: dict, repo_field_ids, resolution_of, vocabulary=()):
         self.actual = actual
         self.repo_field_ids = repo_field_ids
         self.resolution_of = resolution_of
+        # Fields whose values are URIs or keys, named as on the node. Their
+        # case is ignored; free text is compared as written (audit 14.11., R-N).
+        self.vocabulary = vocabulary
         # Repository keys accounted for; the rest is 'extra_in_repo'.
         self.seen_keys: set[str] = set()
 
@@ -308,10 +331,14 @@ class _DiffCheck:
         # swallows that. The write path then refuses to write anything at all,
         # so every field is absent by decision, not because the repository lost
         # it. Reporting 'missing_in_repo' here would blame the wrong side.
+        #
+        # A renamed field is eligible under the name it is written as:
+        # oeh:new_lrt is no field of schema 2.0.0, ccm:oeh_lrt is.
+        self.seen_keys.update(_DERIVED_FROM.get(field_id, ()))
         if (
             field_id.startswith("virtual:")
             or not self.repo_field_ids
-            or field_id not in self.repo_field_ids
+            or not {field_id, WRITTEN_AS.get(field_id, field_id)} & self.repo_field_ids
         ):
             return {
                 "field_id": field_id,
@@ -323,7 +350,9 @@ class _DiffCheck:
         actual_val = self._actual_value(field_id)
         if actual_val is None:
             return self._missing(field_id, expected_val)
-        status = "match" if values_match(expected_val, actual_val) else "mismatch"
+        fold_case = WRITTEN_AS.get(field_id, field_id) in self.vocabulary
+        same = values_match(expected_val, actual_val, fold_case=fold_case)
+        status = "match" if same else "mismatch"
         return {
             "field_id": field_id,
             "status": status,
@@ -367,6 +396,11 @@ class _DiffCheck:
                 "expected": expected_val,
                 "actual": f"(transformed → ccm:lifecyclecontributer_authorFN: {author_fn})",
             }
+        as_key = (
+            self._license_as_key(expected_val) if field_id == _CUSTOM_LICENSE else None
+        )
+        if as_key is not None:
+            return as_key
         return {
             "field_id": field_id,
             "status": "missing_in_repo",
@@ -375,12 +409,43 @@ class _DiffCheck:
             "resolution": None,
         }
 
+    def _license_as_key(self, expected_val: Any) -> dict | None:
+        """
+        The verdict for a licence link the write path stored as key and version.
 
-def values_match(expected: Any, actual: Any) -> bool:
-    """Compare expected and actual values, handling type differences."""
+        None when the value is not such a link, or the node has no key at all
+        (then it is missing like any other field).
+        """
+        mapped, replaced = license_from_custom(expected_val)
+        if not (mapped and replaced) or self.actual.get(_LICENSE_KEY) is None:
+            return None
+        on_node = {key: self.actual.get(key) for key in mapped}
+        same = all(
+            on_node[key] is not None and values_match(value, on_node[key])
+            for key, value in mapped.items()
+        )
+        return {
+            "field_id": _CUSTOM_LICENSE,
+            "status": "match" if same else "mismatch",
+            "expected": expected_val,
+            "actual": "(transformed → "
+            + ", ".join(f"{key}: {value}" for key, value in on_node.items())
+            + ")",
+        }
+
+
+def values_match(expected: Any, actual: Any, fold_case: bool = True) -> bool:
+    """
+    Compare expected and actual values, handling type differences.
+
+    `fold_case`: ignore upper and lower case - for vocabulary values (URIs,
+    keys), which the repository resolves that way. In free text a difference
+    in case is a difference. The order of a list never counts: every
+    multi-valued field of the schemata is a set (keywords, vocabulary values).
+    """
     # Normalize both to comparable form
-    exp_norm = normalize_compare(expected)
-    act_norm = normalize_compare(actual)
+    exp_norm = normalize_compare(expected, fold_case)
+    act_norm = normalize_compare(actual, fold_case)
     if exp_norm == act_norm:
         return True
 
@@ -422,8 +487,6 @@ def dates_match(a: Any, b: Any) -> bool:
 
 def to_epoch_ms(value: str) -> int | None:
     """Try to interpret a string as epoch milliseconds."""
-    from datetime import datetime, timezone
-
     # Already epoch millis?
     try:
         num = int(value)
@@ -438,7 +501,7 @@ def to_epoch_ms(value: str) -> int | None:
     # format list missed "+02:00" and plain dates, and reported them as
     # mismatches. A value without zone is read as UTC, as before.
     try:
-        # Upper-cased: normalize_compare has lower-cased "T" and "Z" by now.
+        # Upper-cased: normalize_compare may have lower-cased "T" and "Z".
         dt = datetime.fromisoformat(value.strip().upper().replace("Z", "+00:00"))
     except (ValueError, TypeError):
         return None
@@ -447,19 +510,26 @@ def to_epoch_ms(value: str) -> int | None:
     return int(dt.timestamp() * 1000)
 
 
-def normalize_compare(value: Any) -> Any:
-    """Normalize a value for comparison."""
+def normalize_compare(value: Any, fold_case: bool = True) -> Any:
+    """Normalize a value for comparison (see values_match for `fold_case`)."""
     if isinstance(value, list):
         if len(value) == 1:
-            return normalize_compare(value[0])
+            return normalize_compare(value[0], fold_case)
         # Each entry the same way as a single one: {"uri": …} and the bare URI
         # the repository stores must compare equal in a list too.
-        return sorted(str(normalize_compare(v)) for v in value)
+        return sorted(str(normalize_compare(v, fold_case)) for v in value)
+    if isinstance(value, bool):
+        # As the write path sends it, not Python's 'True'.
+        return "true" if value else "false"
     if isinstance(value, dict):
         # Extract URI or label for comparison
         if "uri" in value:
-            return str(value["uri"]).strip().lower()
-        if "label" in value:
-            return str(value["label"]).strip().lower()
-        return json.dumps(value, sort_keys=True, ensure_ascii=False).lower()
-    return str(value).strip().lower()
+            text = str(value["uri"])
+        elif "label" in value:
+            text = str(value["label"])
+        else:
+            text = json.dumps(value, sort_keys=True, ensure_ascii=False)
+    else:
+        text = str(value)
+    text = text.strip()
+    return text.lower() if fold_case else text

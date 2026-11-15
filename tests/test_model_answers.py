@@ -19,9 +19,10 @@ import pytest
 
 from src.config import Settings
 from src.services import llm_service as llm_module
-from src.services.llm_errors import LLMEmptyAnswer
+from src.services.llm_errors import LLMAnswerTruncated, LLMEmptyAnswer
 from src.services.llm_service import LLMService, reset_provider_gates
 from src.utils.schema_loader import get_ai_fillable_fields, get_latest_version
+from conftest import use_settings
 
 MESSAGES = [{"role": "user", "content": "x"}]
 CONTENT_TYPES = [
@@ -60,7 +61,7 @@ def _fresh_gates():
 def _service(gateway, monkeypatch, provider="b-api-openai", model=None, **settings):
     defaults = {"b_api_key": "own-key", "llm_retry_delay": 0}
     cfg = Settings(_env_file=None, **{**defaults, **settings})
-    monkeypatch.setattr(llm_module, "get_settings", lambda: cfg)
+    use_settings(monkeypatch, cfg)
     service = LLMService(llm_provider=provider, llm_model=model)
     service.http_client = httpx.AsyncClient(
         transport=httpx.MockTransport(gateway.handler)
@@ -290,3 +291,60 @@ async def test_a_429_waits_as_long_as_the_gateway_asks_within_a_cap(
 
     assert answer["choices"][0]["message"]["content"] == '{"value": "Titel"}'
     assert waits == [expected]
+
+
+# ------------------------------------------------------------ cut-off answers
+#
+# Audit 13.11., L-17: an answer cut off at the token limit (finish_reason
+# "length") still has text. `{"value": "Ein langer Text` is no JSON; the
+# fallback then took the first text in quotes - the key itself - and the
+# description of the record became the word "value".
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "answer",
+    ['{"value": "Ein langer Text, der mitten im Satz', '{"value": [{"name": "A"}, {"n'],
+)
+async def test_an_answer_cut_off_at_the_token_limit_is_a_failure_not_a_value(
+    monkeypatch, answer
+):
+    service = _service(_Gateway(answer, finish="length"), monkeypatch)
+
+    field_id, value, error = await service.extract_field(
+        _core_field("cclom:general_description"), "Ein Text", None, "de"
+    )
+
+    assert value is None
+    assert isinstance(error, LLMAnswerTruncated)
+    assert error.code == "LLM_ANSWER_TRUNCATED"
+    assert "METADATA_AGENT_LLM_MAX_TOKENS" in error.message
+
+
+@pytest.mark.asyncio
+async def test_a_complete_answer_is_taken_as_before(monkeypatch):
+    service = _service(_Gateway('{"value": "Eine Beschreibung."}'), monkeypatch)
+
+    _, value, error = await service.extract_field(
+        _core_field("cclom:general_description"), "Ein Text", None, "de"
+    )
+
+    assert (value, error) == ("Eine Beschreibung.", None)
+
+
+@pytest.mark.parametrize(
+    "content, expected",
+    [
+        ('{"value": "abgeschnitten', None),
+        ('[{"name": "A"}, {"na', None),
+        ('Der Titel lautet "Konzert in Weimar".', {"value": "Konzert in Weimar"}),
+        ('"Konzert"', {"value": "Konzert"}),
+    ],
+)
+def test_broken_json_is_no_source_of_values(monkeypatch, content, expected):
+    service = _service(_Gateway(), monkeypatch)
+
+    # Callers read the key "value"; whatever else the remains parse to is none.
+    parsed = service._parse_json_response(content) or {}
+
+    assert parsed.get("value") == (expected or {}).get("value")

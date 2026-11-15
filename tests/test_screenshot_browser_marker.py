@@ -50,3 +50,22 @@ def test_unmarked_callers_are_not_affected(client):
         headers={"Content-Type": "text/plain"},
     )
     assert response.status_code == 200, response.text
+
+
+def test_the_internal_port_refuses_the_screenshot_browser_too():
+    """
+    Audit 13.11., S-23: only port 8000 refused the marker. Through DNS
+    rebinding a captured page could have read /metrics, /health and /ready of
+    the internal port on loopback - no NetworkPolicy covers loopback.
+    """
+    from src.api import deps
+    from src.infra import create_internal_app
+
+    with TestClient(create_internal_app(lambda: deps.settings)) as internal:
+        for path in ("/metrics", "/health", "/ready"):
+            marked = internal.get(
+                path, headers={SCREENSHOT_BROWSER_HEADER: SCREENSHOT_BROWSER_TOKEN}
+            )
+            assert marked.status_code == 403, path
+        # Probes and Prometheus send no marker.
+        assert internal.get("/metrics").status_code == 200

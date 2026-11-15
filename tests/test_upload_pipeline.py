@@ -440,7 +440,7 @@ def test_the_endpoint_passes_a_discarded_node_on(monkeypatch, service_result, ex
     class _StubService:
         _auth_header = "Basic stub"
 
-        async def upload_metadata(self, **kwargs):
+        async def write_node(self, job, deadline=None):
             return service_result
 
     monkeypatch.setattr(deps, "get_repository_service", lambda: _StubService())
@@ -486,7 +486,10 @@ def _extended_write(calls):
 
 @pytest.mark.asyncio
 async def test_the_extended_fields_are_written_when_asked_for(recorded):
-    """README: content type, the full JSON and the raw text, plus the derived lrt."""
+    """
+    docs/API.md, "Common rules for writes": content type, the full JSON and
+    the raw text - plus the derived lrt (WLO-REPO-FELDER.md).
+    """
     await _upload_with_extended(extended_text="Rohtext der Seite")
 
     written = _extended_write(recorded)
@@ -703,3 +706,27 @@ async def test_without_a_metadataset_only_core_fields_are_reported(recorded):
 
     assert result["schema_used"] is None
     assert result["repo_fields_available"] == 26
+
+
+@pytest.mark.asyncio
+async def test_the_collection_is_referenced_after_everything_that_may_discard_the_node(
+    recorded,
+):
+    """
+    Audit 13.11., L-18: the reference was set first, then the extended fields
+    and the preview were written - up to minutes at a slow repository. A
+    deadline in between put the node into the bin and left the collection with
+    a reference to it.
+    """
+    await _upload_with_extended(collection_ids=[COLLECTION_ID])
+
+    urls = [call["url"] for call in recorded]
+    reference = next(i for i, url in enumerate(urls) if "/collections/" in url)
+    extended = next(
+        i
+        for i, call in enumerate(recorded)
+        if call["json"] is _extended_write(recorded)
+    )
+    workflow = next(i for i, url in enumerate(urls) if "/workflow" in url)
+
+    assert extended < reference < workflow

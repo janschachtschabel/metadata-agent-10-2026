@@ -10,8 +10,9 @@ range-checked as a latitude and turned a capacity of 200 into an error.
 
 import pytest
 
-from src.services import metadata_validation
+from src.services import metadata_validation, vocabulary_matching
 from src.services.metadata_service import get_metadata_service
+from src.services.vocabulary_matching import suggest_concept
 
 FIELD = "schema:occupationalCategory"
 
@@ -25,14 +26,14 @@ def _validate(metadata, schema_file):
 @pytest.fixture
 def counted_levenshtein(monkeypatch):
     calls = {"count": 0, "limits": set()}
-    original = metadata_validation.levenshtein_within
+    original = vocabulary_matching.levenshtein_within
 
     def counting(a, b, limit):
         calls["count"] += 1
         calls["limits"].add(limit)
         return original(a, b, limit)
 
-    monkeypatch.setattr(metadata_validation, "levenshtein_within", counting)
+    monkeypatch.setattr(vocabulary_matching, "levenshtein_within", counting)
     return calls
 
 
@@ -42,38 +43,31 @@ def test_many_invalid_values_get_suggestions_for_only_a_few(counted_levenshtein)
     result = _validate({FIELD: values}, "education_offer.json")
 
     warnings = [w for w in result["warnings"] if w["field_id"] == FIELD]
-    assert len(warnings) == 200  # every invalid value is still reported
+    # The first 20 and one entry for the rest (audit 14.11., S-30).
+    assert len(warnings) == metadata_validation.MAX_ISSUES_PER_FIELD + 1
     searched = metadata_validation.MAX_SUGGESTIONS_PER_FIELD
     labels_per_search = 894 * 2  # at most de + en per concept
     assert counted_levenshtein["count"] <= searched * labels_per_search
 
 
 def test_the_suggestion_limit_matches_the_other_fuzzy_paths(counted_levenshtein):
-    metadata_validation.find_closest_vocabulary_match(
+    # One matcher since the audit of 14.11. (L-34): at most three edits, and
+    # no search at all under four characters (L-32).
+    suggest_concept(
         "a very long value with many characters", [{"uri": "u", "label": {"de": "x"}}]
     )
-    metadata_validation.find_closest_vocabulary_match(
-        "ab", [{"uri": "u", "label": {"de": "x"}}]
-    )
-    assert counted_levenshtein["limits"] == {3, 1}
+    suggest_concept("ab", [{"uri": "u", "label": {"de": "x"}}])
+    assert counted_levenshtein["limits"] == {3}
 
 
 def test_a_value_four_edits_away_gets_no_suggestion():
     concepts = [{"uri": "u/1", "label": {"de": "Mathematikunterricht"}}]
-    assert (
-        metadata_validation.find_closest_vocabulary_match(
-            "Mathematikunterrichtxxxx", concepts
-        )
-        is None
-    )
+    assert suggest_concept("Mathematikunterrichtxxxx", concepts) is None
 
 
 def test_a_close_value_still_gets_its_suggestion():
     concepts = [{"uri": "u/1", "label": {"de": "Mathematik"}}]
-    assert (
-        metadata_validation.find_closest_vocabulary_match("Mathemtik", concepts)
-        == "u/1"
-    )
+    assert suggest_concept("Mathemtik", concepts) == "u/1"
 
 
 @pytest.mark.parametrize(

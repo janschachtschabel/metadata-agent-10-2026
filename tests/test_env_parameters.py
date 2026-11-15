@@ -1,5 +1,6 @@
 """
-ENV-PARAMETER.md is the operator-facing contract of this service.
+ENV-PARAMETER.md is the operator-facing contract of this service - in English
+(the default) and in German (ENV-PARAMETER.de.md); both are checked.
 
 A setting that exists in code but not in the document is invisible to whoever
 deploys it — and one that is documented but no longer read is worse, because
@@ -10,9 +11,16 @@ checked here against the model itself rather than against a hand-kept list.
 import re
 from pathlib import Path
 
-from src.config import Settings
+import pytest
 
-DOCUMENT = Path(__file__).resolve().parents[1] / "ENV-PARAMETER.md"
+from src.config import Settings
+from conftest import use_settings
+
+ROOT = Path(__file__).resolve().parents[1]
+DOCUMENTS = [ROOT / "ENV-PARAMETER.md", ROOT / "ENV-PARAMETER.de.md"]
+in_both_languages = pytest.mark.parametrize(
+    "document", DOCUMENTS, ids=[d.name for d in DOCUMENTS]
+)
 
 # Secrets keep their bare name; everything else takes the prefix.
 PREFIX = "METADATA_AGENT_"
@@ -25,8 +33,8 @@ def _configured_variables() -> set[str]:
     return names
 
 
-def _documented_variables() -> set[str]:
-    text = DOCUMENT.read_text(encoding="utf-8")
+def _documented_variables(document: Path) -> set[str]:
+    text = document.read_text(encoding="utf-8")
     return set(
         re.findall(
             r"\b(?:METADATA_AGENT_[A-Z0-9_]+|B_API_KEY|OPENAI_API_KEY|WLO_GUEST_[A-Z]+)\b",
@@ -35,21 +43,23 @@ def _documented_variables() -> set[str]:
     )
 
 
-def test_every_setting_is_documented():
-    missing = sorted(_configured_variables() - _documented_variables())
+@in_both_languages
+def test_every_setting_is_documented(document):
+    missing = sorted(_configured_variables() - _documented_variables(document))
 
-    assert not missing, f"fehlt in ENV-PARAMETER.md: {missing}"
+    assert not missing, f"missing in {document.name}: {missing}"
 
 
-def test_no_documented_variable_has_gone_away():
+@in_both_languages
+def test_no_documented_variable_has_gone_away(document):
     """A documented setting the code stopped reading is a silent no-op."""
-    stale = sorted(_documented_variables() - _configured_variables())
+    stale = sorted(_documented_variables(document) - _configured_variables())
 
-    assert not stale, f"in ENV-PARAMETER.md, aber nicht mehr in Settings: {stale}"
+    assert not stale, f"in {document.name}, but no longer in Settings: {stale}"
 
 
 def test_the_env_template_only_names_variables_that_exist():
-    template = (DOCUMENT.parent / ".env.template").read_text(encoding="utf-8")
+    template = (ROOT / ".env.template").read_text(encoding="utf-8")
     named = set(
         re.findall(
             r"^#?\s*(METADATA_AGENT_[A-Z0-9_]+|B_API_KEY|OPENAI_API_KEY|WLO_GUEST_[A-Z]+)=",
@@ -64,7 +74,7 @@ def test_the_env_template_only_names_variables_that_exist():
 
 
 def _template_values() -> dict[str, str]:
-    template = (DOCUMENT.parent / ".env.template").read_text(encoding="utf-8")
+    template = (ROOT / ".env.template").read_text(encoding="utf-8")
     return dict(re.findall(r"^([A-Z][A-Z0-9_]*)=(.*)$", template, re.MULTILINE))
 
 
@@ -87,3 +97,53 @@ def test_the_env_template_leaves_the_keys_empty():
 
     assert values["OPENAI_API_KEY"] == ""
     assert values["B_API_KEY"] == ""
+
+
+# ------------------------------------------------------- unset and empty values
+
+
+def test_without_any_variable_every_setting_has_its_default(monkeypatch):
+    for name in _configured_variables():
+        monkeypatch.delenv(name, raising=False)
+
+    settings = Settings(_env_file=None)
+
+    assert settings.b_api_auth_mode == "auto"
+    assert settings.llm_provider == "b-api-openai"
+
+
+# Empty is what these are set to on purpose: "do not send the parameter" and
+# "no origin may call" (audit 13.11., L-14).
+EMPTY_IS_A_VALUE = {"llm_verbosity", "llm_reasoning_effort", "cors_origins"}
+
+
+@pytest.mark.parametrize("name", sorted(EMPTY_IS_A_VALUE))
+def test_where_empty_is_a_value_it_stays_empty(monkeypatch, name):
+    monkeypatch.setenv(f"{PREFIX}{name.upper()}", "")
+
+    assert getattr(Settings(_env_file=None), name) == ""
+
+
+def test_an_empty_verbosity_and_effort_are_not_sent(monkeypatch):
+    """ENV-PARAMETER.md: 'Leer = nicht senden' - through the settings, as deployed."""
+    from src.services import llm_service as llm_module
+
+    monkeypatch.setenv(f"{PREFIX}LLM_VERBOSITY", "")
+    monkeypatch.setenv(f"{PREFIX}LLM_REASONING_EFFORT", "")
+    use_settings(monkeypatch, Settings(_env_file=None))
+
+    service = llm_module.LLMService()
+
+    assert (service.verbosity, service.reasoning_effort) == ("", "")
+
+
+@pytest.mark.parametrize("name", sorted(set(Settings.model_fields) - EMPTY_IS_A_VALUE))
+def test_an_empty_variable_means_the_default(monkeypatch, name):
+    """`VAR=` in a .env file or `VAR: ""` in the chart values is 'not set'."""
+    variable = Settings.model_fields[name].alias or f"{PREFIX}{name.upper()}"
+    monkeypatch.delenv(variable, raising=False)
+    unset = getattr(Settings(_env_file=None), name)
+
+    monkeypatch.setenv(variable, "")
+
+    assert getattr(Settings(_env_file=None), name) == unset

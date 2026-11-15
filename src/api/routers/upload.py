@@ -3,21 +3,22 @@
 import asyncio
 from typing import Any, Optional
 
-from fastapi import HTTPException, Request, Response
+from fastapi import Request
 from pydantic import ValidationError
 
 from ...models.schemas import UploadRequest, UploadResponse
 from ...services.repository_result import WriteResult
+from ...services.repository_support import (
+    SAVE_NODE_OPTION_KEYS,
+    UPLOAD_OPTION_KEYS,
+)
+from ...services.repository_write import NodeWrite, upload_workflow_steps
 import logging
 
 
 from fastapi import APIRouter
 
-from ..responses import (
-    SAVE_NODE_ERROR_STATUS,
-    failure_response,
-    upload_timeout_response,
-)
+from ..responses import refused_write
 
 from .. import deps
 from ..deps import (
@@ -27,7 +28,8 @@ from ..deps import (
 )
 from ...utils.loggable import loggable_url
 from ..openapi import documented_body_schema
-from .request_body import invalid_body
+from ..request_body import invalid_body, refuse_foreign_options
+from .repository_docs import UPLOAD_RESPONSES
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +44,7 @@ router = APIRouter()
 @router.post(
     "/upload",
     response_model=UploadResponse,
+    responses=UPLOAD_RESPONSES,
     summary="Metadaten ins Repository hochladen",
     description="""Lädt Metadaten ins WLO edu-sharing Repository hoch und erstellt einen neuen Node.
 
@@ -59,10 +62,14 @@ Zwei weitere Formen sind gleichwertig und schreiben dieselben Felder:
 2. **Felder unter `metadata`** — so exportiert die Webkomponente
 3. **Alles unter `metadata`** — doppelt verschachtelt
 
+Neben einem verschachtelten `metadata` stehen nur die Optionen unten und der
+Umschlag einer `/generate`-Antwort; ein anderer Schlüssel (Tippfehler, Option
+von `/nodes`) wird mit `422` abgelehnt statt übergangen.
+
 **`metadataset` in jedem Fall mitschicken.** Der Schlüssel entscheidet, welches
 Typschema zusätzlich zu `core.json` gilt und damit, welche Felder überhaupt
-geschrieben werden dürfen (nur core: 22 Felder, + `event.json`: 29,
-+ `learning_material.json`: 34). Fehlt er, fallen typspezifische Felder wie
+geschrieben werden dürfen (Schema 2.0.0 – nur core: 26 Felder, + `event.json`: 33,
++ `learning_material.json`: 40). Fehlt er, fallen typspezifische Felder wie
 `ccm:oeh_event_begin` oder `ccm:price` stillschweigend weg.
 
 ## Optionale Parameter
@@ -87,9 +94,9 @@ geschrieben werden dürfen (nur core: 22 Felder, + `event.json`: 29,
 1. **Duplikat-Check** (optional): Prüft ob URL bereits existiert
 2. **Node erstellen**: Legt neuen Node mit Basisdaten an
 3. **Metadaten setzen**: Überträgt alle Metadaten
-4. **Collections**: Referenziert den Node in Sammlungen (`collection_id` und/oder Sammlungen aus den Metadaten)
-5. **Extended Fields** (optional): Schreibt `ccm:oeh_extendedType` (Inhaltstyp-URI), `ccm:oeh_extendedData` (Metadaten-JSON), `ccm:oeh_extendedText` (Rohtext)
-6. **Vorschaubild**: Der parallel aufgenommene Screenshot wird **vor** dem Workflow gespeichert, damit der Node mit Bild in der Prüfung landet. Reicht die Zeit nicht (siehe Zeitlimit), wird ohne Vorschau weitergemacht und `preview.success: false` gemeldet.
+4. **Extended Fields** (optional): Schreibt `ccm:oeh_extendedType` (Inhaltstyp-URI), `ccm:oeh_extendedData` (Metadaten-JSON), `ccm:oeh_extendedText` (Rohtext)
+5. **Vorschaubild**: Der parallel aufgenommene Screenshot wird **vor** Sammlungen und Workflow gespeichert, damit der Node mit Bild in der Prüfung landet. Reicht die Zeit nicht (siehe Zeitlimit), wird ohne Vorschau weitergemacht und `preview.success: false` gemeldet.
+6. **Collections**: Referenziert den Node in Sammlungen (`collection_id` und/oder Sammlungen aus den Metadaten)
 7. **Workflow** (optional): Durchläuft `workflow_steps` Schritt für Schritt
 8. **Node zurücklesen** (optional, `return_full_node`): Liest den fertigen Node erneut aus
 
@@ -132,7 +139,7 @@ Fehlerformat (`detail`, `error.code`, `error.request_id`):
 | Status | `error.code` | Fall |
 |--------|--------------|------|
 | `422` | `VALIDATION_ERROR` | Body verstößt gegen das Schema oder gegen die Objektform eines Felds (z.B. String statt `{"name": …}`) — vor der ersten Anfrage ans Repository |
-| `422` | `SCHEMA_UNAVAILABLE` | Kontext/Version unbekannt, das Schema ließ sich nicht laden |
+| `422` | `SCHEMA_UNAVAILABLE` | Kontext, Version oder `metadataset` unbekannt: das Schema ließ sich nicht laden (`step: schema`) — vor der ersten Anfrage ans Repository |
 | `502` | `UPSTREAM_ERROR` | Repository hat Anlegen oder alle Metadaten abgelehnt, oder war nicht erreichbar; `discarded_node` nennt einen dabei angelegten und verworfenen Node, `node` einen, der nicht verworfen werden konnte, `field_errors` die abgelehnten Felder |
 
 `200` mit `success: false` bleibt für Dubletten (`duplicate: true`) und
@@ -240,7 +247,7 @@ async def upload_to_repository(request: Request):
     - `start_workflow`: true (default) oder false
 
     The steps are RepositoryService's (see its docstring): duplicate check,
-    node, metadata, collections, extended fields, preview, workflow, read-back.
+    node, metadata, extended fields, preview, collections, workflow, read-back.
     """
     data = _wrapped(parse_json_object(await request.body(), '{"cclom:title": "…"}'))
     try:
@@ -251,33 +258,35 @@ async def upload_to_repository(request: Request):
     repo_service = require_repository_service()
 
     # Extract context/version from metadata (before potential unwrapping)
-    context = req.metadata.get("contextName", "default")
-    version = req.metadata.get("schemaVersion", "latest")
+    # `or`: a marker that is null means the default, as on /validate.
+    context = req.metadata.get("contextName") or "default"
+    version = req.metadata.get("schemaVersion") or "latest"
 
-    # Runs in parallel with the upload; awaited inside upload_metadata before
+    # Runs in parallel with the upload; awaited inside write_node before
     # the workflow, so the node enters the editorial queue with its preview.
     capture = _PreviewCapture.start(req, _fields_with_source(req))
 
     try:
-        raw = await repo_service.upload_metadata(
+        job = NodeWrite(
             metadata=req.metadata,
-            check_duplicates=req.check_duplicates,
-            start_workflow=req.start_workflow,
             context=context,
             version=version,
+            node_id=req.node_id or None,
+            check_duplicates=req.check_duplicates,
+            read_back=req.return_full_node,
             write_extended_data=req.write_extended_data,
             extended_text=req.extended_text,
-            return_full_node=req.return_full_node,
             collection_ids=req.collection_id,
-            node_id=req.node_id,
-            workflow_steps=req.workflow_steps,
+            workflow_steps=upload_workflow_steps(
+                req.start_workflow, req.workflow_steps
+            ),
             workflow_comment=req.workflow_comment,
             workflow_receiver=req.workflow_receiver,
             preview_source=capture.source,
-            deadline=_deadline(),
         )
+        raw = await repo_service.write_node(job, _deadline())
         result = WriteResult.from_service(raw)
-        refusal = refused_write(result)
+        refusal = refused_write(result, deps.settings.upload_timeout)
     except BaseException:
         # As in /generate, and for a refusal raised as 403/404/502: nobody
         # awaits the capture any more.
@@ -292,72 +301,29 @@ async def upload_to_repository(request: Request):
     return result.response(UploadResponse, preview_status)
 
 
-def refused_write(result: WriteResult) -> Optional[Response]:
-    """
-    The error answer of /upload and /nodes, or None for a result to report.
-
-    Deadline: 504. A handed-over node that may not be written: 403/404/502
-    (raised). A write that left nothing behind (API-08): 422 or 502, `detail`
-    with the text `error` had, plus the node it created and discarded
-    (`discarded_node`) or could not discard (`node`), and the refused fields.
-    """
-    if result.error_code == "upload_timeout":
-        return upload_timeout_response(
-            deps.settings.upload_timeout,
-            {"error": result.error or "", **result.present("discarded_node", "node")},
-        )
-    if result.error_code in SAVE_NODE_ERROR_STATUS:
-        raise HTTPException(
-            status_code=SAVE_NODE_ERROR_STATUS[result.error_code],
-            detail=result.error or "Node kann nicht bearbeitet werden",
-        )
-    failure = result.nothing_written
-    if failure is None:
-        return None
-    status, code = failure
-    detail = result.error or "Schreiben ins Repository fehlgeschlagen"
-    return failure_response(
-        status,
-        detail,
-        {"code": code, "message": detail},
-        **result.present("discarded_node", "node", "step", "field_errors"),
-    )
-
-
 def _deadline() -> float:
     """METADATA_AGENT_UPLOAD_TIMEOUT from now, in event loop time (audit D-04)."""
     return asyncio.get_running_loop().time() + deps.settings.upload_timeout
 
 
-# Options of the flat body form and their defaults. They have to be lifted out
-# by name before the rest becomes the metadata dict. A name missing here is not
-# rejected — it is filed away as a metadata field and silently does nothing,
-# which is worse than an error. Anything added to UploadRequest belongs here too.
-_UPLOAD_OPTIONS: dict[str, Any] = {
-    "node_id": None,
-    "repository": "staging",
-    "check_duplicates": True,
-    "start_workflow": True,
-    "source": None,
-    "preview_url": None,
-    "screenshot_method": "playwright",
-    "write_extended_data": True,
-    "extended_text": None,
-    "return_full_node": False,
-    "collection_id": None,
-    "workflow_steps": None,
-    "workflow_comment": None,
-    "workflow_receiver": None,
-}
+# Options of the flat body form. They have to be lifted out by name before the
+# rest becomes the metadata dict. A name missing here is not rejected — it is
+# filed away as a metadata field and silently does nothing, which is worse than
+# an error. One list with the comparison of /upload/verify, which leaves the
+# same names out (audit 14.11., R-08); anything added to UploadRequest belongs
+# there too. What a body does not name keeps the default of the model.
+_UPLOAD_OPTIONS = UPLOAD_OPTION_KEYS
 
 
 def _wrapped(data: dict[str, Any]) -> dict[str, Any]:
     """The body as UploadRequest takes it: metadata under 'metadata', options beside."""
+    refuse_foreign_options(
+        data, "/upload", _UPLOAD_OPTIONS, "/nodes", SAVE_NODE_OPTION_KEYS
+    )
     if isinstance(data.get("metadata"), dict):
         carry_schema_markers(data)
         return data
-    options = {key: data.pop(key, default) for key, default in _UPLOAD_OPTIONS.items()}
-    options["screenshot_method"] = options["screenshot_method"] or "playwright"
+    options = {key: data.pop(key) for key in _UPLOAD_OPTIONS if key in data}
     return {"metadata": data, **options}
 
 
@@ -409,7 +375,7 @@ class _PreviewCapture:
 
     @property
     def source(self):
-        """The preview source for upload_metadata, None without a capture."""
+        """The preview source of the NodeWrite, None without a capture."""
         return self._image if self.task else None
 
     async def _image(self) -> tuple[bytes, str]:

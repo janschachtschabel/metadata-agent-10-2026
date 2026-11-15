@@ -19,10 +19,23 @@ jobs:
     env:
       # Without Chromium the browser tests fail here instead of skipping (T-03).
       REQUIRE_BROWSER: "1"
-      # Likewise the rendered-chart tests without helm (on the runner image).
+      # Likewise the rendered-chart tests without helm.
       REQUIRE_HELM: "1"
+      # And check_browser_age.py when it cannot tell the age of the browser.
+      REQUIRE_BROWSER_AGE: "1"
+      # The Python uv installs. Named, so it does not move with the uv pin
+      # (uv takes the newest it knows); raise it together with uv.
+      UV_PYTHON: "3.13.5"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      # helm from the image GitLab pins, not the one of the runner image, which
+      # moves with it: the binary is static.
+      - name: helm from the pinned image
+        run: |
+          mkdir -p "$RUNNER_TEMP/helm"
+          docker run --rm --entrypoint sh -v "$RUNNER_TEMP/helm:/out" alpine/helm:3.20.0@sha256:2240b3c3e917a156c4af570c7f8bdf951072196de69f2a0d06e2cd2fc0ba40a8 -c 'cp "$(command -v helm)" /out/helm'
+          echo "$RUNNER_TEMP/helm" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/helm/helm" version --short
       - name: Run the test suite
         run: |
           pip install uv==0.7.13
@@ -49,17 +62,26 @@ jobs:
     runs-on: ubuntu-24.04   # pinned: ubuntu-latest moves to 26.04 from 2026-10-19
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      # helm from the image GitLab pins, not the one of the runner image, which
+      # moves with it: the binary is static.
+      - name: helm from the pinned image
+        run: |
+          mkdir -p "$RUNNER_TEMP/helm"
+          docker run --rm --entrypoint sh -v "$RUNNER_TEMP/helm:/out" alpine/helm:3.20.0@sha256:2240b3c3e917a156c4af570c7f8bdf951072196de69f2a0d06e2cd2fc0ba40a8 -c 'cp "$(command -v helm)" /out/helm'
+          echo "$RUNNER_TEMP/helm" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/helm/helm" version --short
       - name: helm lint
         run: |
           helm lint helm/metadata-agent --strict --set image.repository=ci/metadata-agent-api
           helm lint helm/metadata-agent --strict --set image.repository=ci/metadata-agent-api --set ingress.enabled=true
-      # The rendered manifests against the Kubernetes schemas, the Prometheus
-      # Operator kinds against the CRDs catalog (audit T-07).
+      # The rendered manifests against the Kubernetes schemas of a named
+      # version (without it: the newest, which moves), the Prometheus Operator
+      # kinds against the CRDs catalog (audit T-07).
       - name: kubeconform
         run: |
           for extra in "" "--set ingress.enabled=true"; do
             helm template ci helm/metadata-agent --set image.repository=ci/metadata-agent-api $extra |
-              docker run --rm -i ghcr.io/yannh/kubeconform:v0.7.0@sha256:85dbef6b4b312b99133decc9c6fc9495e9fc5f92293d4ff3b7e1b30f5611823c -strict -summary -schema-location default -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/501527ab9c40c827144c8f45945b25a023e344ce/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' -
+              docker run --rm -i ghcr.io/yannh/kubeconform:v0.7.0@sha256:85dbef6b4b312b99133decc9c6fc9495e9fc5f92293d4ff3b7e1b30f5611823c -strict -summary -kubernetes-version 1.33.0 -schema-location default -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/501527ab9c40c827144c8f45945b25a023e344ce/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' -
           done
       - name: promtool
         run: |
@@ -74,11 +96,22 @@ jobs:
       # DockerHub password, and an unmerged change must not be published) and
       # only where the secret exists — a fork or a fresh copy of the repo still
       # builds and checks the image, it just does not push it.
-      PUBLISH: ${{ github.event_name != 'pull_request' && secrets.DOCKERHUB_PASSWORD != '' }}
+      # Only main and version tags: a manual run (workflow_dispatch) of another
+      # branch builds and checks, but does not publish (audit 13.11., OPS-22).
+      PUBLISH: ${{ github.event_name != 'pull_request' && secrets.DOCKERHUB_PASSWORD != '' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Inject slug/short variables
         uses: rlespinasse/github-slug-action@0e3299190dac9a700da92a90de4556116ea965ed  # v5.7.1
+      # A tag names the version the code ships: chart, image tag and service
+      # version are one number.
+      - name: Tag matches the version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version="v$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml | head -n 1)"
+          if [ "$GITHUB_REF_NAME" != "$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME passt nicht zur Version $version in pyproject.toml"; exit 1
+          fi
       - name: Build Docker image
         run: >
           docker build --build-arg VERSION=${{ env.GITHUB_REF_SLUG }} --build-arg REVISION=${{ github.sha }}

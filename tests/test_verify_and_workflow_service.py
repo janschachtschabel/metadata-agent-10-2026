@@ -4,8 +4,8 @@ The two endpoints that act on a node after it was uploaded.
 `verify_node` backs POST /upload/verify/{node_id}, `set_workflow` backs
 POST /workflow/{node_id}. Both were reachable only against a live repository and
 had no test at all — 0% of either method was executed by the suite. What they
-promise is written down in the README, and that is what these tests pin, not
-whatever the implementation happens to do.
+promise is written down in docs/API.md (sections of the two endpoints), and
+that is what these tests pin, not whatever the implementation happens to do.
 """
 
 import json
@@ -109,7 +109,7 @@ async def test_repository_properties_are_returned_flat(routed):
 
 @pytest.mark.asyncio
 async def test_without_expected_metadata_no_diff_is_reported(routed):
-    """README: 'Ohne Body werden nur die aktuellen Metadaten gelesen (kein Diff)'."""
+    """docs/API.md, POST /upload/verify: without expected_metadata, no comparison."""
     routed.node_properties = {"cclom:title": ["Workshop KI"]}
 
     result = await _service().verify_node(NODE_ID)

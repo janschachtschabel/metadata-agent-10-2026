@@ -14,6 +14,8 @@ import json
 from typing import Any
 import logging
 
+from .repository_licenses import license_from_custom
+
 logger = logging.getLogger(__name__)
 
 
@@ -50,29 +52,68 @@ def normalize_for_repo(metadata: dict, repo_field_ids: set[str] | None = None) -
         if key not in repo_field_ids:
             continue
 
-        # Skip empty values
-        if value is None or value == "" or value == []:
-            continue
-
-        # Normalize to arrays and flatten complex objects
-        if isinstance(value, list):
-            flattened = []
-            for item in value:
-                if item is None or item == "":
-                    continue
-                flattened_item = flatten_value(item)
-                if flattened_item is not None:
-                    flattened.append(flattened_item)
-            if flattened:
-                normalized[key] = flattened
-        elif isinstance(value, dict):
-            flattened = flatten_value(value)
-            if flattened is not None:
-                normalized[key] = [flattened]
-        else:
-            normalized[key] = [value]
+        # Arrays of simple values; a field with nothing to write is left out
+        values = wire_values(value)
+        if values:
+            normalized[key] = values
 
     return normalized
+
+
+def wire_values(value: Any) -> list:
+    """
+    A field's value as the array the repository API takes.
+
+    Flat (a list inside a list contributes its entries - it used to go out as
+    its Python repr), without empty entries (None, "", text of nothing but
+    whitespace), objects reduced by flatten_value, and booleans as the strings
+    "true"/"false": the repository's properties are strings, and that is the
+    form WLO-REPO-FELDER.md documents (audit 14.11., R-N).
+    """
+    if isinstance(value, list):
+        return [wire for item in value for wire in wire_values(item)]
+    flattened = flatten_value(value)
+    if isinstance(flattened, (list, dict)):
+        return wire_values(flattened)
+    if flattened is None or (isinstance(flattened, str) and not flattened.strip()):
+        return []
+    if isinstance(flattened, bool):
+        return ["true" if flattened else "false"]
+    return [flattened]
+
+
+# Sent under one name, written under another by a step after the filter.
+_WRITTEN_AS_PROPERTY = {
+    "cm:author": "ccm:lifecyclecontributer_author",
+    "oeh:new_lrt": "ccm:oeh_lrt",
+    "schema:location": "cm:latitude",
+    "schema:geo": "cm:latitude",
+}
+# Not properties: the write references the node in these collections.
+_COLLECTION_KEYS = ("virtual:collection_id_primary", "ccm:collection_id")
+
+
+def skipped_fields(metadata: dict, written: dict) -> list[str]:
+    """
+    The sent fields that hold a value and reach the repository under no property.
+
+    `written` is what goes out after all transformations. What the answer
+    promises as `fields_skipped` (audit 14.11., R-13): mostly fields the
+    schema does not mark as repository fields.
+    """
+    skipped = []
+    for key, value in metadata.items():
+        if key in written or key in _COLLECTION_KEYS or not wire_values(value):
+            continue
+        if key == "ccm:custom_license":
+            consumed = license_from_custom(value)[1] and (
+                "ccm:commonlicense_key" in written
+            )
+        else:
+            consumed = _WRITTEN_AS_PROPERTY.get(key) in written
+        if not consumed:
+            skipped.append(key)
+    return skipped
 
 
 def flatten_value(item: Any) -> Any:

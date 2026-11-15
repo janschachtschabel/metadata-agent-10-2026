@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any, Optional
 from functools import lru_cache
 
+from .loggable import shortened
+
 logger = logging.getLogger(__name__)
 
 
@@ -28,31 +30,46 @@ def load_context_registry() -> dict[str, Any]:
 @lru_cache(maxsize=10)
 def load_manifest(context: str) -> dict[str, Any]:
     """Load manifest for a context."""
-    registry = load_context_registry()
-    context_info = registry.get("contexts", {}).get(context)
-    if not context_info:
-        raise ValueError(f"Unknown context: {context}")
-
-    context_path = context_info.get("path", context)
+    context_path = _context_info(context).get("path", context)
     manifest_path = SCHEMATA_PATH / context_path / "manifest.json"
 
     with open(manifest_path, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
-def resolve_version(context: str, version: str) -> str:
-    """Resolve 'latest' to actual version number. Strips 'v' prefix if present."""
-    if version.lower() == "latest":
+def _context_info(context: str) -> dict[str, Any]:
+    """The registry entry of a context; ValueError for one it does not list."""
+    context_info = load_context_registry().get("contexts", {}).get(context)
+    if not context_info:
+        raise ValueError(f"Unknown context: {shortened(context)}")
+    return context_info
+
+
+def resolve_version(context: str, version: Optional[str]) -> str:
+    """
+    The version a request means, as the directories are named: the context's
+    default for 'latest' or none (a marker that is null), else the version
+    given, without one leading 'v'.
+
+    The one place that reads a version (audit 14.11., S-37): ValueError for a
+    context the registry does not list - before anything is said about a
+    version - and for anything that is no version ('vvv2.0.0' passed while
+    every 'v' was stripped).
+    """
+    if version is None or version.lower() == "latest":
         return get_latest_version(context)
-    # Strip 'v' prefix — directory path already adds it
-    return version.lstrip("v")
+    _context_info(context)
+    # One 'v' - the directory path adds it again.
+    resolved = version.removeprefix("v")
+    if not _SCHEMA_VERSION.fullmatch(resolved):
+        raise ValueError(f"Invalid schema version: {shortened(version)!r}")
+    return resolved
 
 
 def schema_file_of(metadata: dict[str, Any]) -> str:
     """The schema a record names: `metadataset`, legacy `_schema.file`, else learning material."""
-    return metadata.get("metadataset") or metadata.get("_schema", {}).get(
-        "file", "learning_material.json"
-    )
+    legacy = metadata.get("_schema") or {}
+    return metadata.get("metadataset") or legacy.get("file", "learning_material.json")
 
 
 def load_schema(context: str, version: str, schema_file: str) -> dict[str, Any]:
@@ -60,12 +77,9 @@ def load_schema(context: str, version: str, schema_file: str) -> dict[str, Any]:
     # Version and file name arrive from requests. They are identifiers, never
     # path fragments — '../' would otherwise read any JSON file on the server.
     if not isinstance(schema_file, str) or not _SCHEMA_FILE.fullmatch(schema_file):
-        raise ValueError(f"Invalid schema file name: {schema_file!r}")
+        raise ValueError(f"Invalid schema file name: {shortened(schema_file)!r}")
 
-    # Resolve 'latest' to actual version
     resolved_version = resolve_version(context, version)
-    if not _SCHEMA_VERSION.fullmatch(resolved_version):
-        raise ValueError(f"Invalid schema version: {version!r}")
 
     # Cached per resolved version: "latest", "2.0.0" and "v2.0.0" are one file.
     return _load_schema_file(context, resolved_version, schema_file)
@@ -76,20 +90,16 @@ def _load_schema_file(
     context: str, resolved_version: str, schema_file: str
 ) -> dict[str, Any]:
     """The schema file of a validated name and resolved version (load_schema)."""
-    registry = load_context_registry()
-    context_info = registry.get("contexts", {}).get(context)
-    if not context_info:
-        raise ValueError(f"Unknown context: {context}")
-
-    context_path = context_info.get("path", context)
+    context_path = _context_info(context).get("path", context)
     schema_path = SCHEMATA_PATH / context_path / f"v{resolved_version}" / schema_file
 
     # The message reaches API callers: name the schema, not the server path.
     if not schema_path.resolve().is_relative_to(SCHEMATA_PATH.resolve()):
-        raise ValueError(f"Invalid schema path: {schema_file!r}")
+        raise ValueError(f"Invalid schema path: {shortened(schema_file)!r}")
     if not schema_path.is_file():
         raise ValueError(
-            f"Schema not found: {schema_file} ({context}, version {resolved_version})"
+            f"Schema not found: {shortened(schema_file)} "
+            f"({context}, version {resolved_version})"
         )
 
     with open(schema_path, "r", encoding="utf-8") as f:
@@ -104,10 +114,19 @@ def get_latest_version(context: str = "default") -> str:
     1. Version marked as isDefault in manifest
     2. defaultVersion in context-registry
     3. Highest semantic version number as fallback
+
+    ValueError for a context the registry does not list: the fallback below is
+    for a registry or manifest that cannot be read, and answered '1.8.1' for a
+    context that has no version at all (audit 14.11., S-38).
     """
     try:
-        registry = load_context_registry()
-        context_info = registry.get("contexts", {}).get(context, {})
+        contexts = load_context_registry().get("contexts", {})
+    except Exception as e:
+        return _fallback_version(context, e)
+    if context not in contexts:
+        raise ValueError(f"Unknown context: {shortened(context)}")
+    try:
+        context_info = contexts[context]
         manifest = load_manifest(context)
         versions = manifest.get("versions", {})
 
@@ -134,10 +153,14 @@ def get_latest_version(context: str = "default") -> str:
 
         return "1.0.0"
     except Exception as e:
-        logger.warning(
-            f"Latest schema version of {context!r} unreadable, using 1.8.1: {e}"
-        )
-        return "1.8.1"  # Hardcoded fallback
+        return _fallback_version(context, e)
+
+
+def _fallback_version(context: str, error: Exception) -> str:
+    logger.warning(
+        f"Latest schema version of {context!r} unreadable, using 1.8.1: {error}"
+    )
+    return "1.8.1"  # Hardcoded fallback
 
 
 def get_available_contexts() -> list[dict[str, Any]]:
@@ -171,7 +194,7 @@ def get_available_schemas(context: str, version: str) -> list[dict[str, Any]]:
     version_info = manifest.get("versions", {}).get(resolved_version)
 
     if not version_info:
-        raise ValueError(f"Unknown version: {version} (resolved: {resolved_version})")
+        raise ValueError(f"Unknown version: {shortened(resolved_version)}")
 
     schemas = []
     for schema_file in version_info.get("schemas", []):
@@ -181,9 +204,10 @@ def get_available_schemas(context: str, version: str) -> list[dict[str, Any]]:
                 {
                     "file": schema_file,
                     "profile_id": schema.get("profileId", ""),
-                    "label": schema.get(
-                        "label", {"de": schema_file, "en": schema_file}
-                    ),
+                    # The file name only for what is no content type (core.json).
+                    "label": schema.get("label")
+                    or get_content_type_label(schema_file, context, version)
+                    or {"de": schema_file, "en": schema_file},
                     "groups": [g.get("id") for g in schema.get("groups", [])],
                     "field_count": len(schema.get("fields", [])),
                 }
@@ -200,7 +224,7 @@ def _profile_id(context: str, version: str, schema_file: str) -> Optional[str]:
     try:
         return load_schema(context, version, schema_file).get("profileId") or None
     except ValueError as e:
-        logger.warning(f"⚠️ No profile id for {schema_file}: {e}")
+        logger.warning(f"⚠️ No profile id for {shortened(schema_file)}: {e}")
         return None
 
 
@@ -209,7 +233,10 @@ def get_content_types(context: str, version: str) -> list[dict[str, Any]]:
     try:
         return read_content_types(context, version)
     except Exception as e:
-        logger.warning(f"Content types of {context!r} {version} unreadable: {e}")
+        logger.warning(
+            f"Content types of {shortened(context)!r} {shortened(version)} "
+            f"unreadable: {e}"
+        )
         return []
 
 
@@ -261,7 +288,10 @@ def get_content_type_prompt(
                 return prompt.get(language) or prompt.get("de") or prompt.get("en")
         return None
     except Exception as e:
-        logger.warning(f"Content type prompt of {context!r} {version} unreadable: {e}")
+        logger.warning(
+            f"Content type prompt of {shortened(context)!r} {shortened(version)} "
+            f"unreadable: {e}"
+        )
         return None
 
 
@@ -293,6 +323,20 @@ def get_content_type_uri(schema_file: str, context: str, version: str) -> Option
     return None
 
 
+def get_content_type_label(
+    schema_file: str, context: str, version: str
+) -> Optional[dict[str, str]]:
+    """
+    The name of a content type: the label of its concept in core.json. The
+    schema files carry none - /info/schemas and the Markdown export showed the
+    file name (audit 14.11., L-39). None for a file that is no content type.
+    """
+    for content_type in get_content_types(context, version):
+        if content_type.get("schema_file") == schema_file:
+            return content_type.get("label") or None
+    return None
+
+
 def resolve_schema_file_or_uri(
     schema_file_or_uri: str, context: str, version: str
 ) -> str:
@@ -309,7 +353,9 @@ def resolve_schema_file_or_uri(
         resolved = resolve_schema_file_from_uri(schema_file_or_uri, context, version)
         if resolved:
             return resolved
-        raise ValueError(f"No schema_file found for URI: {schema_file_or_uri}")
+        raise ValueError(
+            f"No schema_file found for URI: {shortened(schema_file_or_uri)}"
+        )
     return schema_file_or_uri
 
 
@@ -450,7 +496,10 @@ def get_repo_fields(
                     repo_field_ids.add(field_id)
     except Exception as e:
         # Fewer (or no) writable fields follow; the log has to say why (L-04).
-        logger.warning(f"⚠️ Repo fields of core.json ({context}/{version}): {e}")
+        logger.warning(
+            f"⚠️ Repo fields of core.json "
+            f"({shortened(context)}/{shortened(version)}): {e}"
+        )
 
     # Load special schema if provided (and not core.json itself)
     if schema_file and schema_file != "core.json":
@@ -463,6 +512,9 @@ def get_repo_fields(
                     if field_id:
                         repo_field_ids.add(field_id)
         except Exception as e:
-            logger.warning(f"⚠️ Repo fields of {schema_file} ({context}/{version}): {e}")
+            logger.warning(
+                f"⚠️ Repo fields of {shortened(schema_file)} "
+                f"({shortened(context)}/{shortened(version)}): {e}"
+            )
 
     return repo_field_ids

@@ -1,102 +1,123 @@
 # Steckbrief: Metadata Agent
 
-Stand 20.10.2026, Version 3.0.1
+Stand 15.11.2026. Beschrieben ist die Version 4.0.0 (Agent und Webkomponente
+gemeinsam, auf GitHub getaggt am 15.11.2026). Die Änderungen gegenüber 3.0.1
+stehen im [CHANGELOG](../CHANGELOG.md).
 
-| | |
-|---|---|
-| **Service** | Metadata Agent (metadata-agent inkl. metadata-agent-webcomponent) |
-| **Technischer Owner** | @Jan Schachtschabel |
-| **Readiness Status** | Handlungsbedarf |
-| **Offene Punkte** | 6 |
-| **Kritische Offene Punkte** | 2 |
-| **Jira** | DAT-108, wg. Anpassungen SDWLO-1564 |
+Status: **vorhanden** / **nicht vorhanden** (etwas, das es geben muss),
+**geprüft** (eine Eigenschaft ist festgestellt), **In Klärung**,
+**In Nacharbeit**.
 
-## Stammdaten & API
+## Stammdaten
 
-| Punkt | Text oder Link | Status |
+| Punkt | Status | Angabe |
 |---|---|---|
-| Anzeigename und Beschreibung | `Metadata Agent API`: erzeugt aus Text, Webseite oder Repository-Eintrag Metadaten (Titel, Beschreibung, Schlagworte, Bildungsstufe …) und schreibt sie ins WLO-Repository (`info.summary` der Spec) | erfüllt |
-| Repository-Link | GitLab (Produktiv): [metadata-agent](https://scm.edu-sharing.com/edu-sharing/projects/wlo/metaservices/metadata-agent), [metadata-agent-webcomponent](https://scm.edu-sharing.com/edu-sharing/projects/wlo/metaservices/metadata-agent-webcomponent). GitHub (Entwicklung): [metadata-agent-10-2026](https://github.com/janschachtschabel/metadata-agent-10-2026), [metadata-agent-webcomponent-10-2026](https://github.com/janschachtschabel/metadata-agent-webcomponent-10-2026). | erfüllt |
-| OpenAPI Spec | `/openapi.json` aus dem Code; 16 Operationen beschrieben; Swagger UI `/docs` ohne Dritt-Server | erfüllt |
-| Pipeline und Git-Tags | GitLab-CI: Branch-Images und Versions-Image je Tag, dazu Prüfung von Chart (`helm lint`) und Alarmregeln (`promtool`). GitHub Actions grün (2.549 Tests, Chart-Prüfung, Image-Build; Stand 3.0.1). GitLab-Tag `v3.0.1` steht noch aus | erfüllt |
-| Endpunkte (öffentliche und Infrastruktur) | Port 8000: API, `/docs`, `/openapi.json`, `/widget/*`. Interner Port (z.B. 9000): `/health`, `/ready`, `/metrics`; `/ready` verlangt die Repository-Zugangsdaten, abschaltbar mit `METADATA_AGENT_REQUIRE_REPOSITORY=false` (nur Generieren). `/debug/*` standardmäßig aus (im Chart ausdrücklich), der interne Port ist nicht im Ingress | erfüllt |
-| spezielle Header und Content-Types | ein: `Authorization: Bearer` (B-API, `forwardApiKey`), `x-client-trace-id`, B3; aus: `X-Request-ID`. API nur JSON; Widget-Dateien (JS, CSS, `woff2`, HTML) abstimmen | offen |
-| Asynchrone Job-Endpunkte | keine. `/generate` dauert 12–22 s (`gpt-6-luna`), bis 90 s (AcademicCloud), sehr lange Quellen werden auf 150.000 Zeichen gekürzt (Goethe-Artikel, 412.000 Zeichen: 35–42 s statt 126 s); Zeitlimit 300 s → Proxy-Timeout ≥ 310 s empfohlen; Async nur nötig, falls ein Proxy die ≥ 310 s nicht erlaubt | offen |
+| Service | | Metadata Agent – Dienst-ID `metadata-agent` (mit der Webkomponente `metadata-agent-webcomponent`). Zwei ältere Namen bleiben, weil andere Stellen sie fest verwenden: der Proxy-Eintrag der B-API `metadata-agent-canvas` und das Image `metadata-agent-api` |
+| Funktionalität | | Erzeugt aus Text, Webseite oder Repository-Eintrag Metadaten nach den WLO/OEH-Schemata (Titel, Beschreibung, Schlagworte, Bildungsstufe, Lizenz …), prüft sie und schreibt sie ins WLO-Repository; liefert dazu die Webkomponente zum Anzeigen und Bearbeiten |
+| Stabile Version | **vorhanden** | 4.0.0 (15.11.2026), davor 3.0.1 (20.10.2026). Aufrufer-sichtbare Änderungen stehen im CHANGELOG unter „Vor dem Update prüfen“ |
+| Technischer Owner | | @Jan Schachtschabel (Team 4: Manuel und Jan); Vertretung noch festzulegen |
+| Jira | **vorhanden** | DAT-108, wegen der Anpassungen SDWLO-1564 |
+| Repository | **vorhanden** | GitLab (Produktiv): [metadata-agent](https://scm.edu-sharing.com/edu-sharing/projects/wlo/metaservices/metadata-agent), [metadata-agent-webcomponent](https://scm.edu-sharing.com/edu-sharing/projects/wlo/metaservices/metadata-agent-webcomponent). GitHub (Entwicklung): [metadata-agent-10-2026](https://github.com/janschachtschabel/metadata-agent-10-2026), [metadata-agent-webcomponent-10-2026](https://github.com/janschachtschabel/metadata-agent-webcomponent-10-2026) |
+| OpenAPI Spec | **vorhanden** | `GET /openapi.json` aus dem Code, 16 Operationen, jede mit Beispielantwort; Swagger UI unter `/docs` ohne Dritt-Server. Referenz: [docs/API.de.md](API.de.md) ([englisch](API.md)) |
+| Pipeline und Git-Tags | **vorhanden** | `.gitlab-ci.yml` im Repo: Tests, Lint, Typen, `helm lint`, kubeconform, promtool, Image-Bau mit Trivy-Scan und Smoke-Test. Tags `vX.Y.Z` müssen zur Version in `pyproject.toml` passen und erzeugen das Versions-Image. Geplante Prüfungen (pip-audit, Alter des Chromium, Scan des neuesten Release-Images) als Pipeline-Schedule – in GitLab in der Oberfläche anzulegen. GitHub Actions spiegeln die Prüfungen |
+| Endpunkte | **vorhanden** | Öffentlich (Port 8000): `POST /generate`, `/extract-field`, `/detect-content-type`, `/validate`, `/export/markdown`, `/node`, `/nodes`, `/upload`, `/workflow/{node_id}`, `/upload/verify/{node_id}`, `/screenshot`; `GET /info/schemata`, `/info/schemas/…`, `/info/schema/…`, `/widget/info`, `/widget/i18n/{lang}.json`; dazu `/docs`, `/openapi.json`, `/widget/dist/*`, `/widget/examples/*`. Infrastruktur: `/health`, `/ready`, `/metrics`. `/debug/*` nur mit `METADATA_AGENT_DEBUG_ENDPOINTS=true` (Standard und Chart: aus) |
+| Endpunkte auf zwei Ports | **vorhanden** | Port 8000: API und Webkomponente. Interner Port (Chart: 9000): `/health`, `/ready`, `/metrics` – nicht im Ingress, im Chart auf einem eigenen Service `<name>-internal`. `/health` und `/ready` antworten auch auf Port 8000 (HEALTHCHECK des Images) |
+| Header / Content-Types | **geprüft** | Ein: `Authorization: Bearer` (von der B-API per `forwardApiKey` durchgereicht), `x-client-trace-id`, `X-Request-ID`, B3 (`x-b3-traceid`, `x-b3-spanid`, `b3`). Aus: `X-Request-ID`, bei Überlast `Retry-After`. API: `application/json` (`/generate` nimmt auch `text/plain`); Webkomponente: JS, CSS, `woff2`, HTML, JSON – im Proxy freizugeben |
+| Asynchrone Job-Endpunkte | **geprüft** | keine, alles synchron. `/generate` dauert meist 9–22 s (`gpt-6-luna`), Frist 300 s, danach Teilergebnis bzw. `504`; `/upload` und `/nodes` Frist 100 s. Proxys davor brauchen ≥ 310 s Timeout und 20 MB Body-Größe |
+| Readiness Status | **In Nacharbeit** | Version 4.0.0 ist lokal geprüft (4579 Tests, Webkomponente 1281 Specs, [Audit vom 14.11.](audits/2026-11-14-audit-3.0.1.md) mit behobenen Befunden). Es fehlen: Test auf Staging, Eintrag und Schlüsselrechte in der B-API, erste Installation des Charts im Cluster – siehe „Offene Punkte“ |
 
 ## Architektur
 
-![Architektur-Map](architektur/metadata-agent-architektur.png)
+![Architektur-Map, Betrieb über die B-API](architektur/metadata-agent-architektur-b-api.png)
 
-| Punkt | Text oder Link | Status |
+| Punkt | Status | Angabe |
 |---|---|---|
-| Übersicht | Widget in edu-sharing → B-API-Proxy → Agent → B-API LLM, Textextraktion, edu-sharing, Photon-Geocoder. Grafiken: [Map](architektur/metadata-agent-architektur.png), [Ablauf](architektur/metadata-agent-ablauf.png), [interaktiv](architektur/README.md) | erfüllt |
-| zustandslos oder zustandsbehaftet | zustandslos; keine Sitzungen, kein gemeinsamer Zustand zwischen Pods, keine Volumes | erfüllt |
-| Horizontale Skalierbarkeit | ja, über Replicas (ein Worker je Container); aktuelles GWDG-Limit (~10 Aufrufe/min, höchstens 2 gleichzeitig) gilt für alle Pods gemeinsam; der Chart teilt es mit `sharedLlmLimit` durch die Replicas | erfüllt |
+| Überblick | | FastAPI-Anwendung (Python 3.13, ein Worker je Container), zustandslos, mit Chromium (Headless-Shell) für Screenshots. Ablauf: Webkomponente in edu-sharing → B-API-Proxy → Agent → B-API (LLM, Textextraktion, Photon-Geocoder) und edu-sharing-Repository. Grafiken über die B-API: [Map](architektur/metadata-agent-architektur-b-api.png), [Ablauf](architektur/metadata-agent-ablauf-b-api.png); direkter Betrieb: [Map](architektur/metadata-agent-architektur.png), [Ablauf](architektur/metadata-agent-ablauf.png); [interaktiv](architektur/README.md) |
+| Horizontale Skalierbarkeit | **geprüft** | ja, über Replicas: keine Sitzungen, kein gemeinsamer Zustand, keine Volumes. Zwei Grenzen: Das GWDG-Limit (AcademicCloud, ~10 Aufrufe/min) gilt für alle Pods gemeinsam – der Chart teilt es mit `sharedLlmLimit` durch die Replicas; die Sperre gegen doppeltes Speichern derselben URL gilt je Prozess (mehrere Pods deckt das zusätzliche Lesen des Eingangsordners ab). Kein Autoscaling |
+| Integriert in B-API | **geprüft** | ja: Aufrufe kommen über den Proxy-Eintrag `metadata-agent-canvas` (Port 8000, `forwardApiKey`, Timeout ≥ 310 s). Der Dienst erkennt den Betrieb selbst (`METADATA_AGENT_B_API_AUTH_MODE=auto`) und läuft auch eigenständig. Einrichtung: [b-api-kurzinfo.md](b-api-kurzinfo.md) |
+| Schreibt Suggestions | **geprüft** | nein. Der Dienst schreibt Nodes und Metadaten direkt ins Repository (`/upload`, `/nodes`, `/node`) und startet den Redaktions-Workflow (`200_tocheck`); die Suggestions-API nutzt er nicht |
+| Nutzt Routing | **geprüft** | ja, für die LLM-Aufrufe: `b-api-openai` (Standard, Modell `gpt-6-luna`), `b-api-academiccloud` oder `b-api-router` mit Routenname oder `provider/modell`. Empfohlen: OpenAI mit `gpt-6-luna`; AcademicCloud reicht mit den aktuellen Limits nicht für Produktivlast. Modellwahl je Anfrage begrenzbar (`METADATA_AGENT_ALLOWED_LLM_MODELS`) |
+| Nutzt API Keys | **geprüft** | ja: je Anfrage der durchgereichte Schlüssel des Aufrufers, sonst der eigene `B_API_KEY` (`auto` / `forward` / `static`). Der Schlüssel braucht die LLM-Endpunkte (`openai`, `router`) und die Proxy-Dienste `text-extraction` und `photon_geocoding`, kein `LLM_ROUTE_MANAGE` |
+| Repo über B-API | **geprüft** | nein: Das edu-sharing-Repository ruft der Dienst direkt per REST mit einem Dienstkonto auf (Lesen von Nodes, Schreiben, Vorschau, Workflow). Die B-API deckt davon nur einen Teil ab; der Umbau auf beliebige Repositories ist ein eigenes Arbeitspaket |
+| Benötigte Dienste | **geprüft** | B-API (LLM); Textextraktion (`/api/v1/proxy/text-extraction`, für URL-Eingaben) und Photon-Geocoder (`/api/v1/proxy/photon_geocoding`, für Orte) – beide über die B-API der Umgebung (`METADATA_AGENT_B_API_SERVICES`); edu-sharing-Repository. Ohne Repository läuft das Erschließen aus Text und URL (`METADATA_AGENT_REQUIRE_REPOSITORY=false`). Keine CronJobs, keine eigenen Daten |
 
 ## Deployment und Infrastruktur
 
-| Punkt | Text oder Link | Status |
+| Punkt | Status | Angabe |
 |---|---|---|
-| Docker-Files | `Dockerfile` (Multi-Stage, `python:3.13-slim`, Nutzer `appuser`, HEALTHCHECK) und `docker-compose.yml` im Repo | erfüllt |
-| HELM-Chart und Beispiel-Values | [helm/metadata-agent/](../helm/metadata-agent/README.md): Deployment (Probes intern), Service, PodDisruptionBudget, NetworkPolicy (Namespaces anpassen), Secret, ServiceMonitor, PrometheusRule; Ingress abschaltbar, hinter der B-API aus; `helm lint` und kubeconform grün (beide in der CI), noch nicht im Cluster installiert; Prüfliste für Staging und Rollback in [DEPLOYMENT.md](../DEPLOYMENT.md) | erfüllt |
-| Abschaltbare Komponenten | keine; nur der interne Port ist optional | nicht anwendbar |
-| Datenbank | keine | nicht anwendbar |
-| Quelle und Volume-Größe für große Daten | keine; im Image nur Schemata (8 MB), Widget (2,5 MB), Swagger UI (1,8 MB) | nicht anwendbar |
+| HELM | **vorhanden** | [helm/metadata-agent/](../helm/metadata-agent/README.md) im Repo: Deployment (Probes auf dem internen Port), zwei Services, PodDisruptionBudget, NetworkPolicy, Secret, ServiceMonitor, PrometheusRule; Chart-Version = Version des Dienstes; jeder Wert mit `## @param` beschrieben; `helm lint` und kubeconform in der CI. **In Klärung:** noch nie in einem Cluster installiert, Chart-Pfad (`deploy/helm/<dienst-id>`) und Veröffentlichung in einer Registry. Prüfliste: [DEPLOYMENT.de.md](../DEPLOYMENT.de.md) |
+| Docker-Files | **vorhanden** | `Dockerfile` (Multi-Stage, `python:3.13-slim` per Digest, Nutzer `appuser`, `tini` als Init-Prozess, HEALTHCHECK) und `docker-compose.yml`; Chart und Compose starten den Container mit nur lesbarem Root-Dateisystem |
+| Abschaltbare Komponenten | **geprüft** | Im Chart: Ingress (Standard aus), NetworkPolicy, ServiceMonitor, PrometheusRule, PodDisruptionBudget. Im Dienst: Repository-Zugang (`METADATA_AGENT_REQUIRE_REPOSITORY=false`, nur Generieren), Screenshots und Geokodierung je Anfrage, Debug-Endpunkte (Standard aus) |
+| Datenbank | **geprüft** | nein – auch kein Redis, keine Worker, keine Queue |
+| Große Daten | **geprüft** | nein. Im Image nur Schemata (8 MB), Webkomponente (2,1 MB) und Swagger UI (1,8 MB); keine Modelle oder Korpora, kein Volume. Das Image ist durch Chromium groß (Headless-Shell; komprimierte Größe noch nicht gemessen). Anfragen bis 20 MB, Quelltexte werden auf 150.000 Zeichen gekürzt |
 
 ## Security und Konfiguration
 
-| Punkt | Text oder Link | Status |
+| Punkt | Status | Angabe |
 |---|---|---|
-| Authentifizierungskonzept | mit B-API (Variante A): Proxy reicht den Key per `forwardApiKey` durch, der Dienst nutzt ihn nur je Anfrage (`B_API_AUTH_MODE`: `auto`/`forward`/`static`, gilt für alle B-API-Provider inkl. Router; Kurzinfo: [b-api-kurzinfo.md](b-api-kurzinfo.md)). **Kritisch:** Eintrag in der B-API und Staging-Test fehlen | offen |
-| mit B-API: Routing, virtueller Key, Berechtigungen | Standard `gpt-6-luna` (`b-api-openai`), optional `b-api-router` mit Route oder `provider/modell`. Virtueller Key nötig; Rechte: LLM-Endpunkte (`openai`, `router`), kein `LLM_ROUTE_MANAGE`. Modellwahl pro Anfrage begrenzbar mit `METADATA_AGENT_ALLOWED_LLM_MODELS`. Einrichtung: [b-api-kurzinfo.md](b-api-kurzinfo.md) | erfüllt |
-| Empfohlenes LLM Routing | openai mit `gpt-6-luna` und `gpt-5.6-luna` (Academiccloud ist mit aktuellen Limits nicht nutzbar) | erfüllt |
-| ohne B-API: LLM-Keys und Authentifizierung | `B_API_KEY` (wie 2.0.x) oder `OPENAI_API_KEY`; keine eigene Auth-Schicht, Zugang muss ein Proxy absichern.<br>Steuerung über ENV: `METADATA_AGENT_B_API_AUTH_MODE`<br>Optionen: `auto`, `static` (wie bisher mit API Key), `forward` (neues Verfahren über b-api) | erfüllt |
-| Env-Variablen inklusive Defaults | [ENV-PARAMETER.md](../ENV-PARAMETER.md), `.env.template` und Helm-`values.yaml`, alle per Test mit dem Code abgeglichen | erfüllt |
-| Benötigte Secrets (ohne Werte) | `B_API_KEY` (entfällt im Modus `forward`), `WLO_GUEST_USERNAME`, `WLO_GUEST_PASSWORD` (entfallen, wenn nur generiert wird: `METADATA_AGENT_REQUIRE_REPOSITORY=false`); `OPENAI_API_KEY` nur ohne B-API (dann in `secret.keys` des Charts ergänzen) | erfüllt |
+| Authentifizierung | **geprüft** | keine eigene: Der Dienst prüft keine Zugangsdaten des Aufrufers. Den Zugang sichert der B-API-Proxy (Variante A: Schlüssel per `forwardApiKey`) und im Cluster die NetworkPolicy; ohne B-API muss ein anderer Proxy absichern. `/screenshot`, `/upload` und `/workflow` handeln mit dem Dienstkonto (akzeptiert, UEBERGABE §3) |
+| Network Policy | **vorhanden** | Im Chart, Standard an: Port 8000 nur aus den Namespaces der B-API, der interne Port nur aus denen von Prometheus; ausgehend nur öffentliche Ziele. Namespaces sind anzupassen; Grenzen (IPv6, LoadBalancer) in [DEPLOYMENT.de.md](../DEPLOYMENT.de.md) |
+| ENV Variablen | **vorhanden** | [ENV-PARAMETER.de.md](../ENV-PARAMETER.de.md) ([englisch](../ENV-PARAMETER.md)), `.env.template`, `values.yaml` – per Test mit dem Code abgeglichen. Ohne Einstellung gelten Defaults für Staging; ein ungültiger Wert beendet den Start |
+| Benötigte Secrets | **geprüft** | `B_API_KEY` (entfällt im Modus `forward`), `WLO_GUEST_USERNAME` und `WLO_GUEST_PASSWORD` (entfallen, wenn nur generiert wird), `OPENAI_API_KEY` nur ohne B-API. Keine Werte im Repo, im Image oder in den Startzeilen |
 
 ## Monitoring und Betrieb
 
-| Punkt | Text oder Link | Status |
+| Punkt | Status | Angabe |
 |---|---|---|
-| Prometheus-Endpunkt | `/metrics` auf dem internen Port | erfüllt |
-| Applikationsmetriken und Alarmregeln | HTTP, LLM-Aufrufe (Ergebnis, Dauer), Erschließungen, Aufrufe an abhängige Dienste, Tokens. Zwölf Alarmregeln als `PrometheusRule` im Chart, per promtool getestet (u. a. 5xx und interne Fehler; langsame Erschließung ab p95 > 270 s); kritisch nur für eigenen Key und konfiguriertes Modell (UEBERGABE §4); Empfänger legt T6 fest | erfüllt |
-| Log-Format und x-client-trace-id | stdout, JSON mit `trace_id` oder Text; Trace-Header gehen an B-API, Textextraktion und Repository, nie an Fremddienste | erfüllt |
+| Prometheus | **vorhanden** | `/metrics` auf dem internen Port; ServiceMonitor im Chart. Metriken: HTTP (Dauer, Status), LLM-Aufrufe (Ergebnis, Dauer, Tokens samt Cache-Anteil), Erschließungen nach Ausgang, Aufrufe an abhängige Dienste |
+| Alarmregeln | **vorhanden** | 13 Regeln als `PrometheusRule` im Chart, per promtool getestet (abgelehnter Schlüssel, falsche Route, Drosselung, nicht erreichbare Dienste, langsame oder scheiternde Erschließungen, interne Fehler); kritisch nur für eigenen Schlüssel und konfiguriertes Modell. Empfänger legt Team 6 fest (UEBERGABE §4) |
+| B3-Tracing | **vorhanden** | Der Dienst übernimmt `x-b3-traceid`, `x-b3-spanid`, `b3` und `x-client-trace-id`, legt ohne sie eine Trace-ID an und gibt die Header an B-API und Repository weiter, nie an Fremddienste. Logs auf stdout als JSON (`service`, `trace_id`, `span_id`, `request_id`; im Chart gesetzt) oder Text, eine Zeile je Anfrage. Kein OpenTelemetry-Export |
 
 ## Ressourcen und Kosten
 
-| Punkt | Text oder Link | Status |
+| Punkt | Status | Angabe |
 |---|---|---|
-| CPU, RAM und Storage | geschätzt 500m / 512Mi (Requests) bis 2 CPU / 2Gi (Limits), kein Storage; Image groß durch Chromium (~400 MB). Lastmessung ist offen. | offen |
-| Erwartete LLM-Kosten | 0,007–0,017 € je Erschließung mit `gpt-6-luna`, Input-Caching 66–93 % (gemessen 16.10.2026, UEBERGABE §7) | erfüllt |
-| Kosten externer APIs | Photon-Geocoder kostenlos; Datenresidenz-Aufschlag der B-API klären | offen |
-
-## Übergabe
-
-| Punkt | Text oder Link | Status |
-|---|---|---|
-| Ansprechperson in T4 | Team 4 (Manuel und Jan) | offen |
-| Bekannte Einschränkungen und offene Punkte | siehe unten | erfüllt |
-| Links zu Betriebsdokumentation und Nachweisen | [UEBERGABE.md](../UEBERGABE.md), [DEPLOYMENT.md](../DEPLOYMENT.md), [ENV-PARAMETER.md](../ENV-PARAMETER.md), [B-API-Kurzinfo](b-api-kurzinfo.md), [Architektur](architektur/README.md), [Helm-Chart](../helm/metadata-agent/README.md), [team6-anforderungen.md](team6-anforderungen.md), [Audit 15.10.2026](audits/2026-10-15-audit.md), [Audit 17.10.2026](audits/2026-10-17-audit-3.0.0.md), [Audit 18.10.2026 nach Korrektur](audits/2026-10-18-audit-3.0.0-nachkorrektur.md), [Finaler Audit 18.10.2026](audits/2026-10-18-audit-3.0.0-final.md), [CHANGELOG](../CHANGELOG.md) | erfüllt |
+| CPU, RAM und Storage | **vorhanden** | Requests 500m / 512Mi, Limits 2 CPU / 2Gi je Pod, kein Storage – geschätzt. **In Nacharbeit:** Messung unter Last, P50/P90 je Endpunkt |
+| Kostenschätzung | **vorhanden** | LLM: 0,007–0,017 € je Erschließung mit `gpt-6-luna` (gemessen 16.10.2026, UEBERGABE §7); Kontrolle am 15.11.2026: rund 0,009 $ je Lauf nach Listenpreis, 48 % der Eingabe-Tokens aus dem Prompt-Cache; seit dem Cache-Haltepunkt vom selben Tag rund 15 % weniger (0,0070 $ statt 0,0083 $ für einen Text mit 4.400 Zeichen). Photon-Geocoder kostenlos. **In Klärung:** Datenresidenz-Aufschlag der B-API |
 
 ## Offene Punkte
 
 **Kritisch**
-1. eventuell Anpassungen des Helm-Charts notwendig (Muster liegt bei)
-2. Dienst in der B-API mit `forwardApiKey` eintragen und testen ([DEPLOYMENT.md](../DEPLOYMENT.md), „Nach dem Deployment prüfen“); dabei prüfen, ob Prometheus die Metriken und Alarmregeln übernimmt
+
+1. Dienst in der B-API mit `forwardApiKey` eintragen und testen ([DEPLOYMENT.de.md](../DEPLOYMENT.de.md), „Nach dem Deployment prüfen“); dabei prüfen, ob Prometheus Metriken und Alarmregeln übernimmt.
+2. Schlüsselrechte in der B-API ergänzen: Die Nutzer- und Gast-Schlüssel aus edu-sharing (und `B_API_KEY`) brauchen die Proxy-Dienste `text-extraction` und `photon_geocoding`; danach die Tests 3 und 4 aus DEPLOYMENT.de.md eingeloggt und als Gast ausführen. Mit dem B-API-Team klären, ob der Eintrag `photon_geocoding` Schlüssel und Trace-Header an Photon weiterreicht.
+3. Chart zum ersten Mal im Cluster installieren; eventuell sind Anpassungen nötig (Muster liegt bei). Das Chart braucht ein Image aus demselben Stand – nicht das veröffentlichte 3.0.1.
+4. Einbettung in edu-sharing mit der neuen Webkomponente testen: Der Datensatz enthält Felder ohne Wert nicht mehr, `metadataChange` kommt sofort nach einer Änderung, `contentType` im Datensatz wird gelesen (CHANGELOG der Webkomponente, „Für Einbettende“).
 
 **Offen**
-3. Entscheiden, ob Async-Jobs nötig sind (mit dem Textbudget bleiben auch sehr lange Seiten unter 60 s)
-4. CPU und RAM unter Last messen
-5. Webkomponente: Tests von Karma auf Vitest (`@angular/build:unit-test`) und den Build auf `@angular/build:application` umstellen, ohne Angular-Update.
-   Damit entfallen die 11 `braces`-Befunde der Entwicklungswerkzeuge im CI-Job `audit dev dependencies` (Aufwand ca. 1–2 Tage, 442 Specs).
-6. Hinweis an edu-sharing: kurz sichtbares Texteingabefeld beim Laden des Formulars (meist Millisekunden, während einer Erschließung 1–2 s). Betraf 2.1.1 genauso.
-   - **Ursache:** edu-sharing setzt `layout`, `readonly` usw. erst nach `await initWebComponent()` (im Formular-Editor zusätzlich in einem `setTimeout`); bis dahin zeigt das Widget sein Standard-Layout mit Eingabefeld.
-   - **Lösung:** die Einbindung in edu-sharing anpassen: alle Einstellungen setzen, sobald das Element angelegt ist, und erst danach die Skripte laden (Formular-Editor und Detailansicht). Korrigierter Code: [README der Webkomponente, „Einbettung in edu-sharing“](https://github.com/janschachtschabel/metadata-agent-webcomponent-10-2026#einbettung-in-edu-sharing).
-   - **Widget unverändert:** Es kann nicht erkennen, ob der Host noch Einstellungen nachreicht; eine Wartezeit würde jede andere Einbettung verzögern.
 
-**Bekannte Einschränkungen**
-- `/generate` braucht meist 12–22 s (`gpt-6-luna`), bis 90 s mit AcademicCloud; sehr lange Quellen werden auf 150.000 Zeichen gekürzt (Rest abgeschnitten, Hinweis in `processing.warnings`) und bleiben so unter 60 s. Nach 300 s bricht der Dienst selbst ab (`504`); Proxy (B-API, edu-sharing) und Ingress brauchen dafür ≥ 310 s Timeout (Chart: 320 s) und 20 MB Body-Größe.
-- Die Webkomponente zeigt den Kürzungshinweis noch nicht an; Webkomponente 3.x braucht Agent 3.x.
-- Statuscodes in 3.0.0 vereinheitlicht (Breaking für Clients, CHANGELOG): Abruffehler `502`, unbekannter Node oder Kontext `404`, ungültiger Body `422`; `/upload` und `/nodes` ohne geschriebenes Ergebnis `422`/`502` statt `200`, `/workflow` `404`/`504`.
+5. Version 4.0.0 nach GitLab übernehmen und dort taggen: Erst das Tag `v4.0.0` im GitLab-Repository baut das Image. Auf GitHub ist die Version seit dem 15.11.2026 getaggt; der Test auf Staging steht noch aus (Punkte 1 bis 4).
+6. Entscheiden, ob Async-Jobs nötig sind – nur falls ein Proxy die ≥ 310 s nicht erlaubt.
+7. CPU und RAM unter Last messen; P50/P90 je Endpunkt; komprimierte Image-Größe.
+8. Hinweis an edu-sharing: kurz sichtbarer Eingabebereich beim Laden des Formulars. Ursache ist die späte Konfiguration des Elements; kleinste Korrektur ist ein statisches Attribut im Template (`layout="clean"` im Formular-Editor, `layout="detail"` in der Detailansicht). Am Bundle nachgemessen; Code im README der Webkomponente, [„Einbettung in edu-sharing“](https://github.com/janschachtschabel/metadata-agent-webcomponent-10-2026/blob/main/README.de.md#einbettung-in-edu-sharing).
+9. Webkomponente: Umstellung von Karma auf Vitest und auf `@angular/build:application` als eigenes Release (Karma und der Webpack-Builder sind abgekündigt). `npm audit` meldet derzeit keine Befunde.
+10. Vertretung der Ansprechperson festlegen; Zeile in der gemeinsamen Kompatibilitätsmatrix nachtragen (braucht Textextraktion und Repository; nur gemeinsam mit Webkomponente gleicher Hauptversion).
+
+## Abweichungen vom Entwicklerleitfaden, mit Begründung
+
+- **Synchron bis 300 s statt Jobs ab 30 s:** Eine Erschließung dauert typisch 5–22 s (Text mit 4.400 Zeichen rund 5 s, gemessen 15.11.2026; Webseiten 12–22 s, gemessen 16.10.2026 vor der Beschleunigung). Jobs wären nur nötig, wenn ein Proxy die ≥ 310 s nicht erlaubt.
+- **Kein Weiterarbeiten ohne LLM:** Ohne LLM entstehen keine Metadaten. Lehnt die B-API den Schlüssel ab oder drosselt sie, meldet der Dienst den Grund (`502`/`503` mit Fehlercode) statt eines leeren Ergebnisses.
+- **Modellname statt Route als Standard:** `gpt-6-luna` über `b-api-openai` läuft, ohne dass eine Route angelegt sein muss. Auf eine Route stellt der Betrieb per Env um (`METADATA_AGENT_LLM_PROVIDER=b-api-router`, `METADATA_AGENT_B_API_ROUTER_MODEL=<route>`), ohne neues Image.
+- **Rückfall-Schlüssel als `X-API-KEY`:** `B_API_KEY` geht wie in 2.0.x als `X-API-KEY` an die B-API. Der durchgereichte Schlüssel geht unverändert als `Authorization` weiter.
+- **`/health` und `/ready` auch auf Port 8000:** für den HEALTHCHECK des Images und ältere Probes. `/metrics` gibt es nur auf dem internen Port.
+- **Repository direkt statt über die B-API, nur WLO/OEH-Schemata:** Der Umbau auf beliebige edu-sharing-Repositories ist ein eigenes Arbeitspaket.
+- **Chart unter `helm/metadata-agent`**, nicht `deploy/helm/<dienst-id>`; die CI veröffentlicht das Chart nicht in einer Registry; kein Autoscaling, weil ein HPA das geteilte GWDG-Limit (`sharedLlmLimit`) umgeht.
+- **Kein OpenTelemetry:** Der Dienst liest die Trace-Header, gibt sie weiter und legt eine Trace-ID an, meldet aber keine Spans.
+- **Betrieb ohne B-API ohne eigene Auth-Schicht:** Den Zugang muss dann ein anderer Proxy absichern.
+- **JSON-Logs nur, wenn eingestellt:** Ohne Einstellung schreibt der Dienst Text; das Chart setzt `METADATA_AGENT_LOG_FORMAT=json`, die Compose-Datei nicht.
+- **`/debug/auth` und `/debug/dependencies` auf Port 8000:** zum Einrichten des Proxys gedacht und nur mit `METADATA_AGENT_DEBUG_ENDPOINTS=true` vorhanden.
+- **Kein eigener Statuscode für fehlende Einrichtung:** `503` meldet auch dauerhafte Konfigurationsfehler (kein Repository-Zugang, keine Textextraktion).
+
+## Bekannte Einschränkungen
+
+- `/generate` braucht meist 9–22 s (`gpt-6-luna`), bis 90 s mit AcademicCloud. Sehr lange Quellen werden auf 150.000 Zeichen gekürzt (Hinweis in `processing.warnings`, den die Webkomponente anzeigt). Kurz vor der Frist von 300 s beendet der Dienst die laufenden Feld-Aufrufe und liefert ein Teilergebnis.
+- Agent und Webkomponente gehören zusammen: Die Webkomponente wird vom Agenten ausgeliefert und braucht einen Agenten derselben Hauptversion.
+- Änderungen für Aufrufer gegenüber 3.0.1 (CHANGELOG, „Vor dem Update prüfen“): `/validate` und `/export/markdown` antworten bei unbekanntem Schema, Kontext oder unbekannter Version mit `404`; ungültiges JSON ist bei jedem Endpunkt `400`; `/widget/info` liefert relative Verweise; `/nodes` und `/upload` lehnen die Optionen des jeweils anderen ab; ein angehängter Schrägstrich wird nicht weitergeleitet; Einstellungen mit ungültigem Wert beenden den Start; der interne Port liegt im Chart auf einem eigenen Service.
 - Das GWDG-Kontingent (AcademicCloud) reicht nicht für Produktivlast; Standard ist daher `gpt-6-luna`.
-- `/screenshot`, `/upload` und `/workflow` prüfen keine Rechte selbst; der Schutz liegt beim B-API-Proxy und der NetworkPolicy des Charts. Lesezugriffe laufen mit dem Service-Konto (Entscheidung offen, UEBERGABE §3).
+- `/screenshot`, `/upload` und `/workflow` prüfen keine Rechte selbst; der Schutz liegt beim B-API-Proxy und der NetworkPolicy des Charts.
+
+## Betriebsdokumentation und Nachweise
+
+[UEBERGABE.md](../UEBERGABE.md) · [DEPLOYMENT.de.md](../DEPLOYMENT.de.md) · [ENV-PARAMETER.de.md](../ENV-PARAMETER.de.md) · [INSTALL.de.md](../INSTALL.de.md) · [API-Referenz](API.de.md) · [B-API-Kurzinfo](b-api-kurzinfo.md) · [Architektur](architektur/README.md) · [Helm-Chart](../helm/metadata-agent/README.md) · [CHANGELOG](../CHANGELOG.md)
+
+Audits: [15.10.2026](audits/2026-10-15-audit.md) · [17.10.2026](audits/2026-10-17-audit-3.0.0.md) · [18.10.2026 nach Korrektur](audits/2026-10-18-audit-3.0.0-nachkorrektur.md) · [18.10.2026 final](audits/2026-10-18-audit-3.0.0-final.md) · [13.11.2026](audits/2026-11-13-audit-3.0.1.md) · [14.11.2026](audits/2026-11-14-audit-3.0.1.md) mit [Korrekturplan](plans/2026-11-14-audit-und-korrekturen.md). Historisch: [team6-anforderungen.md](team6-anforderungen.md)

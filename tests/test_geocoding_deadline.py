@@ -167,4 +167,4 @@ def test_the_generate_route_hands_its_deadline_to_the_service(monkeypatch):
         response = client.post("/generate", json={"text": "Ein Kurs."})
 
     assert response.status_code == 200, response.text
-    assert isinstance(seen.get("deadline"), float)
+    assert isinstance(seen["options"].deadline, float)

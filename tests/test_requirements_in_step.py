@@ -79,9 +79,20 @@ def test_no_dev_tool_is_installed_in_production():
         return {_norm(re.split(r"[\[<>=!~; ]", dep, maxsplit=1)[0]) for dep in deps}
 
     project = _pyproject()
-    # httpx is both: a runtime dependency and listed for the tests.
     dev_only = names(project["dependency-groups"]["dev"]) - names(
         project["project"]["dependencies"]
     )
 
     assert dev_only & set(_pins()) == set()
+
+
+def test_the_image_installs_the_server_without_unused_extras():
+    """
+    Audit 13.11., DEP-05: uvicorn[standard] also brought a file watcher
+    (--reload), websockets and a YAML reader (--log-config) into the image.
+    None of them is used; the fast parser and the event loop are.
+    """
+    pins = set(_pins())
+
+    assert pins & {"watchfiles", "websockets", "pyyaml"} == set()
+    assert {"uvicorn", "httptools", "uvloop"} <= pins

@@ -1,0 +1,97 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "sequence",
+  "quality": "showcase",
+  "specification": {
+    "path": "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent-3\\docs\\architektur\\metadata-agent-ablauf-b-api.json",
+    "sha256": "15e12d30a2bfe42044a1f7d2a5c2bfcc7584ba0a08469eac676375772fb50346",
+    "bytes": 40099
+  },
+  "artifact": {
+    "path": "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent-3\\docs\\architektur\\metadata-agent-ablauf-b-api.html",
+    "sha256": "7309367d69dafd31c94ccd986ab2c9536b49fe10716bb7a95698d5bc2845f06b",
+    "bytes": 842630
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [
+    {
+      "code": "i18n/translation-coverage",
+      "severity": "warning",
+      "message": "meta.locale \"de\" resolves 461/486 renderer-owned messages (94%) from 461 meta.translations entries; 25 fall back to English.",
+      "subject": {
+        "diagramType": "sequence",
+        "path": "/meta/translations"
+      },
+      "evidence": {
+        "locale": "de",
+        "resolvedLocale": "de",
+        "bundledLocale": null,
+        "translatedKeys": 461,
+        "totalKeys": 486,
+        "appliedOverrideKeys": 461,
+        "missingKeys": [
+          "viewer.export.svg.auto",
+          "viewer.export.svg.auto.hint",
+          "viewer.export.svg.light",
+          "viewer.export.svg.light.hint",
+          "viewer.export.svg.dark",
+          "viewer.export.svg.dark.hint",
+          "viewer.guide.title",
+          "viewer.focus.selectedNodes",
+          "viewer.guide.credit",
+          "viewer.guide.star"
+        ],
+        "missingKeysTotal": 25,
+        "englishSource": {
+          "viewer.export.svg.auto": "SVG · Auto",
+          "viewer.export.svg.auto.hint": "Matches host theme",
+          "viewer.export.svg.light": "SVG · Light",
+          "viewer.export.svg.light.hint": "Always light",
+          "viewer.export.svg.dark": "SVG · Dark",
+          "viewer.export.svg.dark.hint": "Always dark",
+          "viewer.guide.title": "Explore this system",
+          "viewer.focus.selectedNodes": "{count} selected nodes",
+          "viewer.guide.credit": "Find Archify useful? A star on GitHub helps",
+          "viewer.guide.star": "Star"
+        }
+      },
+      "supportedFixes": [
+        "Add each missing key to meta.translations, translating its English source string and keeping its {placeholders}."
+      ]
+    }
+  ],
+  "diagnosticSummary": {
+    "total": 1,
+    "shown": 1,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent-3\\docs\\architektur\\metadata-agent-ablauf-b-api.finalize.json",
+    "summaryReceipt": "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent-3\\docs\\architektur\\metadata-agent-ablauf-b-api.finalize-summary.json",
+    "browserCheckReceipt": "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent-3\\docs\\architektur\\metadata-agent-ablauf-b-api.browser-check.json"
+  },
+  "update": {
+    "status": "current",
+    "installedVersion": "3.2.0",
+    "availableVersion": "3.2.0",
+    "releaseNotes": null,
+    "checkedAt": "2026-11-13T15:12:28.371Z",
+    "source": "cache",
+    "noticeRequired": false,
+    "noticeText": null
+  },
+  "visualReview": "not-requested",
+  "durationMs": 6937,
+  "browserCheck": {
+    "requested": true,
+    "ran": true
+  }
+}

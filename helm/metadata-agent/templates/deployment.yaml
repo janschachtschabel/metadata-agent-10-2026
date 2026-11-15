@@ -1,3 +1,4 @@
+{{- include "metadata-agent.checkValues" . -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -28,7 +29,7 @@ spec:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
         - name: metadata-agent
-          image: "{{ required "image.repository setzen (Registry des Images)" .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: {{ include "metadata-agent.image" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
@@ -40,27 +41,43 @@ spec:
           env:
             {{- $shared := .Values.sharedLlmLimit }}
             {{- range $name, $value := .Values.env }}
-            {{- if has $name (list "METADATA_AGENT_INTERNAL_PORT" "FORWARDED_ALLOW_IPS") }}
-            {{- fail (printf "env.%s: set by the chart (service.internalPort, forwardedAllowIps) - remove it from the values" $name) }}
+            {{- if has $name (list "METADATA_AGENT_INTERNAL_PORT" "FORWARDED_ALLOW_IPS" "UVICORN_HOST" "METADATA_AGENT_INTERNAL_HOST" "METADATA_AGENT_GRACE_PERIOD_SECONDS") }}
+            {{- fail (printf "env.%s: set by the chart (service.internalPort, forwardedAllowIps, listenHost, terminationGracePeriodSeconds) - remove it from the values" $name) }}
             {{- end }}
             {{- if and $shared.enabled (has $name (list "METADATA_AGENT_LLM_MAX_CONCURRENT_REQUESTS" "METADATA_AGENT_LLM_MAX_REQUESTS_PER_SECOND")) }}
             {{- fail (printf "env.%s: set by the chart from sharedLlmLimit - remove it from the values or disable sharedLlmLimit" $name) }}
             {{- end }}
             - name: {{ $name }}
-              value: {{ $value | quote }}
+              value: {{ include "metadata-agent.envValue" $value | quote }}
             {{- end }}
             # The port the probes and the ServiceMonitor use - one value.
             - name: METADATA_AGENT_INTERNAL_PORT
               value: {{ .Values.service.internalPort | quote }}
             - name: FORWARDED_ALLOW_IPS
               value: {{ .Values.forwardedAllowIps | quote }}
+            # One address for both ports, so they cannot listen on different
+            # address families (values.yaml, listenHost).
+            - name: UVICORN_HOST
+              value: {{ .Values.listenHost | quote }}
+            - name: METADATA_AGENT_INTERNAL_HOST
+              value: {{ .Values.listenHost | quote }}
+            # The agent's start warnings compare its deadlines with it.
+            - name: METADATA_AGENT_GRACE_PERIOD_SECONDS
+              value: {{ .Values.terminationGracePeriodSeconds | quote }}
             {{- if $shared.enabled }}
+            {{- if le (float64 $shared.requestsPerMinute) 0.0 }}
+            {{- fail "sharedLlmLimit.requestsPerMinute must be greater than 0: a rate of 0 means 'no limit' to the agent" }}
+            {{- end }}
             # The GWDG limit is shared by all replicas, the throttle counts per
             # pod (values.yaml, sharedLlmLimit).
             - name: METADATA_AGENT_LLM_MAX_CONCURRENT_REQUESTS
               value: {{ max 1 (div (int $shared.concurrentRequests) (max 1 (int .Values.replicaCount))) | quote }}
+            {{- $rate := printf "%.4f" (divf $shared.requestsPerMinute (mulf 60 (max 1 (int .Values.replicaCount)))) }}
+            {{- if eq $rate "0.0000" }}
+            {{- fail "sharedLlmLimit.requestsPerMinute divided by replicaCount rounds to a rate of 0, which means 'no limit' to the agent - raise it or lower replicaCount" }}
+            {{- end }}
             - name: METADATA_AGENT_LLM_MAX_REQUESTS_PER_SECOND
-              value: {{ printf "%.4f" (divf $shared.requestsPerMinute (mulf 60 (max 1 (int .Values.replicaCount)))) | quote }}
+              value: {{ $rate | quote }}
             {{- end }}
             {{- /* optional: a key the configured mode does not need may be
                    missing; /ready reports a mode that cannot work and missing

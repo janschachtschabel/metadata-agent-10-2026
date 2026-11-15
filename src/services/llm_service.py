@@ -2,12 +2,16 @@
 
 import asyncio
 import httpx
-from typing import Any, Optional
+from contextlib import asynccontextmanager, contextmanager
+from contextvars import ContextVar
+from typing import Any, AsyncIterator, Iterator, Optional
 
-from ..config import get_settings
+from ..config import MAX_WORKERS, get_settings
 from ..metrics import OWN_SERVICE_HOOKS, THIRD_PARTY_HOOKS
+from ..utils.tls_context import shared_tls_context
 from ..utils.vocabulary import is_closed_vocabulary
 from .llm_errors import (
+    LLMAnswerTruncated,
     LLMEmptyAnswer,
     LLMError,
 )
@@ -16,7 +20,7 @@ import logging
 # Re-exported: callers and tests import these from llm_service, as before 3.0.0.
 from .llm_content_type import ContentTypeDetection as ContentTypeDetection
 from .llm_content_type import ContentTypeMixin
-from .llm_dates_numbers import DateNumberMixin
+from .llm_dates_numbers import DateNumberMixin, impossible_dates
 from .llm_gate import ProviderGate as ProviderGate
 from .llm_gate import RateLimiter as RateLimiter
 from .llm_gate import get_provider_gate as get_provider_gate
@@ -27,16 +31,52 @@ from .llm_transport import retry_after_seconds as retry_after_seconds
 from .llm_transport import router_failure as router_failure
 from .llm_transport import uses_reasoning_parameters as uses_reasoning_parameters
 from .llm_values import ValueNormalizerMixin
+from .vocabulary_matching import is_valid_answer
 
 logger = logging.getLogger(__name__)
 
 
+# Field calls end this long before the deadline of the run: what follows them
+# (normalising, geocoding, the answer) needs the rest.
+FIELD_RESERVE_SECONDS = 5.0
+
 # Providers whose prompt cache the primer feeds (see LLMService._prime_text_cache).
 PROMPT_CACHE_PROVIDERS = ("b-api-openai", "openai")
+# Models that take an explicit cache breakpoint (llm_cache_breakpoint "auto").
+_BREAKPOINT_MODEL_PREFIXES = ("gpt-6",)
 # The primer's answer is thrown away; keep it as short as the API allows.
 _PRIMER_MAX_TOKENS = 16
 # Roughly the 1,024 tokens below which the OpenAI prompt cache stores nothing.
 _PRIMER_MIN_TEXT_CHARS = 4000
+
+
+# What extract_field has to say about an answer it left out (an impossible
+# date). A context variable: the field tasks of a run inherit it, concurrent
+# runs each have their own, and the signature of extract_field stays.
+_FIELD_NOTES: ContextVar[Optional[list[str]]] = ContextVar("field_notes", default=None)
+
+
+@contextmanager
+def field_notes() -> Iterator[list[str]]:
+    """Collect the notes of the extract_field calls made inside."""
+    notes: list[str] = []
+    token = _FIELD_NOTES.set(notes)
+    try:
+        yield notes
+    finally:
+        _FIELD_NOTES.reset(token)
+
+
+def _note_dropped_dates(field: dict[str, Any], answer: Any) -> None:
+    """A date the model wrote and the agent did not take over is named, not lost."""
+    notes = _FIELD_NOTES.get()
+    if notes is None or field.get("system", {}).get("datatype") != "date":
+        return
+    for written in impossible_dates(answer):
+        notes.append(
+            f"{field.get('id', 'unknown')}: '{written[:40]}' ist kein Datum in der "
+            "Lesart Tag/Monat/Jahr und wurde nicht übernommen."
+        )
 
 
 class LLMService(
@@ -103,6 +143,9 @@ class LLMService(
         # provider gate for the full request timeout.
         self.http_client = httpx.AsyncClient(
             timeout=httpx.Timeout(float(settings.request_timeout), connect=10.0),
+            # A request that picks its own provider or model builds a client
+            # of its own; the TLS context is the costly part (audit 14.11., L-41).
+            verify=shared_tls_context(),
             # Tracing headers only to the B-API (the agent's own services);
             # native OpenAI is a third party (UEBERGABE section 2).
             event_hooks=(
@@ -126,9 +169,14 @@ class LLMService(
         existing_value: Any = None,
         language: str = "de",
         retry_count: int = 0,
+        last_attempt: bool = False,
     ) -> tuple[str, Any, "Optional[str | LLMError]"]:
         """
         Extract a single field value from text with retry logic.
+
+        `retry_count` and `last_attempt` are set by the method itself when it
+        asks again: an answer outside a closed vocabulary up to
+        llm_max_retries times, a required field without a value once.
 
         Returns: (field_id, extracted_value, error) - error is None, a message,
         or the LLMError of a failed call (str() gives its message).
@@ -148,7 +196,7 @@ class LLMService(
                 existing_value,
                 language,
                 retry_count,
-                last_attempt=retry_count >= max_retries,
+                last_attempt=last_attempt or retry_count >= max_retries,
             )
 
             response = await self._call_llm(
@@ -158,9 +206,14 @@ class LLMService(
                 ],
             )
 
-            content = (
-                response.get("choices", [{}])[0].get("message", {}).get("content", "")
-            )
+            choice = response.get("choices", [{}])[0]
+            content = choice.get("message", {}).get("content", "")
+            if choice.get("finish_reason") == "length":
+                raise LLMAnswerTruncated(
+                    f"Die Antwort des KI-Diensts ({self.model}) für {field_id} wurde "
+                    "an der Tokengrenze abgeschnitten (finish_reason=length). "
+                    "METADATA_AGENT_LLM_MAX_TOKENS erhöhen."
+                )
 
             # Parse JSON response
             result = self._parse_json_response(content)
@@ -171,6 +224,7 @@ class LLMService(
                 extracted_value = None
 
             # Normalize the extracted value
+            answer = extracted_value
             if extracted_value is not None:
                 normalized = self._normalize_value(extracted_value, field)
 
@@ -178,7 +232,7 @@ class LLMService(
                 # about invalid values; after the last attempt keep what matched.
                 vocabulary = field.get("system", {}).get("vocabulary", {})
                 if is_closed_vocabulary(vocabulary):
-                    valid = self._is_valid_vocabulary_value(normalized, vocabulary)
+                    valid = is_valid_answer(normalized, vocabulary)
                     if not valid and retry_count < max_retries:
                         return await self.extract_field(
                             field, text, existing_value, language, retry_count + 1
@@ -188,20 +242,28 @@ class LLMService(
 
                 extracted_value = normalized
 
-            # No value for a required field: ask again.
-            if extracted_value is None and retry_count < max_retries:
-                system = field.get("system", {})
-                if system.get("required", False):
-                    # Retry for required fields
-                    return await self.extract_field(
-                        field, text, existing_value, language, retry_count + 1
-                    )
+            # No value for a required field: ask once more, and say that it
+            # is the last time - llm_max_retries more calls for a value the
+            # text does not have were four calls per field. In a closed
+            # vocabulary null says that no concept fits: no second call
+            # (audit 14.11., L-46).
+            system = field.get("system", {})
+            if (
+                extracted_value is None
+                and retry_count == 0
+                and system.get("required", False)
+                and not is_closed_vocabulary(system.get("vocabulary", {}))
+            ):
+                return await self.extract_field(
+                    field, text, existing_value, language, 1, last_attempt=True
+                )
 
+            _note_dropped_dates(field, answer)
             return (field_id, extracted_value, None)
 
         except LLMError as e:
             # _call_llm already retried what can be retried; another round here
-            # would only repeat the same refusal or outage (formerly 4x per field).
+            # would only repeat the same refusal or outage.
             # A fatal one (refused key, quota, no gateway) ends the extraction.
             if e.fatal:
                 raise
@@ -244,6 +306,41 @@ class LLMService(
         except LLMError as e:  # incl. a 200 without a JSON body (LLMUpstreamError)
             logger.info(f"Prompt cache primer skipped: {e.code}")
 
+    @asynccontextmanager
+    async def text_cache_primer(
+        self, text: str, language: str, start: bool = True
+    ) -> AsyncIterator["Optional[asyncio.Future[None]]"]:
+        """
+        Start the primer now, for a run that has another call to wait for
+        before its field calls: the content-type detection needs nothing but
+        the text either, and the primer took 1.1 s in which nothing else was
+        on its way (measured through the B-API, 2026-11-15).
+
+        Yields the primer on its way for extract_fields_parallel(primer=…), or
+        None where none is sent: `start` is False (nothing to wait for first),
+        or see _prime_text_cache. A primer nobody waited for - the run ended
+        early, one field was left - is stopped on leaving.
+        """
+        primer: Optional[asyncio.Future[None]] = None
+        if start and self._primes_prompt_cache() and len(text) > _PRIMER_MIN_TEXT_CHARS:
+            primer = asyncio.ensure_future(self._prime_text_cache(text, language))
+        try:
+            yield primer
+        finally:
+            if primer is not None:
+                primer.cancel()  # no effect on one that is done
+                await asyncio.gather(primer, return_exceptions=True)
+
+    async def _text_cache_primed(
+        self, text: str, language: str, primer: "Optional[asyncio.Future[None]]"
+    ) -> None:
+        """Wait for the primer on its way, or send it now (extract_fields_parallel)."""
+        if primer is not None:
+            await primer  # started alongside the type detection
+        # A short text stays below the provider's ~1,024-token cache minimum.
+        elif len(text) > _PRIMER_MIN_TEXT_CHARS:
+            await self._prime_text_cache(text, language)
+
     def _primes_prompt_cache(self) -> bool:
         """
         Whether this provider and model share the OpenAI prompt cache.
@@ -256,16 +353,39 @@ class LLMService(
             return True
         return self.provider == "b-api-router" and str(self.model).startswith("openai/")
 
+    def _marks_cache_breakpoint(self) -> bool:
+        """
+        Whether the page text ends with an explicit cache breakpoint
+        (llm_cache_breakpoint; PromptMixin._text_messages).
+
+        Never outside the OpenAI prompt cache: other models answer 400 for a
+        parameter they do not know.
+        """
+        mode = self.settings.llm_cache_breakpoint
+        if mode == "off" or not self._primes_prompt_cache():
+            return False
+        name = str(self.model).lower().removeprefix("openai/")
+        return mode == "on" or name.startswith(_BREAKPOINT_MODEL_PREFIXES)
+
     async def extract_fields_parallel(
         self,
         fields: list[dict[str, Any]],
         text: str,
         existing_metadata: Optional[dict[str, Any]] = None,
         language: str = "de",
-        max_workers: int = 20,
+        max_workers: int = MAX_WORKERS,
+        deadline: Optional[float] = None,
+        primer: "Optional[asyncio.Future[None]]" = None,
     ) -> dict[str, Any]:
         """
         Extract multiple fields in parallel with worker limit.
+
+        `deadline` is the loop time the whole run must end by. Field calls
+        still running FIELD_RESERVE_SECONDS before it are stopped and named in
+        "timed_out"; what is done by then is the result (audit 13.11., P-11).
+        "warnings" names answers that were left out (an impossible date).
+        `primer` is a cache primer already on its way (text_cache_primer);
+        without it the primer is sent here, before the field calls.
 
         Returns: dict with field_id -> value mappings
         """
@@ -320,21 +440,24 @@ class LLMService(
                 elif value is not None:
                     results[field_id] = value
 
-        # One field cannot read back what the primer wrote, and a short text
-        # stays below the provider's ~1,024-token cache minimum.
-        if len(fields) > 1 and len(text) > _PRIMER_MIN_TEXT_CHARS:
-            await self._prime_text_cache(text, language)
+        # One field cannot read back what the primer wrote.
+        if len(fields) > 1:
+            await self._text_cache_primed(text, language, primer)
 
-        tasks = [asyncio.ensure_future(extract_with_semaphore(f)) for f in fields]
-        try:
-            await asyncio.gather(*tasks)
-        except BaseException:
-            # gather re-raises the first fault and leaves the other field tasks
-            # running: LLM calls nobody waits for. Stop them, then re-raise.
-            for task in tasks:
-                task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
-            raise
+        with field_notes() as notes:
+            timed_out = await _await_field_tasks(
+                {
+                    asyncio.ensure_future(extract_with_semaphore(f)): f.get(
+                        "id", "unknown"
+                    )
+                    for f in fields
+                },
+                deadline,
+            )
+        if timed_out:
+            logger.warning(
+                f"⏱️ {len(timed_out)} field call(s) stopped at the deadline: {timed_out}"
+            )
 
         return {
             "values": results,
@@ -342,7 +465,42 @@ class LLMService(
             "first_error": first_error[0] if first_error else None,
             "fatal_error": fatal[0] if fatal else None,
             "skipped": skipped,
+            "timed_out": timed_out,
+            "warnings": notes,
         }
+
+
+async def _await_field_tasks(
+    tasks: dict[asyncio.Future, str], deadline: Optional[float]
+) -> list[str]:
+    """
+    Wait for the field tasks (task -> field id); the ids of those that were
+    still running FIELD_RESERVE_SECONDS before `deadline` and were stopped.
+    """
+    # Nothing left to extract (a complete record): asyncio.wait refuses an
+    # empty set, which was a 500 (audit 14.11., L-31).
+    if not tasks:
+        return []
+    try:
+        if deadline is None:
+            await asyncio.gather(*tasks)
+            return []
+        loop = asyncio.get_running_loop()
+        left = max(0.0, deadline - FIELD_RESERVE_SECONDS - loop.time())
+        done, pending = await asyncio.wait(tasks, timeout=left)
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+        for task in done:
+            task.result()  # a fault in a field task, as gather raised it
+        return [tasks[task] for task in tasks if task in pending]
+    except BaseException:
+        # gather re-raises the first fault and leaves the other field tasks
+        # running: LLM calls nobody waits for. Stop them, then re-raise.
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
 
 
 _llm_service: Optional[LLMService] = None

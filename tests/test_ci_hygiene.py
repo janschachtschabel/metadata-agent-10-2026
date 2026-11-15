@@ -175,6 +175,12 @@ def _rule_ifs(job: dict) -> list[str]:
     return [str(rule.get("if", "")) for rule in job.get("rules", [])]
 
 
+def _scheduled_only(job: dict) -> bool:
+    """Every rule that lets the job run asks for a scheduled pipeline."""
+    runs = [rule for rule in job.get("rules", []) if rule.get("when") != "never"]
+    return bool(runs) and all('"schedule"' in str(rule.get("if", "")) for rule in runs)
+
+
 def _runs_in_merge_requests(job: dict) -> bool:
     """A job without rules defaults to `only: [branches, tags]` - no MR pipeline."""
     return any("merge_request_event" in cond for cond in _rule_ifs(job))
@@ -207,7 +213,9 @@ def test_gitlab_runs_either_a_merge_request_or_a_branch_pipeline():
 def test_every_gitlab_check_runs_in_merge_request_pipelines():
     """Tests, ruff, mypy, pip-audit, chart and alert checks gate the merge (OPS-05)."""
     checks = {
-        name: job for name, job in _gitlab_jobs().items() if job["stage"] != "deploy"
+        name: job
+        for name, job in _gitlab_jobs().items()
+        if job["stage"] != "deploy" and not _scheduled_only(job)
     }
 
     assert {"run tests", "pip audit", "helm lint", "alert rules"} <= set(checks)
@@ -469,3 +477,232 @@ def test_the_ruff_rule_set_does_not_follow_ruff_releases():
     assert "extend-select" not in ruff["lint"]
     # 0.17 also formats the Python blocks of Markdown files (README).
     assert ruff["include"] == ["*.py", "*.pyi", "**/pyproject.toml"]
+
+
+# ------------------------------------------------- audit 13.11.2026
+
+
+def test_gitlab_lints_with_the_ruff_of_the_lock_file():
+    """
+    OPS-23: the job said "Same ruff as uv.lock" and ran 0.15.5 against a lock
+    file with 0.17.0 - `ruff format` may judge differently between versions.
+    """
+    lock = (GITLAB.parent / "uv.lock").read_text(encoding="utf-8")
+    locked = re.search(r'name = "ruff"\nversion = "([^"]+)"', lock).group(1)
+    image = yaml.safe_load(GITLAB.read_text(encoding="utf-8"))[".base_ruff"]["image"][
+        "name"
+    ]
+
+    assert re.fullmatch(
+        rf"ghcr\.io/astral-sh/ruff:{re.escape(locked)}-alpine@sha256:[0-9a-f]{{64}}",
+        image,
+    ), image
+
+
+def test_kubeconform_is_pinned_by_digest_in_gitlab_too():
+    image = _image(_gitlab_jobs()["kubeconform"])
+
+    assert re.fullmatch(r"[\w./-]+:[\w.-]+@sha256:[0-9a-f]{64}", image), image
+
+
+def test_a_release_tag_must_match_the_version_it_ships():
+    """
+    OPS-22: any tag starting with "v" published an image, whatever version the
+    code named. A tag without the version bump gives an image that reports
+    another version and has no chart of its own.
+    """
+    job = _gitlab_jobs()["build and push docker image on tag creation"]
+    script = _script(job)
+
+    assert any(r"/^v\d+\.\d+\.\d+$/" in condition for condition in _rule_ifs(job)), (
+        _rule_ifs(job)
+    )
+    assert "pyproject.toml" in script
+    assert script.index("pyproject.toml") < script.index("docker buildx build")
+
+    workflow = GITHUB.read_text(encoding="utf-8")
+    check = workflow.index("Tag matches the version")
+    assert check < workflow.index("Publish to DockerHub")
+
+
+def test_github_publishes_only_main_and_tags():
+    """OPS-22: workflow_dispatch pushed any branch to DockerHub."""
+    workflow = GITHUB.read_text(encoding="utf-8")
+    publish = re.search(r"PUBLISH: \$\{\{(.*?)\}\}", workflow, re.DOTALL).group(1)
+
+    assert "refs/heads/main" in publish and "refs/tags/v" in publish
+
+
+# ------------------------------------------------- audit 14.11.2026 (O-32, O-43)
+
+SCHEDULED = ROOT / ".github" / "workflows" / "scheduled-checks.yml"
+WORKFLOWS = sorted((ROOT / ".github" / "workflows").glob("*.yml"))
+PINNED_IMAGE = r"[\w./-]+:[\w.-]+@sha256:[0-9a-f]{64}"
+
+
+def _scheduled_gitlab_jobs() -> dict[str, dict]:
+    return {name: job for name, job in _gitlab_jobs().items() if _scheduled_only(job)}
+
+
+def _scheduled_gitlab_script() -> str:
+    return "\n".join(_script(job) for job in _scheduled_gitlab_jobs().values())
+
+
+def test_every_action_of_every_workflow_is_pinned_to_a_commit():
+    assert SCHEDULED in WORKFLOWS
+    for workflow in WORKFLOWS:
+        uses = re.findall(r"uses:\s*(\S+)(.*)", workflow.read_text(encoding="utf-8"))
+        assert uses, workflow.name
+        for action, rest in uses:
+            assert re.fullmatch(r"[\w.-]+/[\w.-]+@[0-9a-f]{40}", action), action
+            assert re.search(r"#\s*v\d", rest), action
+
+
+def test_every_workflow_only_reads_the_repository():
+    for workflow in WORKFLOWS:
+        config = yaml.safe_load(workflow.read_text(encoding="utf-8"))
+        assert config["permissions"] == {"contents": "read"}, workflow.name
+
+
+def test_a_published_image_is_scanned_again_on_a_schedule():
+    """
+    O-32: an image was scanned once, before it was published. A vulnerability
+    found afterwards in what it ships was never reported.
+    """
+    scheduled = yaml.safe_load(SCHEDULED.read_text(encoding="utf-8"))
+    # PyYAML reads the key `on` as the boolean True.
+    assert "schedule" in scheduled[True]
+    assert _scheduled_gitlab_jobs(), "no GitLab job for scheduled pipelines"
+    for text in (_scheduled_gitlab_script(), SCHEDULED.read_text(encoding="utf-8")):
+        scans = [
+            line
+            for line in text.splitlines()
+            if "--exit-code 1" in line or "--severity" in line
+        ]
+        assert any("HIGH,CRITICAL" in line for line in scans), scans
+        # The newest release tag, not the branch the schedule runs on.
+        assert "git ls-remote --tags" in text and "--sort=-v:refname" in text
+        assert "pip-audit" in text and "--require-hashes" in text
+        assert "scripts/check_browser_age.py" in text
+
+
+def test_the_scheduled_scanner_is_pinned_like_the_one_before_publishing():
+    def scanners(text: str) -> set[str]:
+        return set(re.findall(r"aquasec/trivy:\S+", text))
+
+    before = scanners(GITHUB.read_text(encoding="utf-8"))
+    assert len(before) == 1
+    for text in (GITLAB.read_text(encoding="utf-8"), SCHEDULED.read_text("utf-8")):
+        assert scanners(text) == before
+
+
+def test_a_scheduled_pipeline_neither_publishes_nor_repeats_the_checks():
+    """On main a schedule would otherwise rebuild and push the image "main"."""
+    assert any(
+        '"schedule"' in str(rule.get("if", ""))
+        for rule in _gitlab()["workflow"]["rules"]
+    )
+    for name, job in _gitlab_jobs().items():
+        if _scheduled_only(job):
+            assert "docker image push" not in _script(job), name
+            continue
+        if all("merge_request_event" in condition for condition in _rule_ifs(job)):
+            continue  # a schedule is no merge request
+        first = job["rules"][0]
+        assert '"schedule"' in str(first.get("if", "")), name
+        assert first.get("when") == "never", name
+
+
+def test_the_browser_age_must_be_known_in_ci():
+    """O-32: the check passed whenever it could not check."""
+    jobs = _gitlab_jobs()
+    with_check = [
+        job for job in jobs.values() if "scripts/check_browser_age.py" in _script(job)
+    ]
+
+    assert len(with_check) >= 2
+    for job in with_check:
+        assert str(job["variables"]["REQUIRE_BROWSER_AGE"]) == "1"
+    for workflow in WORKFLOWS:
+        config = yaml.safe_load(workflow.read_text(encoding="utf-8"))
+        for name, job in config["jobs"].items():
+            runs = " ".join(step.get("run", "") for step in job["steps"])
+            if "scripts/check_browser_age.py" in runs:
+                assert str(job["env"]["REQUIRE_BROWSER_AGE"]) == "1", name
+
+
+def test_a_software_bill_of_materials_is_kept_for_released_images():
+    """O-32: what a published image contains could only be found out by pulling it."""
+    sbom = "--format cyclonedx"
+    with_sbom = {
+        name: job for name, job in _gitlab_jobs().items() if sbom in _script(job)
+    }
+
+    assert "build and push docker image on tag creation" in with_sbom
+    assert set(with_sbom) & set(_scheduled_gitlab_jobs())
+    for name, job in with_sbom.items():
+        assert "sbom.cdx.json" in job["artifacts"]["paths"], name
+    assert sbom in SCHEDULED.read_text(encoding="utf-8")
+
+
+def test_one_uv_version_in_image_and_both_ci():
+    """
+    O-43: the pin had three copies and nothing held them together - an update
+    of one (Dependabot edits the Dockerfile only) left CI and image resolving
+    with different versions.
+    """
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    (image,) = re.findall(r"ghcr\.io/astral-sh/uv:([\d.]+)@sha256", dockerfile)
+
+    assert str(_gitlab()["variables"]["UV_VERSION"]) == image
+    for workflow in WORKFLOWS:
+        installs = re.findall(r"pip install uv==(\S+)", workflow.read_text("utf-8"))
+        assert installs and set(installs) == {image}, workflow.name
+
+
+def test_github_names_the_python_patch_version_it_tests_with():
+    """uv picked the newest Python it knew: the version moved with the uv pin."""
+    for workflow in WORKFLOWS:
+        config = yaml.safe_load(workflow.read_text(encoding="utf-8"))
+        for name, job in config["jobs"].items():
+            runs = " ".join(step.get("run", "") for step in job["steps"])
+            if "uv sync" in runs or "uvx " in runs:
+                assert re.fullmatch(r"3\.13\.\d+", str(job["env"]["UV_PYTHON"])), name
+
+
+def test_github_takes_helm_from_the_image_gitlab_pins():
+    """The runner image's helm moves with the runner; the tests render with it."""
+    helm_images = {
+        _image(job) for job in _gitlab_jobs().values() if "alpine/helm" in _image(job)
+    }
+    assert len(helm_images) == 1
+    (image,) = helm_images
+    assert re.fullmatch(PINNED_IMAGE, image)
+
+    config = yaml.safe_load(GITHUB.read_text(encoding="utf-8"))
+    for name in ("test", "chart"):
+        steps = config["jobs"][name]["steps"]
+        runs = [step.get("run", "") for step in steps]
+        provider = next(i for i, run in enumerate(runs) if image in run)
+        assert "$GITHUB_PATH" in runs[provider], name
+        users = [
+            i
+            for i, run in enumerate(runs)
+            if re.search(r"\bhelm (lint|template)\b|pytest", run)
+        ]
+        assert users and min(users) > provider, name
+
+
+def test_kubeconform_validates_against_a_named_kubernetes_version():
+    """Without it the schemas of the newest Kubernetes are used - they move."""
+    versions = []
+    for text in (GITLAB.read_text("utf-8"), GITHUB.read_text("utf-8")):
+        calls = [
+            line for line in text.splitlines() if "-schema-location default" in line
+        ]
+        assert calls
+        for call in calls:
+            (version,) = re.findall(r"-kubernetes-version (\S+)", call)
+            versions.append(version)
+    assert len(set(versions)) == 1
+    assert re.fullmatch(r"\d+\.\d+\.\d+", versions[0])

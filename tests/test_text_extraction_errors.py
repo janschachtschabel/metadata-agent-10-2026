@@ -33,7 +33,10 @@ async def _public(url):
 def _service(monkeypatch, handler) -> InputSourceService:
     monkeypatch.setattr(input_module, "require_public_http_url", _public)
     service = InputSourceService()
-    service.settings = SimpleNamespace(text_extraction_api_url=EXTRACTOR)
+    # A service of its own, not below the B-API: called without a key.
+    service.settings = SimpleNamespace(
+        text_extraction_api_url=EXTRACTOR, b_api_base_url="https://b-api.example"
+    )
     service.http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     return service
 
@@ -292,3 +295,60 @@ def test_every_endpoint_passes_the_fallback_on(monkeypatch):
     ]
     assert detected.json()["warnings"] == [FALLBACK]
     assert field.json()["processing"]["warnings"] == [FALLBACK]
+
+
+# A key the B-API refuses, no key at all, no service configured: nothing the
+# fallback to title and description may cover up (audit 13.11., L-16). The
+# request must fail, so that it is seen and counted.
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "code",
+    [
+        "TEXT_EXTRACTION_AUTH_REFUSED",
+        "TEXT_EXTRACTION_AUTH_MISSING",
+        "TEXT_EXTRACTION_NOT_CONFIGURED",
+    ],
+)
+async def test_node_url_does_not_cover_up_a_misconfigured_extraction(monkeypatch, code):
+    service = _node_service(monkeypatch, lambda request: httpx.Response(200))
+
+    async def refused(*args, **kwargs):
+        raise TextExtractionError(code, "Die B-API hat den Schlüssel abgelehnt.", 502)
+
+    monkeypatch.setattr(service, "fetch_from_url", refused)
+
+    with pytest.raises(TextExtractionError) as raised:
+        await service.fetch_from_node_url("node-1")
+
+    assert raised.value.code == code
+
+
+# ------------------------------------------------- audit 13.11.2026, L-24
+
+
+@pytest.mark.asyncio
+async def test_a_throttled_extraction_is_a_503_like_a_throttled_llm(monkeypatch):
+    """429 was a 502 "HTTP error"; for the LLM calls it is 503 - try again later."""
+    service = _service(monkeypatch, lambda request: httpx.Response(429))
+
+    with pytest.raises(TextExtractionError) as raised:
+        await service.fetch_from_url("https://example.org/page")
+
+    assert raised.value.code == "TEXT_EXTRACTION_RATE_LIMITED"
+    assert raised.value.http_status == 503
+
+
+@pytest.mark.asyncio
+async def test_an_answer_that_is_no_json_has_a_code_of_its_own(monkeypatch):
+    """A proxy's HTML page with status 200 ended as a 502 without any code."""
+    service = _service(
+        monkeypatch, lambda request: httpx.Response(200, text="<html>Wartung</html>")
+    )
+
+    with pytest.raises(TextExtractionError) as raised:
+        await service.fetch_from_url("https://example.org/page")
+
+    assert raised.value.code == "TEXT_EXTRACTION_FAILED"
+    assert raised.value.http_status == 502

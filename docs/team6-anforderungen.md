@@ -1,5 +1,10 @@
 # Abdeckung der Dienstanforderungen von Team 6
 
+> **Historisch.** Dieser Abgleich hält den Stand 3.0.0 vom 17.10.2026 fest und
+> wird nicht weitergeführt. Aktuell sind der [Steckbrief](steckbrief.md) (mit
+> den Angaben und Abweichungen nach dem Entwicklerleitfaden für Dienste) und
+> der [Audit vom 13.11.2026](audits/2026-11-13-audit-3.0.1.md).
+
 Stand: Metadata Agent 3.0.0, 17.10.2026. Abgeglichen mit der Seite
 „Dienstanforderungen für den Betrieb durch Team 6“ (Abschnitte 1–7 und
 Checkliste Übergabepaket). Einzelheiten stehen in [UEBERGABE.md](../UEBERGABE.md).
@@ -29,8 +34,8 @@ Checkliste Übergabepaket). Einzelheiten stehen in [UEBERGABE.md](../UEBERGABE.m
 | Prometheus-Basis-Metriken, nur intern | ✅ | `prometheus-client`, auf dem internen Port |
 | Applikationsmetriken | ✅ | HTTP nach Route, LLM-Aufrufe nach Provider/Ergebnis und Dauer, Erschließungen nach `success`/`partial`/`failed`, Aufrufe an abhängige Dienste (gesendet/beantwortet/Dauer), Tokens |
 | Alarmregeln im Helm-Chart | ✅ | zehn Regeln als `PrometheusRule` in [helm/metadata-agent/](../helm/metadata-agent/README.md), mit promtool-Tests (UEBERGABE §4); Empfänger legt T6 im Alertmanager fest |
-| Tracing B3, `x-client-trace-id` durchreichen | ✅ | `x-client-trace-id`, `x-request-id`, `x-b3-*`, `b3` gehen unverändert an B-API, Textextraktion und Repository (eigene Spans erzeugt der Dienst nicht) |
-| Logs nach stdout, JSON/Text, Level per Env | ✅ | `METADATA_AGENT_LOG_FORMAT`, `METADATA_AGENT_LOG_LEVEL`; JSON mit `trace_id` |
+| Tracing B3, `x-client-trace-id` durchreichen | ✅ | `x-client-trace-id`, `x-request-id`, `x-b3-*`, `b3` gehen unverändert an B-API, Textextraktion und Repository; ohne B3-Header legt der Dienst eine Trace-ID an (nach 3.0.1). Eigene Spans meldet er nicht |
+| Logs nach stdout, JSON/Text, Level per Env | ✅ | `METADATA_AGENT_LOG_FORMAT`, `METADATA_AGENT_LOG_LEVEL`; JSON mit `service`, `trace_id`, `span_id`, `request_id`; eine Zeile je Anfrage statt Access-Log (nach 3.0.1) |
 | **4. Repository, Build, Versionierung** | | |
 | Repo-Zugang für T6 | 🟡 | URLs in UEBERGABE §1 (scm.edu-sharing.com); Zugriff für T6 noch bestätigen |
 | CI baut Images automatisch, Prod nur getaggt | ✅ | GitLab CI: Branch-Images für `main`/`develop`, Versions-Images bei Git-Tags (`v3.0.0`) |
@@ -41,7 +46,7 @@ Checkliste Übergabepaket). Einzelheiten stehen in [UEBERGABE.md](../UEBERGABE.m
 | Datenbank (kein SQLite in Produktion) | — | keine Datenbank, kein Redis, keine Volumes |
 | Ressourcen-Baseline | 🟡 | Requests 500m / 512Mi, Limits 2 CPU / 2Gi – **geschätzt, nicht unter Last gemessen** |
 | Große Daten nicht im Image | ✅ | nur Schemata (8 MB), Widget (2,5 MB), Swagger UI (1,8 MB); keine Modelle oder Korpora |
-| Jede Einstellung als Env mit Default | ✅ | [ENV-PARAMETER.md](../ENV-PARAMETER.md); ein Test gleicht die Liste mit dem Code ab |
+| Jede Einstellung als Env mit Default | ✅ | [ENV-PARAMETER.de.md](../ENV-PARAMETER.de.md); ein Test gleicht die Liste mit dem Code ab |
 | Beispiel-Values-YAML, Secrets getrennt | ✅ | Helm-Chart `helm/metadata-agent/values.yaml` (per Test mit dem Code abgeglichen); Secrets: `B_API_KEY`, `OPENAI_API_KEY` (nur Variante B), `WLO_GUEST_USERNAME`, `WLO_GUEST_PASSWORD` |
 | Dockerfile und docker-compose als Referenz | ✅ | beide im Repo |
 | Abschaltbare Komponenten im Helm-Chart | — | keine DB, kein Redis, keine Worker; nur der interne Port ist optional |

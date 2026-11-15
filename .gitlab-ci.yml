@@ -8,9 +8,12 @@ stages:
 # otherwise a branch or tag pipeline. main and develop always get their branch
 # pipeline, because the image is published from it; with an open MR from
 # develop that means two pipelines for the same commit, on purpose.
+# A scheduled pipeline (CI/CD > Schedules, on main) runs only the jobs under
+# "Scheduled checks" below: every other job refuses it first.
 workflow:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "schedule"
     - if: $CI_COMMIT_TAG
     - if: $CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "develop"
     - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
@@ -23,6 +26,8 @@ workflow:
 .check:
   interruptible: true
   rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH || $CI_COMMIT_TAG
 
@@ -42,8 +47,9 @@ variables:
   extends: .check
   stage: build
   image:
-    # Same ruff as uv.lock, so `ruff format --diff` agrees with local runs.
-    name: ghcr.io/astral-sh/ruff:0.15.5-alpine
+    # Same ruff as uv.lock, so `ruff format --diff` agrees with local runs
+    # (tests/test_ci_hygiene.py holds the two together).
+    name: ghcr.io/astral-sh/ruff:0.17.0-alpine@sha256:6b7108a0fc173dbc1cd49dc10f99fd168f290c13288362cddd2c012d4d9a55f6
   before_script:
     - cd $CI_PROJECT_DIR
     - ruff --version
@@ -106,6 +112,8 @@ run tests:
     REQUIRE_BROWSER: "1"
     # Likewise the rendered-chart tests without helm ("helm binary").
     REQUIRE_HELM: "1"
+    # And check_browser_age.py when it cannot tell the age of the browser.
+    REQUIRE_BROWSER_AGE: "1"
   dependencies: ["helm binary"]
   cache:
     - key:
@@ -132,7 +140,8 @@ run tests:
     # installs the system libraries each time.
     - uv run playwright install --with-deps chromium
     # The bundled Chromium: reported, and fails the job when it is more than
-    # two major versions behind the stable Chrome (audit 18.10. final).
+    # two major versions behind the stable Chrome (audit 18.10. final) - or,
+    # without the version service, when the locked playwright is too old.
     - uv run python scripts/check_browser_age.py
     # -rs lists every skipped test with its reason in the job log.
     - uv run pytest -q -rs --cov
@@ -187,17 +196,18 @@ helm lint:
 # The rendered manifests against the Kubernetes schemas (audit T-07); the
 # Prometheus Operator kinds against the CRDs catalog, pinned to a commit (a
 # moved branch would change the check). Both schema sets are fetched at run
-# time. The image has a shell only in its -alpine variant; it
-# runs by tag because its digest could not be read without pulling it.
+# time. The Kubernetes version is named: without it the schemas of the newest
+# release are used, which move. The image has a shell only in its -alpine
+# variant.
 kubeconform:
   extends: .check
   stage: test
   needs: ["helm lint"]
   image:
-    name: ghcr.io/yannh/kubeconform:v0.7.0-alpine
+    name: ghcr.io/yannh/kubeconform:v0.7.0-alpine@sha256:8f0eeaaa96ba27ba1500b0e4b1c215acc358d159c62a7ecae58d7a03403287b0
     entrypoint: [""]
   script:
-    - /kubeconform -strict -summary -schema-location default -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/501527ab9c40c827144c8f45945b25a023e344ce/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' rendered/default.yaml rendered/ingress.yaml
+    - /kubeconform -strict -summary -kubernetes-version 1.33.0 -schema-location default -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/501527ab9c40c827144c8f45945b25a023e344ce/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' rendered/default.yaml rendered/ingress.yaml
 
 alert rules:
   extends: .check
@@ -257,6 +267,8 @@ build and push docker image from main and develop branches:
     - echo "$DOCKER_PASSWORD" | docker login $DOCKER_REGISTRY -u $DOCKER_USERNAME --password-stdin
     - docker image push "$IMAGE"
   rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
     - if: "$CI_COMMIT_BRANCH == 'main'"
     - if: "$CI_COMMIT_BRANCH == 'develop'"
 
@@ -266,14 +278,81 @@ build and push docker image on tag creation:
   variables:
     IMAGE: $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:$CI_COMMIT_REF_NAME
   script:
+    # The tag names the version the code ships (audit 13.11., OPS-22): chart,
+    # image tag and service version are one number.
+    - |
+      version="v$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml | head -n 1)"
+      if [ "$CI_COMMIT_TAG" != "$version" ]; then
+        echo "Tag $CI_COMMIT_TAG passt nicht zur Version $version in pyproject.toml"; exit 1
+      fi
     - docker buildx build --load --build-arg VERSION="$CI_COMMIT_REF_NAME" --build-arg REVISION="$CI_COMMIT_SHA" --tag "$IMAGE" .
     - *check_image
+    # What the release ships, as CycloneDX (audit 14.11., O-32). To stdout: a
+    # volume would be one of the docker-in-docker service, not of this job.
+    - docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.67.2@sha256:e2b22eac59c02003d8749f5b8d9bd073b62e30fefaef5b7c8371204e0a4b0c08 image --format cyclonedx --quiet "$IMAGE" > sbom.cdx.json
     # Log in only now, as above.
     - echo "$DOCKER_PASSWORD" | docker login $DOCKER_REGISTRY -u $DOCKER_USERNAME --password-stdin
     - docker image push "$IMAGE"
+  artifacts:
+    paths:
+      - sbom.cdx.json
+    expire_in: 1 year
   # Release tags only (v3.0.0); another tag publishes nothing. The release image
   # is rebuilt from the tagged commit, not promoted from main: main is
   # published under the moving tag "main" only, so there is no immutable main
   # image of that commit to promote (see CHANGELOG 3.0.0, CI).
   rules:
-    - if: "$CI_COMMIT_TAG =~ /^v/"
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
+    - if: '$CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/'
+
+# ----------------------------------------------------------------------------
+# Scheduled checks (audit 14.11., O-32)
+# ----------------------------------------------------------------------------
+# An image was checked once, before it was published; what is found in its
+# packages or its browser afterwards was never reported. A pipeline schedule on
+# main (CI/CD > Schedules) runs these two jobs and nothing else.
+
+.scheduled:
+  stage: test
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+
+# The locked dependencies against the advisories of today, and the age of the
+# bundled Chromium.
+scheduled dependency checks:
+  extends: .scheduled
+  image: $CI_PYTHON_IMAGE
+  variables:
+    REQUIRE_BROWSER_AGE: "1"
+  script:
+    - pip install uv==$UV_VERSION
+    - uvx pip-audit==2.10.1 -r requirements.txt --require-hashes --disable-pip
+    - uv sync --locked
+    - uv run python scripts/check_browser_age.py
+
+# The newest released image: HIGH and CRITICAL vulnerabilities with a fix
+# available fail the job - the sign to release again. SCAN_TAG (a variable of
+# the schedule) names another tag; empty, the newest release tag (vX.Y.Z) of
+# the repository is taken from the remote, because a shallow clone need not
+# have it.
+scheduled image scan:
+  extends: [.dind, .scheduled]
+  variables:
+    SCAN_TAG: ""
+  script:
+    - |
+      tag="${SCAN_TAG:-$(git ls-remote --tags --refs --sort=-v:refname origin 'v*' | grep -E 'refs/tags/v[0-9]+[.][0-9]+[.][0-9]+$' | head -n 1 | sed 's|.*refs/tags/||')}"
+      if [ -z "$tag" ]; then echo "Kein Release-Tag (v*) gefunden"; exit 1; fi
+      echo "Scanning release $tag"
+      IMAGE="$DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:$tag"
+    - echo "$DOCKER_PASSWORD" | docker login $DOCKER_REGISTRY -u $DOCKER_USERNAME --password-stdin
+    - docker pull "$IMAGE"
+    - docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.67.2@sha256:e2b22eac59c02003d8749f5b8d9bd073b62e30fefaef5b7c8371204e0a4b0c08 image --format cyclonedx --quiet "$IMAGE" > sbom.cdx.json
+    - docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.67.2@sha256:e2b22eac59c02003d8749f5b8d9bd073b62e30fefaef5b7c8371204e0a4b0c08 image --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed --no-progress "$IMAGE"
+  artifacts:
+    # Also when the scan fails: the list of what the image ships is then needed.
+    when: always
+    paths:
+      - sbom.cdx.json
+    expire_in: 30 days

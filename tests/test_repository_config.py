@@ -13,9 +13,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from src import config as config_module
 from src.config import Settings
 from src.services.repository_service import _get_repository_config
+from conftest import use_settings
 
 INBOX_ID = "21144164-30c0-4c01-ae16-264452197063"
 
@@ -25,12 +25,9 @@ def configured(monkeypatch):
     """Point the repository config at a given URL, bypassing .env and cache."""
 
     def _configure(repository_url: str):
-        monkeypatch.setattr(
-            config_module,
-            "get_settings",
-            lambda: SimpleNamespace(
-                repository_url=repository_url, wlo_inbox_id=INBOX_ID
-            ),
+        use_settings(
+            monkeypatch,
+            SimpleNamespace(repository_url=repository_url, wlo_inbox_id=INBOX_ID),
         )
         return _get_repository_config()
 

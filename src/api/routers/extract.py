@@ -1,38 +1,37 @@
 """Single-field extraction (/extract-field)."""
 
 import logging
-import asyncio
 import time
-from fastapi import HTTPException
+from typing import Any
+from fastapi import HTTPException, Request
 
 from ...models.schemas import (
     ExtractFieldRequest,
     ExtractFieldResponse,
 )
-from ...services.input_source_service import TextExtractionError
 from ...services.llm_errors import LLMError
 from ...services.field_normalizer import get_field_normalizer
-from ...utils.schema_loader import (
-    load_schema,
-    get_latest_version,
-    resolve_schema_file_or_uri,
-)
+from ...services.geocoding_service import get_geocoding_service
+from ...services.llm_service import field_notes
+from ...services.output_normalizer import get_output_normalizer
+from ...utils.schema_loader import load_schema
 
 
 from fastapi import APIRouter
 
 from .. import deps
-from ..input_resolver import resolve_input, truncate
-from ..responses import (
-    generation_timeout_response,
-    llm_error_response,
-    text_extraction_error_response,
-)
+from ..request_body import JsonObjectRoute
+from ..disconnect import run_with_deadline
+from ..input_resolver import resolve_input, truncate, truncation_warnings
+from ..schema_resolution import resolve_schema
+from ..responses import generation_timeout_response, llm_error_response
+from .extraction_docs import EXTRACT_FIELD_RESPONSES
 
 logger = logging.getLogger(__name__)
 
 
-router = APIRouter()
+# The body is read like that of the raw-request endpoints (request_body.py).
+router = APIRouter(route_class=JsonObjectRoute)
 
 
 # ============================================================================
@@ -43,6 +42,7 @@ router = APIRouter()
 @router.post(
     "/extract-field",
     response_model=ExtractFieldResponse,
+    responses=EXTRACT_FIELD_RESPONSES,
     summary="Einzelnes Feld extrahieren",
     description="""Extrahiert oder regeneriert einen einzelnen Feldwert mittels LLM. Nützlich um einzelne Felder zu korrigieren ohne alles neu zu extrahieren.
 
@@ -52,8 +52,8 @@ router = APIRouter()
 |------|-------------|------------------|
 | `text` | Direkter Text als Eingabe (Standard) | `text` |
 | `url` | Text von URL via Crawler abrufen | `source_url`, optional `extraction_method` |
-| `node_id` | Text + Metadaten von Repository-Node abrufen | `node_id`, `repository` |
-| `node_url` | Repository-Node + Crawler-Fallback (URL aus ccm:wwwurl) | `node_id`, `repository` (source_url optional) |
+| `node_id` | Text + Metadaten von Repository-Node abrufen | `node_id` |
+| `node_url` | Repository-Node + Crawler-Fallback (URL aus ccm:wwwurl) | `node_id` (source_url optional) |
 
 ## Extraction Method (extraction_method)
 
@@ -176,7 +176,7 @@ router = APIRouter()
         }
     },
 )
-async def extract_field(req: ExtractFieldRequest):
+async def extract_field(req: ExtractFieldRequest, request: Request):
     """
     Extract a single field from text.
 
@@ -189,11 +189,12 @@ async def extract_field(req: ExtractFieldRequest):
     Normalization is applied by default (dates, vocabularies, etc.). Fetching
     the source and the AI call together end at METADATA_AGENT_GENERATE_TIMEOUT.
     """
-    try:
-        async with asyncio.timeout(deps.settings.generate_timeout):
-            return await _extract(req)
-    except TimeoutError:
-        return generation_timeout_response(deps.settings.generate_timeout)
+    return await run_with_deadline(
+        request,
+        _extract(req),
+        deps.settings.generate_timeout,
+        generation_timeout_response,
+    )
 
 
 async def _extract(req: ExtractFieldRequest):
@@ -203,11 +204,10 @@ async def _extract(req: ExtractFieldRequest):
     # not allow are refused before the source is fetched (audit API-05).
     version, resolved_schema_file, field_def = _field_definition(req)
     deps.check_provider_override(req.llm_provider)
+    deps.check_model_override(req.llm_provider, req.llm_model)
 
-    try:
-        resolved = await resolve_input(req)
-    except TextExtractionError as e:
-        return text_extraction_error_response(e)
+    # A TextExtractionError has its own answer (UnexpectedErrorMiddleware).
+    resolved = await resolve_input(req)
     text = resolved.text
     input_warnings = resolved.warnings
     # Values the caller sends win over those the node already has.
@@ -216,7 +216,10 @@ async def _extract(req: ExtractFieldRequest):
     if not text or not text.strip():
         raise HTTPException(status_code=400, detail="Text cannot be empty")
 
-    text = truncate(text)
+    # Said in the answer, as /generate does (audit 14.11., list S-N).
+    cut = truncate(text)
+    input_warnings = input_warnings + truncation_warnings(text, cut)
+    text = cut
 
     # Get LLM service with optional overrides
     llm_service = deps.get_llm_service(
@@ -225,19 +228,21 @@ async def _extract(req: ExtractFieldRequest):
 
     existing_value = existing_metadata.get(req.field_id) if existing_metadata else None
 
-    # Extract the field (returns tuple: field_id, value, error)
+    # Extract the field (returns tuple: field_id, value, error). What it and
+    # the normalisers below leave out is said in the answer, as /generate
+    # does (audit 14.11., L-45).
     try:
-        _, raw_value, error = await llm_service.extract_field(
-            field=field_def,
-            text=text,
-            existing_value=existing_value,
-            language=req.language,
-        )
+        with field_notes() as answer_notes:
+            _, raw_value, error = await llm_service.extract_field(
+                field=field_def,
+                text=text,
+                existing_value=existing_value,
+                language=req.language,
+            )
     except LLMError as e:
         return llm_error_response(e)
     finally:
-        # Close non-default LLM service HTTP client to prevent leak
-        if req.llm_provider is not None or req.llm_model is not None:
+        if deps.has_own_llm_client(req):
             await llm_service.close()
 
     if isinstance(error, LLMError):
@@ -245,16 +250,23 @@ async def _extract(req: ExtractFieldRequest):
     if error:
         raise HTTPException(status_code=500, detail=f"Extraction failed: {error}")
 
+    input_warnings.extend(answer_notes)
     value = raw_value
     if req.normalize and raw_value is not None:
+        shape_notes: list[str] = []
         normalized_value = get_field_normalizer().normalize_field_value(
             value=raw_value,
             field_schema=field_def.get("system", field_def),
             normalize_vocabularies=True,
+            notes=shape_notes,
         )
+        input_warnings.extend(f"{req.field_id}: {note}" for note in shape_notes)
         # An equal value (3 for 3.0) keeps what the LLM returned.
         if normalized_value != raw_value:
             value = normalized_value
+        value = await _shaped_like_generate(
+            req.field_id, value, req.language, input_warnings
+        )
     normalized = value is not raw_value
 
     field_label = field_def.get("label", {})
@@ -283,6 +295,35 @@ async def _extract(req: ExtractFieldRequest):
     )
 
 
+async def _shaped_like_generate(
+    field_id: str, value: Any, language: str, warnings: list[str]
+) -> Any:
+    """
+    The value as /generate would return it: coordinates for schema:location,
+    then the structure the web component expects (day codes, schedules ...).
+
+    Without it the same field came back differently from the two endpoints,
+    and a place re-extracted on its own lost its coordinates (audit L-21).
+    """
+    metadata = {field_id: value}
+    if field_id == "schema:location":
+        try:
+            metadata = await get_geocoding_service().enrich_metadata_with_geocoding(
+                metadata, language, warnings=warnings
+            )
+        except Exception as e:
+            warnings.append(f"Geocoding failed: {e}")
+    try:
+        shaped = (
+            get_output_normalizer().normalize_output(metadata, warnings).get(field_id)
+        )
+    except Exception as e:
+        warnings.append(f"Output normalization warning: {e}")
+        return metadata.get(field_id)
+    # An equal value keeps the object it was: `normalized` compares by identity.
+    return value if shaped == value else shaped
+
+
 def _field_definition(req: ExtractFieldRequest) -> tuple[str, str, dict]:
     """
     (version, schema file, field definition) for the requested field.
@@ -291,18 +332,10 @@ def _field_definition(req: ExtractFieldRequest) -> tuple[str, str, dict]:
     declare is looked up in core.json. 400 for an unknown schema URI, 404 for
     a schema or field that does not exist.
     """
-    version = req.version
-    if version == "latest" or not version:
-        version = get_latest_version(req.context)
-
-    try:
-        schema_file = resolve_schema_file_or_uri(req.schema_file, req.context, version)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
+    version, schema_file = resolve_schema(req.context, req.version, req.schema_file)
     try:
         schema = load_schema(req.context, version, schema_file)
-    except ValueError as e:
+    except ValueError as e:  # 'auto' names no schema here
         raise HTTPException(status_code=404, detail=str(e))
 
     field_def = _find_field(schema, req.field_id)
@@ -312,9 +345,8 @@ def _field_definition(req: ExtractFieldRequest) -> tuple[str, str, dict]:
                 load_schema(req.context, version, "core.json"), req.field_id
             )
         except Exception as e:
-            # The field is then reported as unknown, whatever broke core.json
-            # (2.1.1 caught every fault here too); the why belongs in the log
-            # (audit L-04).
+            # The field is then reported as unknown, whatever broke core.json;
+            # the why belongs in the log (audit L-04).
             logger.warning(f"⚠️ core.json of {req.context}/{version} not loaded: {e}")
     if not field_def:
         raise HTTPException(

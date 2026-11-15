@@ -8,6 +8,8 @@ import re
 from datetime import date
 from typing import Any, Optional
 
+from ..utils.dates_numbers import ImpossibleDate, read_date, read_datetime
+
 logger = logging.getLogger(__name__)
 
 
@@ -47,9 +49,14 @@ class OutputNormalizer:
         "schema:sunday": "SU",
     }
 
-    def normalize_output(self, metadata: dict[str, Any]) -> dict[str, Any]:
+    def normalize_output(
+        self, metadata: dict[str, Any], warnings: Optional[list[str]] = None
+    ) -> dict[str, Any]:
         """
         Normalize all metadata fields to match Canvas web component structure.
+
+        `warnings` receives a line for entries of the opening hours or the
+        schedule that are no objects and were left out.
         """
         result = metadata.copy()
 
@@ -58,20 +65,19 @@ class OutputNormalizer:
         # object-typed fields the schemas declare — person and organization had
         # no coverage at all, and that is where the staging damage happened.
         # FieldNormalizer._is_object_field now derives it from the schema and
-        # runs before this method. `_normalize_person_array` is kept because it
-        # defines the object key convention the two must agree on; see
-        # tests/test_output_normalizer_list_is_redundant.py.
+        # runs before this method. What the list produced - the object key
+        # convention - is pinned in tests/test_output_normalizer_list_is_redundant.py.
 
         # Opening hours: normalize dayOfWeek to array with short codes
         if "schema:openingHoursSpecification" in result:
             result["schema:openingHoursSpecification"] = self._normalize_opening_hours(
-                result["schema:openingHoursSpecification"]
+                result["schema:openingHoursSpecification"], warnings
             )
 
         # Event schedule: add missing fields
         if "schema:eventSchedule" in result:
             result["schema:eventSchedule"] = self._normalize_event_schedule(
-                result["schema:eventSchedule"]
+                result["schema:eventSchedule"], warnings
             )
 
         # Access service: convert strings to objects
@@ -89,30 +95,14 @@ class OutputNormalizer:
 
         return result
 
-    def _normalize_person_array(self, value: Any) -> list[dict]:
-        """Convert person values to objects with name field."""
-        if not value:
-            return []
-
-        if not isinstance(value, list):
-            value = [value]
-
-        result = []
-        for item in value:
-            if isinstance(item, str):
-                result.append({"name": item})
-            elif isinstance(item, dict):
-                if "name" not in item and "@value" in item:
-                    item["name"] = item.pop("@value")
-                result.append(item)
-
-        return result
-
-    def _normalize_opening_hours(self, hours: Any) -> list[dict]:
+    def _normalize_opening_hours(
+        self, hours: Any, warnings: Optional[list[str]] = None
+    ) -> list[dict]:
         """Normalize opening hours specification."""
         if not hours or not isinstance(hours, list):
             return hours if hours else []
 
+        _warn_about_non_objects("schema:openingHoursSpecification", hours, warnings)
         result = []
         for item in hours:
             if not isinstance(item, dict):
@@ -141,24 +131,68 @@ class OutputNormalizer:
     # "Mo-Fr", "Mo – Fr", "Montag bis Freitag"
     _DAY_RANGE = re.compile(r"^\s*(\S+?)\s*(?:-|–|—|bis)\s*(\S+)\s*$", re.IGNORECASE)
 
+    # A range has under 40 characters, all seven days as schema.org URLs under
+    # 200. Longer text names no weekdays: it stays as written and no pattern
+    # sees it - _DAY_RANGE is quadratic in a run of dashes (audit 14.11., L-30).
+    MAX_DAY_TEXT = 200
+    # "Mo, Mi, Fr", "Sa/So", "Montag und Mittwoch". No blanks in the pattern:
+    # the parts are stripped instead.
+    _DAY_LIST = re.compile(r"[,;/+&]|\b(?:und|and)\b", re.IGNORECASE)
+    # English short forms, only as a whole entry or one end of a range: as
+    # words in a sentence ("sat", "sun", "wed") they are no weekdays.
+    ENGLISH_SHORT = {
+        "mon": "MO",
+        "tue": "TU",
+        "tues": "TU",
+        "wed": "WE",
+        "thu": "TH",
+        "thur": "TH",
+        "thurs": "TH",
+        "fri": "FR",
+        "sat": "SA",
+        "sun": "SU",
+    }
+
     def _get_day_codes(self, day: Any) -> list:
         """
         Short codes for one dayOfWeek entry, expanding a range into its days.
 
         Matching substrings alone turned "Mo-Fr" into Monday only. A range
-        across the weekend ("Fr-Mo") wraps around Sunday. Anything but a string
-        stays as it is, for the validator to report.
+        across the weekend ("Fr-Mo") wraps around Sunday. A list in one string
+        ("Mo, Mi, Fr", "Mo-Do, Sa") gives every day it names, when each part
+        is a day or a range (audit 14.11., L-43). Anything but a string stays
+        as it is, for the validator to report.
         """
-        if not isinstance(day, str):
+        if not isinstance(day, str) or len(day) > self.MAX_DAY_TEXT:
             return [day]
-        match = self._DAY_RANGE.match(day)
-        if match:
-            first, last = (self._get_day_short_code(part) for part in match.groups())
-            if first in self.WEEK and last in self.WEEK:
-                start, end = self.WEEK.index(first), self.WEEK.index(last)
-                length = (end - start) % 7 + 1
-                return [self.WEEK[(start + i) % 7] for i in range(length)]
+        codes = self._range_codes(day)
+        if codes:
+            return codes
+        parts = [part.strip() for part in self._DAY_LIST.split(day) if part.strip()]
+        if len(parts) > 1:
+            listed = [
+                self._range_codes(part) or self._single_code(part) for part in parts
+            ]
+            if all(listed):
+                return list(dict.fromkeys(code for codes in listed for code in codes))
         return [self._get_day_short_code(day)]
+
+    def _range_codes(self, text: str) -> list:
+        """The days of "Mo-Fr" in order; [] when the text is no range of two days."""
+        match = self._DAY_RANGE.match(text)
+        if not match:
+            return []
+        first, last = (self._get_day_short_code(part) for part in match.groups())
+        if first not in self.WEEK or last not in self.WEEK:
+            return []
+        start, end = self.WEEK.index(first), self.WEEK.index(last)
+        length = (end - start) % 7 + 1
+        return [self.WEEK[(start + i) % 7] for i in range(length)]
+
+    def _single_code(self, text: str) -> list:
+        """[code] when the text names one weekday, else []."""
+        code = self._get_day_short_code(text)
+        return [code] if code in self.WEEK else []
 
     def _get_day_short_code(self, day: str) -> str:
         """Convert day name to short code (MO, TU, WE, etc.)."""
@@ -170,6 +204,8 @@ class OutputNormalizer:
         # Check direct mapping
         if day_lower in self.DAY_MAPPING:
             return self.DAY_MAPPING[day_lower]
+        if day_lower.rstrip(".") in self.ENGLISH_SHORT:
+            return self.ENGLISH_SHORT[day_lower.rstrip(".")]
 
         # A day name as a whole word, also "Dienstags" or ".../Monday": as a
         # substring "so" made "Sonderöffnung" a Sunday.
@@ -183,16 +219,22 @@ class OutputNormalizer:
 
         return day
 
-    def _normalize_event_schedule(self, schedule: Any) -> list[dict]:
+    def _normalize_event_schedule(
+        self, schedule: Any, warnings: Optional[list[str]] = None
+    ) -> list[dict]:
         """Normalize event schedule with all required fields."""
         if not schedule or not isinstance(schedule, list):
             return schedule if schedule else []
 
+        _warn_about_non_objects("schema:eventSchedule", schedule, warnings)
         result = []
         for item in schedule:
             if not isinstance(item, dict):
                 continue
             normalized = item.copy()
+            for key in ("startDate", "endDate"):
+                if isinstance(normalized.get(key), str):
+                    normalized[key] = _iso_date_or_datetime(normalized[key])
             start_date = normalized.get("startDate", "")
             # A number or list is no date to read; it stays for the validator.
             if start_date and isinstance(start_date, str):
@@ -250,6 +292,35 @@ class OutputNormalizer:
 
 
 _WEEKDAYS = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"]
+
+
+def _warn_about_non_objects(
+    field_id: str, entries: list, warnings: Optional[list[str]]
+) -> None:
+    """
+    Say that entries which are no objects are left out (audit 14.11., L-N).
+
+    The web component reads objects here; a number or a bare string was
+    dropped without a word.
+    """
+    dropped = sum(1 for entry in entries if not isinstance(entry, dict))
+    if dropped and warnings is not None:
+        warnings.append(
+            f"{field_id}: {dropped} Wert(e) ohne Objektform nicht übernommen."
+        )
+
+
+def _iso_date_or_datetime(text: str) -> str:
+    """
+    "15.03.2025" and "15.03.2025 14:00" as ISO, for the fields derived from
+    them; an ISO value, an impossible date and anything unreadable as written.
+    """
+    if re.match(r"\d{4}-\d{2}-\d{2}", text):
+        return text
+    try:
+        return read_date(text) or read_datetime(text) or text
+    except ImpossibleDate:
+        return text
 
 
 def _fill_from_start(normalized: dict, start_date: str) -> None:

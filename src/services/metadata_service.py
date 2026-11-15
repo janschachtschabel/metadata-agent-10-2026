@@ -24,6 +24,7 @@ from .llm_service import get_llm_service
 from .geocoding_service import get_geocoding_service
 from .metadata_generation import (
     UPDATE_MARKER_WARNING,
+    GenerationOptions,
     apply_update_markers,
     final_origins,
     generation_status,
@@ -44,6 +45,7 @@ logger = logging.getLogger(__name__)
 
 # Importable from here as in 2.1.1.
 __all__ = [
+    "GenerationOptions",
     "MetadataService",
     "generation_status",
     "get_default_value_for_field",
@@ -76,45 +78,42 @@ class MetadataService:
     async def generate_metadata(
         self,
         text: str,
-        context: str = "default",
-        version: str = "latest",
-        schema_file: str = "auto",
-        existing_metadata: Optional[dict[str, Any]] = None,
-        language: str = "de",
-        max_workers: int = 20,
-        include_core: bool = True,
-        enable_geocoding: bool = True,
-        normalize_output: bool = True,
-        normalize_vocabularies: bool = True,
-        regenerate_fields: Optional[list[str]] = None,
-        regenerate_empty: bool = False,
-        origins: Optional[dict[str, str]] = None,
-        deadline: Optional[float] = None,
+        options: Optional[GenerationOptions] = None,
+        **keywords: Any,
     ) -> dict[str, Any]:
         """
         Generate metadata from text.
 
         Args:
             text: Input text to extract metadata from
-            context: Schema context
-            version: Schema version
-            schema_file: Schema file or 'auto' for detection
-            existing_metadata: Existing metadata to update
-            language: Extraction language
-            max_workers: Parallel worker count
-            include_core: Include core fields (title, description, etc.)
-            enable_geocoding: Convert location addresses to coordinates
-            normalize_output: Apply normalization to extracted values
-            normalize_vocabularies: Normalize vocabulary values using fuzzy matching
-            regenerate_fields: List of field IDs to regenerate (re-extract)
-            regenerate_empty: Re-extract fields that are empty in existing_metadata
-            origins: Existing field origins dict (field_id -> 'ai'|'user')
-            deadline: Loop time the whole run must end by (the /generate
-                deadline); geocoding gets only what is left of it
+            options: What to extract and how (GenerationOptions). The route
+                builds them (audit 14.11., Q-10).
+            **keywords: The fields of GenerationOptions by name, instead of
+                `options`: generate_metadata(text, schema_file="event.json").
+                The signature before the options existed; tests and scripts
+                call it that way.
 
         Returns:
             Generated metadata with statistics
         """
+        if options is None:
+            options = GenerationOptions(**keywords)
+        elif keywords:
+            raise TypeError("generate_metadata: options or keywords, not both")
+        return await self._generate(text, options)
+
+    async def _generate(self, text: str, options: GenerationOptions) -> dict[str, Any]:
+        """The run: content type, fields, LLM, merge, post-processing, order."""
+        context, version, language = options.context, options.version, options.language
+        schema_file, include_core = options.schema_file, options.include_core
+        existing_metadata, origins = options.existing_metadata, options.origins
+        regenerate_fields = options.regenerate_fields
+        regenerate_empty = options.regenerate_empty
+        max_workers, deadline = options.max_workers, options.deadline
+        normalize_output = options.normalize_output
+        normalize_vocabularies = options.normalize_vocabularies
+        enable_geocoding = options.enable_geocoding
+
         start_time = time.time()
         errors: list[str] = []
         warnings: list[str] = []
@@ -138,47 +137,66 @@ class MetadataService:
                 error=error,
             )
 
-        if schema_file == "auto":
+        # A detection comes first: the cache primer goes out with it instead of
+        # after it. With a chosen type extract_fields_parallel sends it itself -
+        # and so with metadata at hand: only the fields of the detected type
+        # tell whether more than one is left to extract.
+        async with self.llm_service.text_cache_primer(
+            text, language, start=schema_file == "auto" and not existing_metadata
+        ) as primer:
+            if schema_file == "auto":
+                try:
+                    detection = await self.detect_schema(
+                        text, context, version, language
+                    )
+                except LLMError as e:
+                    # The same credentials would fail every field: stop before the
+                    # field calls instead of sending dozens of refused requests.
+                    return failed(None, e.message, e)
+                schema_file = detection["schema_file"]
+                if detection.get("warning"):
+                    warnings.append(detection["warning"])
+                content_type_detection = {
+                    k: v for k, v in detection.items() if k != "warning"
+                }
+            else:
+                content_type_detection = {
+                    "method": "preselected",
+                    "schema_file": schema_file,
+                }
+
             try:
-                detection = await self.detect_schema(text, context, version, language)
-            except LLMError as e:
-                # The same credentials would fail every field: stop before the
-                # field calls instead of sending dozens of refused requests.
-                return failed(None, e.message, e)
-            schema_file = detection["schema_file"]
-            if detection.get("warning"):
-                warnings.append(detection["warning"])
-            content_type_detection = {
-                k: v for k, v in detection.items() if k != "warning"
-            }
-        else:
-            content_type_detection = {
-                "method": "preselected",
-                "schema_file": schema_file,
-            }
+                all_fields = load_extraction_fields(
+                    context, version, schema_file, include_core, warnings
+                )
+            except Exception as e:
+                return failed(schema_file, f"Schema loading failed: {str(e)}")
 
-        try:
-            all_fields = load_extraction_fields(
-                context, version, schema_file, include_core, warnings
-            )
-        except Exception as e:
-            return failed(schema_file, f"Schema loading failed: {str(e)}")
-
-        extraction = await self.llm_service.extract_fields_parallel(
-            fields=select_fields_to_extract(
+            to_extract = select_fields_to_extract(
                 all_fields,
                 existing_metadata,
                 regenerate_fields,
                 regenerate_empty,
                 origins,
-            ),
-            text=text,
-            existing_metadata=existing_metadata,
-            language=language,
-            max_workers=max_workers,
-        )
+            )
+            extraction = await self.llm_service.extract_fields_parallel(
+                fields=to_extract,
+                text=text,
+                existing_metadata=existing_metadata,
+                language=language,
+                max_workers=max_workers,
+                deadline=deadline,
+                primer=primer,
+            )
         extracted_values = extraction.get("values", {})
         errors.extend(extraction.get("errors", []))
+        warnings.extend(extraction.get("warnings", []))
+        if extraction.get("timed_out"):
+            late = extraction["timed_out"]
+            errors.append(
+                f"Zeitlimit: {len(late)} Feld(er) nicht mehr erschlossen, der "
+                f"KI-Dienst antwortete nicht rechtzeitig ({', '.join(late)})."
+            )
         if extraction.get("fatal_error") is not None:
             errors.insert(0, extraction["fatal_error"].message)
         if existing_metadata:
@@ -238,7 +256,10 @@ class MetadataService:
             "exportedAt": datetime.now(timezone.utc).isoformat(),
             "metadata": ordered_metadata,
             "_origins": final_origins(
-                ordered_metadata, field_origins, extracted_values
+                ordered_metadata,
+                field_origins,
+                extracted_values,
+                asked={field.get("id", "") for field in to_extract},
             ),
             "processing": processing,
         }
@@ -270,6 +291,7 @@ class MetadataService:
         if normalize_output:
             for field_id, value in flat_metadata.items():
                 if value is not None and field_id in field_schemas:
+                    notes: list[str] = []
                     try:
                         flat_metadata[field_id] = (
                             self.field_normalizer.normalize_field_value(
@@ -277,12 +299,14 @@ class MetadataService:
                                 field_schemas[field_id],
                                 normalize_vocabularies,
                                 exact_only=field_id not in extracted_ids,
+                                notes=notes,
                             )
                         )
                     except Exception as e:
                         warnings.append(
                             f"Field normalization warning for {field_id}: {str(e)}"
                         )
+                    warnings.extend(f"{field_id}: {note}" for note in notes)
 
         # After all extraction: coordinates for schema:location
         if enable_geocoding:
@@ -298,7 +322,9 @@ class MetadataService:
         # Structure as the web component expects it
         if normalize_output:
             try:
-                flat_metadata = self.output_normalizer.normalize_output(flat_metadata)
+                flat_metadata = self.output_normalizer.normalize_output(
+                    flat_metadata, warnings
+                )
             except Exception as e:
                 warnings.append(f"Output normalization warning: {str(e)}")
 

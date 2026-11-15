@@ -5,6 +5,8 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any, Iterator, Optional
 
+from .llm_transport import CACHE_BREAKPOINT
+
 
 # How many concepts of a vocabulary the extraction prompt lists. It was 20:
 # subjects have 69 (Physik is the 46th), learning resource types 220, so a model
@@ -12,6 +14,12 @@ from typing import Any, Iterator, Optional
 # vocabulary except the two occupation lists (894), which stay truncated.
 _VOCABULARY_PROMPT_LIMIT = 300
 
+
+# The current value of a field in its prompt, bounded like the values of the
+# first round in a correction (input_resolver.MAX_PREVIOUS_VALUE_LENGTH): a
+# caller's existing_metadata went into the prompt in full, megabytes per field
+# call (audit 14.11., S-35).
+MAX_CURRENT_VALUE_LENGTH = 2_000
 
 # Heads the correction section of a re-extraction (input_resolver.with_correction).
 CORRECTION_HEADER = "--- KORREKTUR / UPDATE ---"
@@ -37,19 +45,36 @@ class PromptMixin:
     """
     Building the messages sent to the model (part of LLMService).
 
-    Needs: nothing from the other mixins or from LLMService.__init__.
+    Needs: nothing from LLMService.__init__; LLMService overrides
+    _marks_cache_breakpoint.
     """
 
-    def _text_messages(self, text: str, language: str) -> list[dict[str, str]]:
+    def _marks_cache_breakpoint(self) -> bool:
+        """Whether the model takes a cache breakpoint; LLMService decides."""
+        return False
+
+    def _text_messages(self, text: str, language: str) -> list[dict[str, Any]]:
         """
         System prompt and page text: the prefix every field call shares.
 
         Field calls and the cache primer build it here, so it is byte-identical
-        in all of them — the cache only hits on an exact match.
+        in all of them — the cache only hits on an exact match. Where the model
+        takes it, the text ends with an explicit cache breakpoint: the primer
+        writes the prefix up to there, the field calls look it up there and
+        write nothing of their own (llm_transport.CACHE_BREAKPOINT).
         """
+        content: Any = f"--- TEXT ---\n{text}\n--- ENDE ---"
+        if self._marks_cache_breakpoint():
+            content = [
+                {
+                    "type": "text",
+                    "text": content,
+                    "prompt_cache_breakpoint": CACHE_BREAKPOINT,
+                }
+            ]
         return [
             {"role": "system", "content": self._get_system_prompt(language)},
-            {"role": "user", "content": f"--- TEXT ---\n{text}\n--- ENDE ---"},
+            {"role": "user", "content": content},
         ]
 
     def _get_system_prompt(self, language: str) -> str:
@@ -112,7 +137,7 @@ IMPORTANT RULES:
         examples = field.get("examples", {})
         parts += _example_lines(examples.get(language, examples.get("de", [])), de)
         if existing_value is not None:
-            parts += _existing_value_lines(existing_value, text, label, de)
+            parts += _existing_value_lines(existing_value, label, de)
         parts += _answer_lines(system.get("required", False), de)
         return "\n".join(parts)
 
@@ -211,44 +236,9 @@ IMPORTANT RULES:
         variants = items.get("variants", [])
 
         for vi, variant in enumerate(variants):
-            variant_type = variant.get("@type", "Object")
-            variant_label = self._get_localized(variant.get("label", {}), language)
-            variant_desc = self._get_localized(variant.get("description", {}), language)
-
-            # Skip empty variants (like PostalAddress with no fields)
-            variant_fields = variant.get("fields", [])
-            if not variant_fields and variant_type != "Default":
-                continue
-
-            if len(variants) > 1 and variant_type != "Default":
-                if language == "de":
-                    parts.append(
-                        f"\n--- Variante {vi + 1}: {variant_label} ({discriminator}: {variant_type}) ---"
-                    )
-                else:
-                    parts.append(
-                        f"\n--- Variant {vi + 1}: {variant_label} ({discriminator}: {variant_type}) ---"
-                    )
-                if variant_desc:
-                    parts.append(f"  {variant_desc}")
-            elif variant_type != "Default":
-                if language == "de":
-                    parts.append(
-                        f"\nTyp: {variant_label} ({discriminator}: {variant_type})"
-                    )
-                else:
-                    parts.append(
-                        f"\nType: {variant_label} ({discriminator}: {variant_type})"
-                    )
-
-            if language == "de":
-                parts.append("Felder:")
-            else:
-                parts.append("Fields:")
-
-            # Add fields from variant with descriptions and prompts
-            for field in variant_fields:
-                self._append_field_info(parts, field, language, indent=1)
+            self._append_variant_info(
+                parts, variant, vi, len(variants), discriminator, language
+            )
 
         # Build a dynamic example from first variant
         if variants:
@@ -263,6 +253,55 @@ IMPORTANT RULES:
                 )
 
         return "\n".join(parts)
+
+    def _append_variant_info(
+        self,
+        parts: list[str],
+        variant: dict[str, Any],
+        vi: int,
+        variant_count: int,
+        discriminator: str,
+        language: str,
+    ) -> None:
+        """Heading and fields of the variant at position `vi` of `variant_count`."""
+        variant_type = variant.get("@type", "Object")
+        variant_label = self._get_localized(variant.get("label", {}), language)
+        variant_desc = self._get_localized(variant.get("description", {}), language)
+
+        # Skip empty variants (like PostalAddress with no fields)
+        variant_fields = variant.get("fields", [])
+        if not variant_fields and variant_type != "Default":
+            return
+
+        if variant_count > 1 and variant_type != "Default":
+            if language == "de":
+                parts.append(
+                    f"\n--- Variante {vi + 1}: {variant_label} ({discriminator}: {variant_type}) ---"
+                )
+            else:
+                parts.append(
+                    f"\n--- Variant {vi + 1}: {variant_label} ({discriminator}: {variant_type}) ---"
+                )
+            if variant_desc:
+                parts.append(f"  {variant_desc}")
+        elif variant_type != "Default":
+            if language == "de":
+                parts.append(
+                    f"\nTyp: {variant_label} ({discriminator}: {variant_type})"
+                )
+            else:
+                parts.append(
+                    f"\nType: {variant_label} ({discriminator}: {variant_type})"
+                )
+
+        if language == "de":
+            parts.append("Felder:")
+        else:
+            parts.append("Fields:")
+
+        # Add fields from variant with descriptions and prompts
+        for field in variant_fields:
+            self._append_field_info(parts, field, language, indent=1)
 
     def _append_field_info(
         self,
@@ -398,14 +437,31 @@ def _example_lines(example_list: list, de: bool) -> list[str]:
     ]
 
 
-def _existing_value_lines(
-    existing_value: Any, text: str, label: str, de: bool
-) -> list[str]:
+def _current_value(existing_value: Any) -> str:
+    """
+    The current value as JSON: of a text its first MAX_CURRENT_VALUE_LENGTH
+    characters, of anything else that many characters of its JSON form; a cut
+    value ends in " …".
+    """
+    if isinstance(existing_value, str):
+        if len(existing_value) <= MAX_CURRENT_VALUE_LENGTH:
+            return json.dumps(existing_value, ensure_ascii=False)
+        # Cut before the dump (it would escape megabytes to keep 2,000
+        # characters); the closing quote goes, the value is not complete.
+        kept = existing_value[:MAX_CURRENT_VALUE_LENGTH]
+        return json.dumps(kept, ensure_ascii=False)[:-1] + " …"
+    current = json.dumps(existing_value, ensure_ascii=False)
+    if len(current) > MAX_CURRENT_VALUE_LENGTH:
+        current = current[:MAX_CURRENT_VALUE_LENGTH] + " …"
+    return current
+
+
+def _existing_value_lines(existing_value: Any, label: str, de: bool) -> list[str]:
     """
     The current value and how to treat it: in a correction round only the
     field the instruction names may change; otherwise update on new information.
     """
-    current = json.dumps(existing_value, ensure_ascii=False)
+    current = _current_value(existing_value)
     # Only a round /generate marks as correction (correction_round): a page
     # that happens to contain the header is no correction (audit L-13).
     if _CORRECTION_ROUND.get():

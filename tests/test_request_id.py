@@ -17,9 +17,16 @@ from src import main
 from src.api import deps
 from src.services.input_source_service import TextExtractionError
 from src.services.llm_errors import LLMAuthForbidden
-from src.utils.request_id import TRACE_EVENT_HOOKS, propagate_trace, traced
+from src.utils.request_id import (
+    TRACE_EVENT_HOOKS,
+    current_trace_ids,
+    propagate_trace,
+    traced,
+)
 
-GENERATED = re.compile(r"[0-9a-f]{16}")
+# Without an id from outside, the request id is the new B3 trace id.
+GENERATED = re.compile(r"[0-9a-f]{32}")
+SPAN = re.compile(r"[0-9a-f]{16}")
 
 
 def test_every_response_gets_its_own_id():
@@ -193,14 +200,75 @@ async def test_trace_headers_reach_the_agents_own_services():
 
 
 @pytest.mark.asyncio
-async def test_values_that_are_not_plain_tokens_are_not_passed_on():
+async def test_values_that_are_not_plain_tokens_are_replaced():
     seen = []
 
     with traced({"x-b3-traceid": "abc def", "x-b3-spanid": "<x>"}):
         await _recording_client(seen).get("http://repository.example/rest")
 
+    assert GENERATED.fullmatch(seen[0].headers["x-b3-traceid"])
+    assert SPAN.fullmatch(seen[0].headers["x-b3-spanid"])
+
+
+@pytest.mark.asyncio
+async def test_without_b3_headers_a_new_trace_starts_and_is_passed_on():
+    seen = []
+
+    with traced({}) as request_id:
+        ids = current_trace_ids()
+        await _recording_client(seen).get("http://repository.example/rest")
+
+    sent = seen[0].headers
+    assert GENERATED.fullmatch(sent["x-b3-traceid"])
+    assert SPAN.fullmatch(sent["x-b3-spanid"])
+    # One id to quote and to search for: request id and trace id are the same.
+    assert request_id == sent["x-b3-traceid"] == sent["x-request-id"]
+    assert ids == {
+        "trace_id": sent["x-b3-traceid"],
+        "span_id": sent["x-b3-spanid"],
+        "request_id": request_id,
+    }
+
+
+def test_an_incoming_trace_id_becomes_the_request_id():
+    incoming = {
+        "x-b3-traceid": "80f198ee56343ba864fe8b2a57d3eff7",
+        "x-b3-spanid": "e457b5a2e4d86bd1",
+    }
+
+    with traced(incoming) as request_id:
+        ids = current_trace_ids()
+
+    assert request_id == "80f198ee56343ba864fe8b2a57d3eff7"
+    assert ids["span_id"] == "e457b5a2e4d86bd1"
+
+
+@pytest.mark.asyncio
+async def test_the_single_b3_header_is_read_and_passed_on_alone():
+    seen = []
+    b3 = "80f198ee56343ba864fe8b2a57d3eff7-e457b5a2e4d86bd1-1"
+
+    with traced({"b3": b3}):
+        ids = current_trace_ids()
+        await _recording_client(seen).get("http://repository.example/rest")
+
+    assert ids["trace_id"] == "80f198ee56343ba864fe8b2a57d3eff7"
+    assert ids["span_id"] == "e457b5a2e4d86bd1"
+    assert seen[0].headers["b3"] == b3
+    # No second, different trace next to the one that came in.
     assert "x-b3-traceid" not in seen[0].headers
-    assert "x-b3-spanid" not in seen[0].headers
+
+
+def test_the_client_trace_id_is_kept_next_to_the_trace_id():
+    with traced({"x-client-trace-id": "trace-abc"}) as request_id:
+        ids = current_trace_ids()
+
+    assert request_id == ids["request_id"] == ids["client_trace_id"] == "trace-abc"
+    assert GENERATED.fullmatch(ids["trace_id"])
+
+
+def test_outside_a_request_there_are_no_ids():
+    assert current_trace_ids() == {}
 
 
 @pytest.mark.asyncio
@@ -218,3 +286,75 @@ def test_the_agents_own_clients_carry_the_trace_hook(monkeypatch):
 
     for client in (LLMService().http_client, InputSourceService().http_client):
         assert propagate_trace in client.event_hooks["request"]
+
+
+# ------------------------------------------------- B3 ids are what B3 says
+#
+# Audit 13.11., L-22: any token of up to 128 characters passed as trace id, and
+# became the request id and X-Request-ID. A trace id is 16 or 32 hex
+# characters, a span id 16; anything else is replaced by a new trace.
+
+
+@pytest.mark.parametrize(
+    "incoming",
+    [
+        {"x-b3-traceid": "x" * 128, "x-b3-spanid": "e457b5a2e4d86bd1"},
+        {"x-b3-traceid": "not-hex-at-all", "x-b3-spanid": "e457b5a2e4d86bd1"},
+        {"x-b3-spanid": "e457b5a2e4d86bd1"},
+        {"b3": "abc-def"},
+    ],
+)
+def test_ids_that_are_not_b3_start_a_new_trace(incoming):
+    with traced(incoming) as request_id:
+        ids = current_trace_ids()
+
+    assert GENERATED.fullmatch(ids["trace_id"])
+    assert SPAN.fullmatch(ids["span_id"])
+    assert request_id == ids["trace_id"]
+    assert ids["trace_id"] != incoming.get("x-b3-traceid")
+
+
+def test_a_trace_with_an_unusable_span_gets_a_new_span():
+    incoming = {"x-b3-traceid": "80f198ee56343ba8", "x-b3-spanid": "zzzzzzzzzzzzzzzz"}
+
+    with traced(incoming):
+        ids = current_trace_ids()
+
+    assert ids["trace_id"] == "80f198ee56343ba8"
+    assert SPAN.fullmatch(ids["span_id"])
+
+
+def test_a_short_trace_id_is_kept():
+    incoming = {"x-b3-traceid": "80f198ee56343ba8", "x-b3-spanid": "e457b5a2e4d86bd1"}
+
+    with traced(incoming):
+        ids = current_trace_ids()
+
+    assert (ids["trace_id"], ids["span_id"]) == ("80f198ee56343ba8", "e457b5a2e4d86bd1")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "state, header, value",
+    [("0", "x-b3-sampled", "0"), ("1", "x-b3-sampled", "1"), ("d", "x-b3-flags", "1")],
+)
+async def test_a_bare_sampling_state_is_passed_on_with_the_new_trace(
+    state, header, value
+):
+    """`b3: 0` names no trace; next to new x-b3-* ids a receiver would prefer it."""
+    seen = []
+
+    with traced({"b3": state}):
+        await _recording_client(seen).get("http://repository.example/rest")
+
+    sent = seen[0].headers
+    assert "b3" not in sent
+    assert sent[header] == value
+    assert GENERATED.fullmatch(sent["x-b3-traceid"])
+
+
+def test_a_response_never_carries_an_overlong_id():
+    with TestClient(main.app) as client:
+        response = client.get("/health", headers={"x-b3-traceid": "a" * 128})
+
+    assert GENERATED.fullmatch(response.headers["x-request-id"])

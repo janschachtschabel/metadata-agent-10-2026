@@ -22,7 +22,6 @@ import httpx
 import pytest
 
 from src.config import Settings
-from src.services import llm_service as llm_module
 from src.services.llm_auth import forwarded_authorization
 from src.services.llm_errors import (
     LLMRateLimited,
@@ -32,6 +31,7 @@ from src.services.llm_errors import (
     LLMUnreachable,
 )
 from src.services.llm_service import LLMService, reset_provider_gates
+from conftest import use_settings
 
 MESSAGES = [{"role": "user", "content": "x"}]
 OK = {"choices": [{"message": {"content": '{"value": "ok"}'}}]}
@@ -68,7 +68,7 @@ def _settings(**overrides) -> Settings:
 
 def _service(router, monkeypatch, model=None, **settings) -> LLMService:
     cfg = _settings(**settings)
-    monkeypatch.setattr(llm_module, "get_settings", lambda: cfg)
+    use_settings(monkeypatch, cfg)
     service = LLMService(llm_provider="b-api-router", llm_model=model)
     service.http_client = httpx.AsyncClient(
         transport=httpx.MockTransport(router.handler)
@@ -281,7 +281,7 @@ async def test_other_providers_are_not_read_as_the_router(monkeypatch):
         400, '{"error": {"message": "Unsupported parameter: \'max_tokens\'"}}'
     )
     cfg = _settings()
-    monkeypatch.setattr(llm_module, "get_settings", lambda: cfg)
+    use_settings(monkeypatch, cfg)
     service = LLMService(llm_provider="b-api-openai", llm_model="o9-preview")
     service.http_client = httpx.AsyncClient(
         transport=httpx.MockTransport(router.handler)
@@ -334,7 +334,7 @@ async def test_the_request_style_applies_to_the_router_only(monkeypatch):
     # set for the agent's route must not hand gpt-6-luna the classic body.
     router = _Router()
     cfg = _settings(llm_request_style="classic")
-    monkeypatch.setattr(llm_module, "get_settings", lambda: cfg)
+    use_settings(monkeypatch, cfg)
     service = LLMService(llm_provider="b-api-openai", llm_model="gpt-6-luna")
     service.http_client = httpx.AsyncClient(
         transport=httpx.MockTransport(router.handler)

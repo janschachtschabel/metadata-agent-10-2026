@@ -8,11 +8,14 @@
 # Pod down / restarting is left to the cluster's own rules (TargetDown,
 # KubePodCrashLooping in kube-prometheus-stack).
 # The critical rules must page on the first failure (audit OPS-06). increase()
-# ignores a series' first value, so each also counts series younger than its
-# window with a value above 0 - a failure on a fresh pod before the agent's
-# pre-created series (src/metrics.py) were scraped. "New" means: no sample
-# between 70 and 10 minutes ago, so a scrape gap of more than 10 minutes does
-# not make an old counter look new.
+# ignores a series' first value - a failure on a fresh pod before the agent's
+# pre-created series (src/metrics.py) were scraped. Each rule therefore also
+# reads when the agent last failed: a gauge holding the time of the last
+# failure (src/metrics.py), less than 10 minutes ago. An old failure does not
+# page again after a scrape gap, however long (audit 14.11., O-34: series
+# without a sample in a look-back window counted as new, and a gap longer
+# than the window paged for old failures). The pod's clock and that of
+# Prometheus must agree to well under those 10 minutes.
 groups:
   - name: metadata-agent
     rules:
@@ -20,10 +23,7 @@ groups:
         expr: |
           sum by (namespace) (increase(metadata_agent_llm_requests_total{result=~"LLM_AUTH_.*",auth_source!="forwarded",config="default"}[10m])) > 0
           or
-          sum by (namespace) (
-            metadata_agent_llm_requests_total{result=~"LLM_AUTH_.*",auth_source!="forwarded",config="default"}
-            unless last_over_time(metadata_agent_llm_requests_total{result=~"LLM_AUTH_.*",auth_source!="forwarded",config="default"}[1h] offset 10m)
-          ) > 0
+          time() - max by (namespace) (metadata_agent_llm_last_failure_timestamp_seconds{result=~"LLM_AUTH_.*",auth_source!="forwarded",config="default"}) < 600
         labels:
           severity: critical
         annotations:
@@ -34,10 +34,7 @@ groups:
         expr: |
           sum by (namespace) (increase(metadata_agent_llm_requests_total{result=~"LLM_ROUTE_.*|LLM_MODEL_NOT_FOUND",config="default"}[10m])) > 0
           or
-          sum by (namespace) (
-            metadata_agent_llm_requests_total{result=~"LLM_ROUTE_.*|LLM_MODEL_NOT_FOUND",config="default"}
-            unless last_over_time(metadata_agent_llm_requests_total{result=~"LLM_ROUTE_.*|LLM_MODEL_NOT_FOUND",config="default"}[1h] offset 10m)
-          ) > 0
+          time() - max by (namespace) (metadata_agent_llm_last_failure_timestamp_seconds{result=~"LLM_ROUTE_.*|LLM_MODEL_NOT_FOUND",config="default"}) < 600
         labels:
           severity: critical
         annotations:
@@ -77,12 +74,14 @@ groups:
           description: Mehr als 3 KI-Aufrufe in 10 Minuten bekamen auch nach Wiederholung keine Antwort (Timeout, Verbindung abgelehnt).
 
       - alert: MetadataAgentGenerationsFailing
+        # Only runs that ended: one the client gave up (cancelled) or the pod
+        # did not take on (refused) is neither a failure nor a run (audit 14.11.).
         expr: |
           (
             sum by (namespace) (increase(metadata_agent_generations_total{status="failed"}[30m]))
-              / sum by (namespace) (increase(metadata_agent_generations_total[30m]))
+              / sum by (namespace) (increase(metadata_agent_generations_total{status=~"success|partial|failed"}[30m]))
           ) > 0.5
-          and sum by (namespace) (increase(metadata_agent_generations_total[30m])) >= 3
+          and sum by (namespace) (increase(metadata_agent_generations_total{status=~"success|partial|failed"}[30m])) >= 3
         labels:
           severity: warning
         annotations:
@@ -95,12 +94,15 @@ groups:
         # A service that never answered has no responses series yet; "or ... * 0"
         # counts it as zero answers instead of dropping it. Not for "other"
         # either: URLs a caller hands in (preview images) are not our
-        # dependencies (audit OPS-13).
+        # dependencies (audit OPS-13). Answers are read from the histogram's
+        # count, one series per service: responses_total starts a series per
+        # status code, and increase() does not count a series' first value
+        # (audit 14.11., O-35).
         expr: |
           (
             sum by (namespace, service) (increase(metadata_agent_upstream_requests_total{service!~"llm|other"}[10m]))
             - (
-              sum by (namespace, service) (increase(metadata_agent_upstream_responses_total{service!~"llm|other"}[10m]))
+              sum by (namespace, service) (increase(metadata_agent_upstream_response_duration_seconds_count{service!~"llm|other"}[10m]))
               or sum by (namespace, service) (increase(metadata_agent_upstream_requests_total{service!~"llm|other"}[10m])) * 0
             )
           ) > 3
@@ -121,22 +123,53 @@ groups:
           summary: Ein abhängiger Dienst antwortet mit Serverfehlern
           description: Mehr als 5 Antworten mit Status 5xx in 10 Minuten vom Dienst im Label service.
 
+      # No 5xx, so the rule above stays silent: the key is refused - by the
+      # B-API on its proxy paths or, called directly, by the service itself.
+      # URL extractions then end with TEXT_EXTRACTION_AUTH_REFUSED, places stay
+      # without coordinates.
+      - alert: MetadataAgentUpstreamKeyRefused
+        expr: sum by (namespace, service) (increase(metadata_agent_upstream_responses_total{status=~"401|403",service=~"text-extraction|geocoder"}[10m])) > 3
+        labels:
+          severity: warning
+        annotations:
+          summary: Textextraktion oder Geocoder lehnen den Schlüssel ab
+          description: Mehr als 3 Antworten mit Status 401 oder 403 in 10 Minuten vom Dienst im Label service; betroffen sind Erschließungen aus einer URL bzw. die Koordinaten von Orten. Über die B-API (METADATA_AGENT_B_API_SERVICES auto oder proxy) fehlt dem Schlüssel das Recht für deren Proxy-Dienst (text-extraction bzw. photon_geocoding); bei direktem Aufruf (direct oder eigene Adresse) verlangt der Dienst selbst eine Anmeldung.
+
       - alert: MetadataAgentGenerateSlow
+        # The share of runs above 270 s, read from that bucket (audit 14.11.,
+        # O-33: a p95 was interpolated between 120 and 300 s). le as
+        # prometheus_client writes it ("270.0") or normalised ("270"). Only
+        # pods that export the bucket count: while pods of an older image run,
+        # all of their runs would look slow.
         expr: |
-          histogram_quantile(0.95,
-            sum by (namespace, le) (rate(metadata_agent_http_request_duration_seconds_bucket{route="/generate"}[15m]))
-          ) > 270
+          (
+            1 - sum by (namespace) (rate(metadata_agent_http_request_duration_seconds_bucket{route="/generate",le=~"270(\\.0)?"}[15m]))
+              / sum by (namespace) (
+                  rate(metadata_agent_http_request_duration_seconds_bucket{route="/generate",le="+Inf"}[15m])
+                  and ignoring (le) rate(metadata_agent_http_request_duration_seconds_bucket{route="/generate",le=~"270(\\.0)?"}[15m])
+                )
+          ) > 0.05
         for: 15m
         labels:
           severity: warning
         annotations:
           summary: /generate nähert sich seinem Zeitlimit
-          description: 95 % der Erschließungen brauchen bis zu über 270 s; nach 300 s (METADATA_AGENT_GENERATE_TIMEOUT) bricht der Agent mit 504 ab. Modell, Kontingent, Textlänge und METADATA_AGENT_REQUEST_TIMEOUT prüfen.
+          description: Mehr als 5 % der Erschließungen der letzten 15 Minuten brauchten über 270 s; nach 300 s (METADATA_AGENT_GENERATE_TIMEOUT) bricht der Agent mit 504 ab. Modell, Kontingent, Textlänge und METADATA_AGENT_REQUEST_TIMEOUT prüfen.
 
       # The service's own errors (audit 18.10. final). Probe paths answer 503
-      # while a pod is not ready - that is the readiness probe's business.
+      # while a pod is not ready - that is the readiness probe's business. And
+      # 503 TOO_MANY_GENERATIONS is back-pressure by design: those answers,
+      # counted as generations with status="refused", are taken off /generate
+      # (audit 14.11.; "or ... * 0" keeps the routes without such a series).
       - alert: MetadataAgentServerErrors
-        expr: sum by (namespace, route) (increase(metadata_agent_http_requests_total{status=~"5..",route!~"/health|/ready"}[10m])) > 5
+        expr: |
+          (
+            sum by (namespace, route) (increase(metadata_agent_http_requests_total{status=~"5..",route!~"/health|/ready"}[10m]))
+            - (
+              label_replace(sum by (namespace) (increase(metadata_agent_generations_total{status="refused"}[10m])), "route", "/generate", "", "")
+              or sum by (namespace, route) (increase(metadata_agent_http_requests_total{status=~"5..",route!~"/health|/ready"}[10m])) * 0
+            )
+          ) > 5
         labels:
           severity: warning
         annotations:
@@ -146,14 +179,11 @@ groups:
       - alert: MetadataAgentInternalError
         # An unexpected exception (INTERNAL_ERROR) is a bug: page on the first.
         # A status-500 series appears with its first error, which increase()
-        # ignores - the second part counts series younger than the window.
+        # ignores - the second part reads when the route last answered 500.
         expr: |
           sum by (namespace, route) (increase(metadata_agent_http_requests_total{status="500"}[10m])) > 0
           or
-          sum by (namespace, route) (
-            metadata_agent_http_requests_total{status="500"}
-            unless last_over_time(metadata_agent_http_requests_total{status="500"}[1h] offset 10m)
-          ) > 0
+          time() - max by (namespace, route) (metadata_agent_http_last_internal_error_timestamp_seconds) < 600
         labels:
           severity: critical
         annotations:

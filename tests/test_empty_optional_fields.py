@@ -23,6 +23,7 @@ from src.models.schemas import (
     DetectContentTypeRequest,
     ExtractFieldRequest,
     GenerateRequest,
+    InputSourceRequest,
     SaveNodeRequest,
     ScreenshotRequest,
     UploadRequest,
@@ -64,6 +65,8 @@ def test_a_blank_node_id_counts_as_not_given(blank):
 
 
 CARRY_NODE_ID = [
+    # The block the next three inherit their node_id from.
+    (InputSourceRequest, {}),
     (GenerateRequest, {}),
     (DetectContentTypeRequest, {}),
     (ExtractFieldRequest, {"schema_file": "event.json", "field_id": "a:b"}),

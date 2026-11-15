@@ -19,10 +19,10 @@ import pytest
 
 from src.config import Settings
 from src.metrics import propagate_trace
-from src.services import llm_service as llm_module
 from src.services.llm_errors import LLMUpstreamError
 from src.services.llm_service import LLMService, reset_provider_gates
 from src.utils.schema_loader import get_ai_fillable_fields, get_latest_version
+from conftest import use_settings
 
 
 class _Gateway:
@@ -56,7 +56,7 @@ def _fresh_gates():
 def _settings(monkeypatch, **overrides):
     values = {"b_api_key": "own-key", "llm_retry_delay": 0, **overrides}
     cfg = Settings(_env_file=None, **values)
-    monkeypatch.setattr(llm_module, "get_settings", lambda: cfg)
+    use_settings(monkeypatch, cfg)
     return cfg
 
 

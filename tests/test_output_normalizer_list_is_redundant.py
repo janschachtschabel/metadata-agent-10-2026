@@ -12,7 +12,13 @@ Removing the list is only safe if the two produce identical results for those si
 fields. That is what this pins down. It stays in the suite afterwards: it is the
 test that fails if someone changes the object key convention and quietly alters
 the output format for every event record.
+
+Audit 14.11.2026, Q-16: the conversion of the old list (`_normalize_person_array`)
+was dead code in OutputNormalizer since then. It lives here now, as the
+reference the FieldNormalizer is compared with.
 """
+
+import copy
 
 import json
 from pathlib import Path
@@ -22,9 +28,7 @@ import pytest
 from src.services.field_normalizer import FieldNormalizer
 from src.services.output_normalizer import OutputNormalizer
 
-SCHEMATA = (
-    Path(__file__).resolve().parents[1] / "src" / "schemata" / "mds_oeh" / "v2.0.0"
-)
+SCHEMATA = Path(__file__).resolve().parents[1] / "src" / "schemata" / "mds_oeh"
 
 FORMER_LIST = [
     "schema:actor",
@@ -43,35 +47,68 @@ VALUES = [
 ]
 
 
-def systems_for(field_id):
-    """Every schema that declares the field, so the check is not event-only."""
-    out = []
-    for path in sorted(SCHEMATA.glob("*.json")):
+def old_person_list(value):
+    """What OutputNormalizer made of a value of the six listed fields."""
+    if not value:
+        return []
+    if not isinstance(value, list):
+        value = [value]
+    result = []
+    for item in value:
+        if isinstance(item, str):
+            result.append({"name": item})
+        elif isinstance(item, dict):
+            if "name" not in item and "@value" in item:
+                item["name"] = item.pop("@value")
+            result.append(item)
+    return result
+
+
+def declarations():
+    """
+    Every declaration of a field of the old list: each schema of each version,
+    so the check is not event-only and not 2.0.0-only.
+
+    Built from the schemas: the fields no schema declares (schema:contributor
+    and schema:author in no version, schema:actor only in 1.8.0) skipped on
+    every run when the list was the six names against 2.0.0 (audit 14.11.,
+    Q-14). A field that returns to a schema is compared again by itself.
+    """
+    found = []
+    for path in sorted(SCHEMATA.glob("v*/*.json")):
         if path.name == "manifest.json":
             continue
         schema = json.loads(path.read_text(encoding="utf-8"))
         for field in schema.get("fields") or []:
-            if field.get("id") == field_id:
-                out.append((path.stem, field["system"]))
-    return out
+            if field.get("id") in FORMER_LIST:
+                place = f"{path.parent.name}/{path.stem}/{field['id']}"
+                found.append(pytest.param(field["system"], id=place))
+    return found
 
 
-@pytest.mark.parametrize("field_id", FORMER_LIST)
-def test_the_field_normalizer_matches_the_old_person_list(field_id):
-    places = systems_for(field_id)
-    if not places:
-        pytest.skip(f"{field_id} is not declared in mds_oeh/v2.0.0")
+DECLARATIONS = declarations()
 
-    old = OutputNormalizer()
+
+@pytest.mark.parametrize("system", DECLARATIONS)
+def test_the_field_normalizer_matches_the_old_person_list(system):
     new = FieldNormalizer()
-    for schema_name, system in places:
-        for value in VALUES:
-            expected = old._normalize_person_array(value)
-            actual = new.normalize_field_value(value, system)
-            assert actual == expected, (
-                f"{schema_name}/{field_id} with {value!r}: "
-                f"FieldNormalizer gave {actual!r}, the old list gave {expected!r}"
-            )
+
+    for value in VALUES:
+        # Copies: the old conversion renamed "@value" in place.
+        expected = old_person_list(copy.deepcopy(value))
+        actual = new.normalize_field_value(copy.deepcopy(value), system)
+        assert actual == expected, (
+            f"with {value!r}: FieldNormalizer gave {actual!r}, "
+            f"the old list gave {expected!r}"
+        )
+
+
+def test_the_comparison_reaches_the_fields_the_current_schema_declares():
+    """A wrong path would leave nothing to compare - and nothing to fail."""
+    compared = {declaration.id for declaration in DECLARATIONS}
+
+    for field_id in ("schema:performer", "schema:attendee", "schema:organizer"):
+        assert f"v2.0.0/event/{field_id}" in compared
 
 
 def test_the_special_cases_stay_in_the_output_normalizer():

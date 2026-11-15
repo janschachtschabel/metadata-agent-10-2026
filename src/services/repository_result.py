@@ -1,4 +1,7 @@
-"""The result of one write (/upload, /nodes), typed, and the answer built from it."""
+"""
+The result of one write (/upload, /nodes): the dicts RepositoryService answers
+with, the same typed, and the response built from it.
+"""
 
 from dataclasses import dataclass, fields
 from typing import Any, Optional, TypeVar
@@ -11,6 +14,8 @@ from ..models.schemas import (
     UploadResponse,
     WorkflowStepResult,
 )
+from .repository_support import identifying_url, text_value
+from .repository_write import StepResults, WriteProgress, WriteTarget
 
 # error_code of a write that left nothing behind (audit 18.10. final, API-08).
 # A partial result - the node exists with what was written - carries none.
@@ -44,6 +49,8 @@ class WriteResult:
     step: Optional[str] = None
     fields_written: Optional[int] = None
     fields_skipped: Optional[int] = None
+    # The fields counted in fields_skipped that no property was written for.
+    skipped_fields: Optional[list[str]] = None
     node_created: Optional[bool] = None
     schema_used: Optional[str] = None
     repo_fields_available: Optional[int] = None
@@ -84,6 +91,7 @@ class WriteResult:
             "step": self.step,
             "fields_written": self.fields_written,
             "fields_skipped": self.fields_skipped,
+            "skipped_fields": self.skipped_fields,
             "node_created": self.node_created,
             "schema_used": self.schema_used,
             "repo_fields_available": self.repo_fields_available,
@@ -101,3 +109,143 @@ class WriteResult:
         }
         # /nodes has no duplicate check and so no `duplicate` key.
         return model(**{k: v for k, v in answer.items() if k in model.model_fields})
+
+
+# ------------------------------------------------- the service's result dicts
+
+
+def no_writable_fields_result(
+    context: str, version: str, schema_file: Optional[str]
+) -> dict:
+    """
+    The answer when the schemas name no field that may be written.
+
+    That only happens when the schema could not be loaded (unknown context or
+    version, unreadable file). Writing anyway would create a node holding just
+    its title and report it as a success.
+    """
+    schemas = f"core.json + {schema_file}" if schema_file else "core.json"
+    return {
+        "success": False,
+        "error_code": SCHEMA_UNAVAILABLE,
+        "step": "schema",
+        "error": (
+            f"Für Kontext '{context}', Version '{version}' ({schemas}) ist kein "
+            "Repository-Feld bekannt — das Schema ließ sich nicht laden. Es wurde "
+            "nichts geschrieben."
+        ),
+    }
+
+
+def unloadable_schema_result(context: str, version: str, schema_file: Any) -> dict:
+    """
+    The answer for a `metadataset` whose schema cannot be loaded (audit 14.11., R-04).
+
+    A typo, a file the version does not have or a URI naming no content type
+    used to fall back to core.json: the type's fields were dropped and the
+    answer still said success.
+    """
+    # Caller's text: one line, bounded.
+    named = " ".join(str(schema_file).split())[:120]
+    return {
+        "success": False,
+        "error_code": SCHEMA_UNAVAILABLE,
+        "step": "schema",
+        "error": (
+            f"Das Schema '{named}' (metadataset) ließ sich für Kontext "
+            f"'{context}', Version '{version}' nicht laden — bitte Dateinamen "
+            "bzw. Inhaltstyp-URI und Schema-Version prüfen. Es wurde nichts "
+            "geschrieben."
+        ),
+    }
+
+
+def created_result(
+    base_url: str, node_id: str, clean_metadata: dict[str, Any]
+) -> dict[str, Any]:
+    """The answer of POST /node for a node that exists now."""
+    return {
+        "success": True,
+        "node": {
+            "nodeId": node_id,
+            "title": text_value(clean_metadata.get("cclom:title")),
+            "wwwurl": identifying_url(clean_metadata),
+            "repositoryUrl": f"{base_url}/components/render/{node_id}",
+        },
+    }
+
+
+def duplicate_result(
+    base_url: str, duplicate: dict[str, Any], clean_metadata: dict[str, Any]
+) -> dict[str, Any]:
+    """The refusal for a URL the repository already holds, with that node."""
+    existing = duplicate.get("nodeId")
+    title = duplicate.get("title")
+    named = f'"{title}"' if title else f"Node {existing}" if existing else ""
+    result: dict[str, Any] = {
+        "success": False,
+        "duplicate": True,
+        "error": f"URL existiert bereits: {named}".rstrip(": "),
+    }
+    if existing:
+        result["node"] = {
+            "nodeId": existing,
+            "title": title,
+            "description": duplicate.get("description"),
+            "wwwurl": identifying_url(clean_metadata),
+            "repositoryUrl": f"{base_url}/components/render/{existing}",
+        }
+    return result
+
+
+def written_result(
+    base_url: str,
+    node_id: str,
+    target: WriteTarget,
+    progress: WriteProgress,
+    metadata_result: dict[str, Any],
+    steps: StepResults,
+) -> dict[str, Any]:
+    """The answer for a write that went through, before problems and read-back."""
+    clean_metadata = target.clean_metadata
+    # With fallbacks for the organization schema
+    title = text_value(
+        clean_metadata.get("cclom:title") or clean_metadata.get("schema:name")
+    )
+    description = text_value(
+        clean_metadata.get("cclom:general_description")
+        or clean_metadata.get("schema:description")
+    )
+    result: dict[str, Any] = {
+        "success": True,
+        # Which schema decided what may be written. Without it a caller
+        # cannot tell a complete upload from one that quietly fell back to
+        # core.json and dropped the type-specific fields — both answer 200.
+        "schema_used": target.schema_file,
+        "repo_fields_available": len(target.repo_field_ids),
+        # False when the caller handed the node over. Both answer 200 with
+        # the same nodeId, so nothing else tells them apart.
+        "node_created": progress.created_node_id is not None,
+        "node": {
+            "nodeId": node_id,
+            "title": title,
+            "description": description[:200] + "..."
+            if description and len(description) > 200
+            else description,
+            "wwwurl": identifying_url(clean_metadata),
+            "repositoryUrl": f"{base_url}/components/render/{node_id}",
+        },
+        "fields_written": metadata_result.get("fields_written", 0),
+        "fields_skipped": metadata_result.get("fields_skipped", 0),
+        "skipped_fields": metadata_result.get("skipped_fields", []),
+    }
+    if steps.collections is not None:
+        result["collections"] = steps.collections["results"]
+    if steps.workflow is not None:
+        result["workflow"] = steps.workflow["steps"]
+    if steps.preview is not None:
+        result["preview"] = steps.preview
+    field_errors = metadata_result.get("field_errors", [])
+    if field_errors:
+        result["field_errors"] = field_errors
+    return result
