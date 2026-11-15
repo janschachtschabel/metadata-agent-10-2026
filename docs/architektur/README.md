@@ -1,7 +1,8 @@
 # Architektur-Map
 
-Überblick über Metadata Agent 3.0: Webkomponente, B-API-Proxy, Agent,
-LLM-Anbindung, angebundene Dienste und Betrieb.
+Überblick über den Metadata Agent: Webkomponente, B-API-Proxy, Agent,
+LLM-Anbindung, angebundene Dienste und Betrieb. Die Map für den Betrieb über
+die B-API zeigt den Stand 4.0.0.
 
 Es gibt zwei Sätze, je eine Map und einen Anfrageablauf:
 
@@ -20,11 +21,21 @@ Es gibt zwei Sätze, je eine Map und einen Anfrageablauf:
 > JSON-Quellen, im HTML und im SVG ersetzt (gleich lange Texte, Layout
 > unverändert), das Ablauf-PNG aus dem SVG neu gerendert.
 
-> **Stand der B-API-Fassungen (13.11.2026):** der Stand, der am 15.11.2026
-> als 4.0.0 veröffentlicht wurde; die Grafiken nennen im Titel noch 3.0.1.
-> Mit Archify 3.2.0 erzeugt (alle
-> automatischen Prüfungen bestanden), SVG über den Export der HTML-Ansicht
-> („SVG · Light“), PNG daraus in doppelter Größe gerendert.
+> **Stand der B-API-Fassungen:**
+>
+> - **Map** (`metadata-agent-architektur-b-api.*`): am 15.11.2026 für 4.0.0
+>   neu gezeichnet. Neu sind der Rahmen um den Pod des Agenten
+>   (NetworkPolicy), der interne Port als eigener Service, die Versionen und
+>   in den Erläuterungen der Cache-Vorlauf mit Haltepunkt. Jede Komponente
+>   nennt ihre Stelle im Code; die Verweise in der HTML-Ansicht öffnen das
+>   GitHub-Repository am Commit `7eac5e1`.
+> - **Ablauf** (`metadata-agent-ablauf-b-api.*`): vom 13.11.2026, im Titel
+>   steht noch 3.0.1. Er gilt weiter, mit einer Abweichung: Seit 4.0.0 läuft
+>   der Cache-Vorlauf gleichzeitig mit der Erkennung der Inhaltsart.
+>
+> Beide mit Archify 3.2.0 erzeugt (alle automatischen Prüfungen bestanden),
+> SVG über den Export der HTML-Ansicht („SVG · Light“), PNG daraus in
+> doppelter Größe gerendert.
 
 | Datei | Zweck |
 |---|---|
@@ -54,5 +65,9 @@ Es gibt zwei Sätze, je eine Map und einen Anfrageablauf:
    das PNG wurde es mit eingebetteten Stilen und Schriften auf weißem
    Hintergrund in doppelter Größe gerendert.
 
-Die Map beschreibt das System, nicht einzelne Commits; sie verweist nicht auf
-Quelldateien.
+Die Maps für den direkten Betrieb beschreiben das System, nicht einzelne
+Commits; sie verweisen nicht auf Quelldateien. Die Map für den Betrieb über die
+B-API verweist auf Quelldateien an einem festen Commit (`meta.repository` in
+ihrer JSON-Quelle). Wer sie ändert, trägt dort den neuen Commit ein, passt die
+Zeilenangaben an und gibt `finalize` einen sauberen Checkout dieses Commits mit:
+`--repo-root <Checkout>`.

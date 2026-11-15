@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg viewBox="0 0 1660 638" role="img" lang="de" aria-labelledby="archify-diagram-title archify-diagram-description" data-animation="trace" data-preset="classic" data-quality-profile="showcase" data-node-ui="" data-reader-fit="intrinsic-height" data-reader-min-text="7.5" data-reader-primary-text="14" style="--flow-cycle: 5.608s; width: 1660px; height: 638px; min-width: 0px;" width="1660" height="638" xmlns="http://www.w3.org/2000/svg" data-theme="light"><style>
+<svg viewBox="0 0 1770 808" role="img" lang="de" aria-labelledby="archify-diagram-title archify-diagram-description" data-animation="trace" data-preset="classic" data-quality-profile="showcase" data-node-ui="" data-reader-fit="intrinsic-height" data-reader-min-text="7.5" data-reader-primary-text="14" style="--flow-cycle: 5.797s; width: 1770px; height: 808px; min-width: 0px;" width="1770" height="808" xmlns="http://www.w3.org/2000/svg" data-theme="light"><style>
 /*
 JetBrains Mono variable WOFF2 subsets from Google Fonts service revision v24.
 These fixed bytes are shared by the viewer and its SVG/raster exports.
@@ -399,200 +399,200 @@ svg[data-preset="editorial"] { --flow-halo-peak: 0.07; --flow-glow-peak: 0.28; -
 }
 @keyframes archify-relay-ripple { 
   0% { r: 2px; opacity: var(--flow-peak, 0.6); }
-  13.374%, 100% { r: 20px; opacity: 0; }
+  12.938%, 100% { r: 20px; opacity: 0; }
 }
 @keyframes archify-relay-comet-0 { 
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  1.498% { opacity: var(--flow-peak, 0.9); }
-  7.49% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  10.343%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  1.449% { opacity: var(--flow-peak, 0.9); }
+  7.245% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  10.005%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-0 { 
   0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  7.49% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
-  23.539%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  7.245% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
+  22.77%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-1 { 
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  1.656% { opacity: var(--flow-peak, 0.9); }
-  8.279% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  11.132%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  1.602% { opacity: var(--flow-peak, 0.9); }
+  8.009% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  10.769%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-1 { 
   0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  8.279% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
-  24.328%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  8.009% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
+  23.534%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-2 { 
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  1.498% { opacity: var(--flow-peak, 0.9); }
-  7.49% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  10.343%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  1.449% { opacity: var(--flow-peak, 0.9); }
+  7.245% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  10.005%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-2 { 
-  0%, 2.247% { opacity: 0; }
-  7.49% { opacity: var(--flow-peak, 0.3); }
-  23.539%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  0%, 2.174% { opacity: 0; }
+  7.245% { opacity: var(--flow-peak, 0.3); }
+  22.77%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-3 { 
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  1.656% { opacity: var(--flow-peak, 0.9); }
-  8.279% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  11.132%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  1.663% { opacity: var(--flow-peak, 0.9); }
+  8.317% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  11.077%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-3 { 
   0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  8.279% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
-  24.328%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  8.317% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
+  23.842%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-4 { 
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  2.038% { opacity: var(--flow-peak, 0.9); }
-  10.19% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  13.043%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  1.449% { opacity: var(--flow-peak, 0.9); }
+  7.245% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  10.005%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-4 { 
   0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  10.19% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
-  26.239%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  7.245% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
+  22.77%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-5 { 
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  2.14% { opacity: var(--flow-peak, 0.9); }
-  20.315% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  23.168%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  2.07% { opacity: var(--flow-peak, 0.9); }
+  22.609% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  25.369%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-5 { 
   0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  20.315% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
-  36.364%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  22.609% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
+  38.134%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-6 { 
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  2.14% { opacity: var(--flow-peak, 0.9); }
-  20.315% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  23.168%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  2.07% { opacity: var(--flow-peak, 0.9); }
+  16.88% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  19.64%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-6 { 
-  0%, 6.095% { opacity: 0; }
-  20.315% { opacity: var(--flow-peak, 0.3); }
-  36.364%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  0%, 5.064% { opacity: 0; }
+  16.88% { opacity: var(--flow-peak, 0.3); }
+  32.405%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-7 { 
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  1.885% { opacity: var(--flow-peak, 0.9); }
-  9.426% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  12.279%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  1.824% { opacity: var(--flow-peak, 0.9); }
+  9.118% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  11.878%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-7 { 
   0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  9.426% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
-  25.475%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  9.118% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
+  24.643%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-8 { 
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  2.14% { opacity: var(--flow-peak, 0.9); }
-  19.55% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  22.403%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  1.7% { opacity: var(--flow-peak, 0.9); }
+  8.502% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  11.262%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-8 { 
-  0%, 5.865% { opacity: 0; }
-  19.55% { opacity: var(--flow-peak, 0.3); }
-  35.599%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  0%, 2.551% { opacity: 0; }
+  8.502% { opacity: var(--flow-peak, 0.3); }
+  24.027%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-9 { 
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  1.885% { opacity: var(--flow-peak, 0.9); }
-  9.426% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  12.279%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  1.7% { opacity: var(--flow-peak, 0.9); }
+  8.502% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  11.262%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-9 { 
   0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  9.426% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
-  25.475%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  8.502% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
+  24.027%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-comet-10 { 
   0% { stroke-dashoffset: calc(var(--flow-len, 0px) + var(--flow-shift, 0px)); opacity: 0; animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  1.498% { opacity: var(--flow-peak, 0.9); }
-  7.49% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
-  10.343%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
+  1.479% { opacity: var(--flow-peak, 0.9); }
+  7.393% { stroke-dashoffset: var(--flow-shift, 0px); opacity: var(--flow-peak, 0.9); }
+  10.153%, 100% { stroke-dashoffset: var(--flow-shift, 0px); opacity: 0; }
 }
 @keyframes archify-relay-wake-10 { 
   0% { stroke-dashoffset: var(--flow-len, 0px); opacity: var(--flow-peak, 0.3); animation-timing-function: cubic-bezier(0.45, 0.05, 0.35, 1); }
-  7.49% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
-  23.539%, 100% { stroke-dashoffset: 0px; opacity: 0; }
+  7.393% { stroke-dashoffset: 0px; opacity: var(--flow-peak, 0.3); }
+  22.918%, 100% { stroke-dashoffset: 0px; opacity: 0; }
 }
 @keyframes archify-relay-node-0 { 
   0%, 100% { filter: var(--ambient-node-base-filter, none); }
   0% { filter: var(--ambient-node-base-filter, none); }
-  2.14%, 7.49% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
-  21.399% { filter: var(--ambient-node-base-filter, none); }
+  2.07%, 7.245% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
+  20.7% { filter: var(--ambient-node-base-filter, none); }
 }
 @keyframes archify-relay-node-1 { 
   0%, 100% { filter: var(--ambient-node-base-filter, none); }
   0% { filter: var(--ambient-node-base-filter, none); }
-  2.14%, 7.49% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
-  21.399% { filter: var(--ambient-node-base-filter, none); }
+  2.07%, 7.245% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
+  20.7% { filter: var(--ambient-node-base-filter, none); }
 }
 @keyframes archify-relay-node-2 { 
   0%, 100% { filter: var(--ambient-node-base-filter, none); }
-  7.49% { filter: var(--ambient-node-base-filter, none); }
-  9.629%, 14.979% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
-  28.888% { filter: var(--ambient-node-base-filter, none); }
+  7.245% { filter: var(--ambient-node-base-filter, none); }
+  9.315%, 14.49% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
+  27.945% { filter: var(--ambient-node-base-filter, none); }
 }
 @keyframes archify-relay-node-3 { 
   0%, 100% { filter: var(--ambient-node-base-filter, none); }
-  7.49% { filter: var(--ambient-node-base-filter, none); }
-  9.629%, 14.979% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
-  28.888% { filter: var(--ambient-node-base-filter, none); }
+  7.393% { filter: var(--ambient-node-base-filter, none); }
+  9.463%, 14.638% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
+  28.093% { filter: var(--ambient-node-base-filter, none); }
 }
 @keyframes archify-relay-node-4 { 
   0%, 100% { filter: var(--ambient-node-base-filter, none); }
-  17.552% { filter: var(--ambient-node-base-filter, none); }
-  19.692%, 25.042% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
-  38.951% { filter: var(--ambient-node-base-filter, none); }
+  16.979% { filter: var(--ambient-node-base-filter, none); }
+  19.049%, 24.224% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
+  37.679% { filter: var(--ambient-node-base-filter, none); }
 }
 @keyframes archify-relay-node-5 { 
   0%, 100% { filter: var(--ambient-node-base-filter, none); }
-  26.825% { filter: var(--ambient-node-base-filter, none); }
-  28.965%, 34.314% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
-  48.224% { filter: var(--ambient-node-base-filter, none); }
+  25.949% { filter: var(--ambient-node-base-filter, none); }
+  28.019%, 33.194% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
+  46.649% { filter: var(--ambient-node-base-filter, none); }
 }
 @keyframes archify-relay-node-6 { 
   0%, 100% { filter: var(--ambient-node-base-filter, none); }
-  36.887% { filter: var(--ambient-node-base-filter, none); }
-  39.027%, 44.377% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
-  58.286% { filter: var(--ambient-node-base-filter, none); }
+  35.991% { filter: var(--ambient-node-base-filter, none); }
+  38.061%, 43.236% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
+  56.691% { filter: var(--ambient-node-base-filter, none); }
 }
 @keyframes archify-relay-node-7 { 
   0%, 100% { filter: var(--ambient-node-base-filter, none); }
-  38.034% { filter: var(--ambient-node-base-filter, none); }
-  40.174%, 45.523% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
-  59.432% { filter: var(--ambient-node-base-filter, none); }
+  36.792% { filter: var(--ambient-node-base-filter, none); }
+  38.862%, 44.037% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
+  57.492% { filter: var(--ambient-node-base-filter, none); }
 }
 @keyframes archify-relay-node-8 { 
   0%, 100% { filter: var(--ambient-node-base-filter, none); }
-  48.158% { filter: var(--ambient-node-base-filter, none); }
-  50.298%, 55.648% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
-  69.557% { filter: var(--ambient-node-base-filter, none); }
+  36.176% { filter: var(--ambient-node-base-filter, none); }
+  38.246%, 43.421% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
+  56.876% { filter: var(--ambient-node-base-filter, none); }
 }
 @keyframes archify-relay-node-9 { 
   0%, 100% { filter: var(--ambient-node-base-filter, none); }
-  48.86% { filter: var(--ambient-node-base-filter, none); }
-  51%, 56.35% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
-  70.259% { filter: var(--ambient-node-base-filter, none); }
+  44.961% { filter: var(--ambient-node-base-filter, none); }
+  47.031%, 52.206% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
+  65.661% { filter: var(--ambient-node-base-filter, none); }
 }
 @keyframes archify-relay-node-10 { 
   0%, 100% { filter: var(--ambient-node-base-filter, none); }
-  58.986% { filter: var(--ambient-node-base-filter, none); }
-  61.126%, 66.475% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
-  80.384% { filter: var(--ambient-node-base-filter, none); }
+  60.325% { filter: var(--ambient-node-base-filter, none); }
+  62.395%, 67.57% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
+  81.025% { filter: var(--ambient-node-base-filter, none); }
 }
 @keyframes archify-relay-node-11 { 
   0%, 100% { filter: var(--ambient-node-base-filter, none); }
-  58.986% { filter: var(--ambient-node-base-filter, none); }
-  61.126%, 66.475% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
-  80.384% { filter: var(--ambient-node-base-filter, none); }
+  54.595% { filter: var(--ambient-node-base-filter, none); }
+  56.665%, 61.84% { filter: var(--ambient-node-base-filter,) drop-shadow(0 0 10px var(--arrow-emphasis)); }
+  75.295% { filter: var(--ambient-node-base-filter, none); }
 }
 svg[data-node-ui] [data-node-id] &gt; rect:not(.c-mask) { stroke-width: 1.25px; }
 :is([data-theme="dark"] svg[data-node-ui], svg[data-node-ui][data-theme="dark"]) [data-node-id] &gt; rect:not(.c-mask).c-frontend { fill: color-mix(in srgb, var(--frontend-stroke) 13%, var(--mask)); stroke: color-mix(in srgb, var(--frontend-stroke) 72%, var(--mask)); }
@@ -614,8 +614,8 @@ svg[data-node-ui] g[data-edge-from] &gt; rect.c-mask { rx: 7px; stroke: var(--la
 svg[data-node-ui][data-preset="blueprint"] :is([data-graph-role="structural-frame-label-mask"], g[data-edge-from] &gt; rect.c-mask, .phase-chip) { rx: 2px; }
 svg[data-node-ui][data-preset="editorial"] :is([data-graph-role="structural-frame-label-mask"], g[data-edge-from] &gt; rect.c-mask, .phase-chip) { rx: 3px; }
 :root, svg { --bg: #f4f5f7; --grid: #e9edf2; --canvas-dot: #e2e7ec; --text: #111827; --text-muted: #5b6474; --text-dim: #9aa3b2; --text-faint: #6b7280; --panel: #ffffff; --panel-border: #e5e7eb; --lane-fill: rgba(248, 250, 252, 0.65); --lane-stroke: #cbd5e1; --arrow: #64748b; --arrow-emphasis: #059669; --mask: #ffffff; --frontend-fill: rgba(34, 211, 238, 0.15); --frontend-stroke: #0891b2; --backend-fill: rgba(52, 211, 153, 0.18); --backend-stroke: #059669; --database-fill: rgba(167, 139, 250, 0.2); --database-stroke: #7c3aed; --cloud-fill: rgba(251, 191, 36, 0.18); --cloud-stroke: #d97706; --security-fill: rgba(251, 113, 133, 0.15); --security-stroke: #e11d48; --messagebus-fill: rgba(251, 146, 60, 0.15); --messagebus-stroke: #ea580c; --external-fill: rgba(148, 163, 184, 0.18); --external-stroke: #64748b; --toolbar-bg: rgba(255, 255, 255, 0.92); --toolbar-border: #cbd5e1; --toolbar-text: #334155; --toolbar-hover: #ffffff; --toolbar-menu-bg: #ffffff; --flow-cycle: ; --flow-halo-peak: ; --flow-glow-peak: ; --flow-tail-peak: ; --flow-head-peak: ; --flow-wake-peak: ; --flow-ripple-peak: ; --flow-peak: ; }
-</style><rect x="0" y="0" width="1660" height="638" fill="#f4f5f7"/>
-        <title id="archify-diagram-title">Metadata Agent – Architektur im Betrieb über die B-API (3.0.1)</title>
+</style><rect x="0" y="0" width="1770" height="808" fill="#f4f5f7"/>
+        <title id="archify-diagram-title">Metadata Agent 4.0.0 – Architektur im Betrieb über die B-API</title>
         <desc id="archify-diagram-description">Ein von Archify erstelltes Architekturdiagramm.</desc>
         <!-- Definitions -->
         <defs>
@@ -661,52 +661,52 @@ svg[data-node-ui][data-preset="editorial"] :is([data-graph-role="structural-fram
         <rect width="100%" height="100%" fill="url(#grid)"/>
 
         <!-- Boundaries (behind everything) -->
-
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="security-group" data-composition-frame-id="0" data-composition-frame-label="Agent-Pod · NetworkPolicy" x="774" y="252" width="442" height="328" rx="8" class="c-security-group" stroke-width="1"/>
 
         <!-- Connection paths (before components for correct z-order) -->
         <g data-graph-role="automatic-crossover" style="--step:0">
-          <path data-graph-role="automatic-crossover-underlay" d="M 170 330 L 230 330" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="editor" data-edge-to="widget" data-edge-label="bearbeitet" data-edge-key="0" data-edge-id="editor-uses-widget" data-composition-points="170,330;230,330" data-composition-crossover="halo" data-composition-independent="true" d="M 170 330 L 230 330" class="a-default" data-animate="edge" style="--step: 0;" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 170 330 L 260 330" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="editor" data-edge-to="widget" data-edge-label="bearbeitet" data-edge-key="0" data-edge-id="editor-uses-widget" data-composition-points="170,330;260,330" data-composition-crossover="halo" data-composition-independent="true" d="M 170 330 L 260 330" class="a-default" data-animate="edge" style="--step: 0;" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:1">
-          <path data-graph-role="automatic-crossover-underlay" d="M 390 330 L 520 330" fill="none" stroke="var(--mask)" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="widget" data-edge-to="proxy" data-edge-label="/generate · JSON" data-edge-key="1" data-edge-id="widget-calls-proxy" data-composition-points="390,330;520,330" data-composition-crossover="halo" data-composition-independent="true" d="M 390 330 L 520 330" class="a-emphasis" data-animate="edge" style="--step: 1;" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 440 330 L 570 330" fill="none" stroke="var(--mask)" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="widget" data-edge-to="proxy" data-edge-label="/generate · JSON" data-edge-key="1" data-edge-id="widget-calls-proxy" data-composition-points="440,330;570,330" data-composition-crossover="halo" data-composition-independent="true" d="M 440 330 L 570 330" class="a-emphasis" data-animate="edge" style="--step: 1;" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:2">
-          <path data-graph-role="automatic-crossover-underlay" d="M 680 323 L 790 323" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="proxy" data-edge-to="agent" data-edge-label="Bearer-Key" data-edge-key="2" data-edge-id="proxy-forwards-key" data-composition-points="680,323;790,323" data-composition-crossover="halo" data-composition-independent="true" d="M 680 323 L 790 323" class="a-security" data-animate="edge" style="--step: 2;" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 730 330 L 840 330" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="proxy" data-edge-to="agent" data-edge-label="Bearer-Key" data-edge-key="2" data-edge-id="proxy-forwards-key" data-composition-points="730,330;840,330" data-composition-crossover="halo" data-composition-independent="true" d="M 730 330 L 840 330" class="a-security" data-animate="edge" style="--step: 2;" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:3">
-          <path data-graph-role="automatic-crossover-underlay" d="M 960 330 L 1090 330" fill="none" stroke="var(--mask)" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="agent" data-edge-to="bapi" data-edge-label="LLM · Text · Orte" data-edge-key="3" data-edge-id="agent-calls-b-api" data-composition-points="960,330;1090,330" data-composition-crossover="halo" data-composition-independent="true" d="M 960 330 L 1090 330" class="a-emphasis" data-animate="edge" style="--step: 3;" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 1100 330 L 1235 330" fill="none" stroke="var(--mask)" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="agent" data-edge-to="bapi" data-edge-label="LLM · Text · Orte" data-edge-key="3" data-edge-id="agent-calls-b-api" data-composition-points="1100,330;1235,330" data-composition-crossover="halo" data-composition-independent="true" d="M 1100 330 L 1235 330" class="a-emphasis" data-animate="edge" style="--step: 3;" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:4">
-          <path data-graph-role="automatic-crossover-underlay" d="M 1280 330 L 1440 330" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="bapi" data-edge-to="models" data-edge-label="Route / Modell" data-edge-key="4" data-edge-id="b-api-routes-model" data-composition-points="1280,330;1440,330" data-composition-crossover="halo" data-composition-independent="true" d="M 1280 330 L 1440 330" class="a-default" data-animate="edge" style="--step: 4;" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 1425 330 L 1540 330" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="bapi" data-edge-to="models" data-edge-label="Route / Modell" data-edge-key="4" data-edge-id="b-api-routes-model" data-composition-points="1425,330;1540,330" data-composition-crossover="halo" data-composition-independent="true" d="M 1425 330 L 1540 330" class="a-default" data-animate="edge" style="--step: 4;" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:5">
-          <path data-graph-role="automatic-crossover-underlay" d="M 1264 300 L 1264 162 Q 1264 154 1272 154 L 1440 154" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="bapi" data-edge-to="extraction" data-edge-label="URL → Text" data-edge-key="5" data-edge-id="b-api-extracts-text" data-composition-points="1264,300;1264,154;1440,154" data-composition-crossover="halo" data-composition-independent="true" d="M 1264 300 L 1264 162 Q 1264 154 1272 154 L 1440 154" class="a-default" data-animate="edge" style="--step: 5;" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 1330 300 L 1330 148 Q 1330 140 1338 140 L 1540 140" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="bapi" data-edge-to="extraction" data-edge-label="URL → Text" data-edge-key="5" data-edge-id="b-api-extracts-text" data-composition-points="1330,300;1330,140;1540,140" data-composition-crossover="halo" data-composition-independent="true" d="M 1330 300 L 1330 148 Q 1330 140 1338 140 L 1540 140" class="a-default" data-animate="edge" style="--step: 5;" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:6">
-          <path data-graph-role="automatic-crossover-underlay" d="M 1264 360 L 1264 498 Q 1264 506 1272 506 L 1440 506" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="bapi" data-edge-to="geocoder" data-edge-label="Orte" data-edge-key="6" data-edge-id="b-api-geocodes" data-composition-points="1264,360;1264,506;1440,506" data-composition-crossover="halo" data-composition-independent="true" d="M 1264 360 L 1264 498 Q 1264 506 1272 506 L 1440 506" class="a-dashed" data-animate="edge" style="--step: 6;" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 1409 360 L 1409 498 Q 1409 506 1417 506 L 1540 506" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="bapi" data-edge-to="geocoder" data-edge-label="Orte" data-edge-key="6" data-edge-id="b-api-geocodes" data-composition-points="1409,360;1409,506;1540,506" data-composition-crossover="halo" data-composition-independent="true" d="M 1409 360 L 1409 498 Q 1409 506 1417 506 L 1540 506" class="a-dashed" data-animate="edge" style="--step: 6;" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:7">
-          <path data-graph-role="automatic-crossover-underlay" d="M 875 298 L 875 150" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="agent" data-edge-to="repository" data-edge-label="lesen · schreiben" data-edge-key="7" data-edge-id="agent-reads-repository" data-composition-points="875,298;875,150" data-composition-crossover="halo" data-composition-independent="true" d="M 875 298 L 875 150" class="a-default" data-animate="edge" style="--step: 7;" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 970 298 L 970 150" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="agent" data-edge-to="repository" data-edge-label="lesen · schreiben" data-edge-key="7" data-edge-id="agent-reads-repository" data-composition-points="970,298;970,150" data-composition-crossover="halo" data-composition-independent="true" d="M 970 298 L 970 150" class="a-default" data-animate="edge" style="--step: 7;" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:8">
-          <path data-graph-role="automatic-crossover-underlay" d="M 790 337 L 743 337 Q 735 337 735 345 L 735 532 Q 735 540 727 540 L 680 540" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="agent" data-edge-to="chromium" data-edge-label="Screenshot" data-edge-key="8" data-edge-id="agent-screenshots" data-composition-points="790,337;735,337;735,540;680,540" data-composition-crossover="halo" data-composition-independent="true" d="M 790 337 L 743 337 Q 735 337 735 345 L 735 532 Q 735 540 727 540 L 680 540" class="a-dashed" data-animate="edge" style="--step: 8;" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 954 362 L 954 500" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="agent" data-edge-to="chromium" data-edge-label="Screenshot" data-edge-key="8" data-edge-id="agent-screenshots" data-composition-points="954,362;954,500" data-composition-crossover="halo" data-composition-independent="true" d="M 954 362 L 954 500" class="a-dashed" data-animate="edge" style="--step: 8;" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:9">
-          <path data-graph-role="automatic-crossover-underlay" d="M 875 362 L 875 510" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="agent" data-edge-to="internal" data-edge-label="2. Server" data-edge-key="9" data-edge-id="agent-serves-internal" data-composition-points="875,362;875,510" data-composition-crossover="halo" data-composition-independent="true" d="M 875 362 L 875 510" class="a-default" data-animate="edge" style="--step: 9;" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 1006 362 L 1006 500" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="agent" data-edge-to="internal" data-edge-label="2. Server" data-edge-key="9" data-edge-id="agent-serves-internal" data-composition-points="1006,362;1006,500" data-composition-crossover="halo" data-composition-independent="true" d="M 1006 362 L 1006 500" class="a-default" data-animate="edge" style="--step: 9;" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:10">
-          <path data-graph-role="automatic-crossover-underlay" d="M 1070 540 L 960 540" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="ops" data-edge-to="internal" data-edge-label="Probes · /metrics" data-edge-key="10" data-edge-id="ops-probes-internal" data-composition-points="1070,540;960,540" data-composition-crossover="halo" data-composition-independent="true" d="M 1070 540 L 960 540" class="a-default" data-animate="edge" style="--step: 10;" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 1080 680 L 1080 560" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="ops" data-edge-to="internal" data-edge-label="Probes · /metrics" data-edge-key="10" data-edge-id="ops-probes-internal" data-composition-points="1080,680;1080,560" data-composition-crossover="halo" data-composition-independent="true" d="M 1080 680 L 1080 560" class="a-default" data-animate="edge" style="--step: 10;" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         </g>
 
         <!-- Components -->
@@ -722,215 +722,220 @@ svg[data-node-ui][data-preset="editorial"] :is([data-graph-role="structural-fram
         <text x="105" y="344" class="t-muted" font-size="9" text-anchor="middle">Browser · edu-sharing</text>
         </g>
 
-        <g id="node-widget" data-node-id="widget" data-node-label="Webkomponente" tabindex="0" role="button" aria-label="Webkomponente fokussieren, metadata-agent-canvas, Architekturkomponente" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="metadata-agent-canvas" data-node-tag="Angular 21" data-node-context="Architekturkomponente">
-          <title>Webkomponente · metadata-agent-canvas · Architekturkomponente · Angular 21</title>
-          <rect x="230" y="300" width="160" height="60" rx="8" class="c-mask"/>
-          <rect x="230" y="300" width="160" height="60" rx="8" class="c-frontend" data-animate="node" style="--step: 1; --flow-node-name: archify-relay-node-2;" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(236 306) scale(0.6875)">
+        <g id="node-widget" data-node-id="widget" data-node-label="Webkomponente" tabindex="0" role="button" aria-label="Webkomponente fokussieren, metadata-agent-canvas 4.0.0, Architekturkomponente" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="metadata-agent-canvas 4.0.0" data-node-tag="Angular 21" data-node-context="Architekturkomponente">
+          <title>Webkomponente · metadata-agent-canvas 4.0.0 · Architekturkomponente · Angular 21</title>
+          <rect x="260" y="300" width="180" height="60" rx="8" class="c-mask"/>
+          <rect x="260" y="300" width="180" height="60" rx="8" class="c-frontend" data-animate="node" style="--step: 1; --flow-node-name: archify-relay-node-2;" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(266 306) scale(0.6875)">
             <rect x="2" y="3" width="12" height="10" rx="2"/>
             <path d="M2 6.5h12"/>
             <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
             <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
           </g>
-          <text data-node-label="" x="310" y="328" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Webkomponente</text>
-        <text x="310" y="344" class="t-muted" font-size="9" text-anchor="middle">metadata-agent-canvas</text>
-        <text x="310" y="352" class="t-frontend" font-size="7" text-anchor="middle">Angular 21</text>
+          <text data-node-label="" x="350" y="328" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Webkomponente</text>
+        <text x="350" y="344" class="t-muted" font-size="9" text-anchor="middle">metadata-agent-canvas 4.0.0</text>
+        <text x="350" y="352" class="t-frontend" font-size="7" text-anchor="middle">Angular 21</text>
         </g>
 
         <g id="node-proxy" data-node-id="proxy" data-node-label="B-API-Proxy" tabindex="0" role="button" aria-label="B-API-Proxy fokussieren, /api/v1/proxy, Architekturkomponente" aria-pressed="false" data-node-kind="security" data-node-sublabel="/api/v1/proxy" data-node-tag="forwardApiKey" data-node-context="Architekturkomponente">
           <title>B-API-Proxy · /api/v1/proxy · Architekturkomponente · forwardApiKey</title>
-          <rect x="520" y="300" width="160" height="60" rx="8" class="c-mask"/>
-          <rect x="520" y="300" width="160" height="60" rx="8" class="c-security" data-animate="node" style="--step: 2; --flow-node-name: archify-relay-node-4;" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(526 306) scale(0.6875)">
+          <rect x="570" y="300" width="160" height="60" rx="8" class="c-mask"/>
+          <rect x="570" y="300" width="160" height="60" rx="8" class="c-security" data-animate="node" style="--step: 2; --flow-node-name: archify-relay-node-4;" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(576 306) scale(0.6875)">
             <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
             <path d="m5.8 8 1.5 1.5 3-3"/>
           </g>
-          <text data-node-label="" x="600" y="328" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">B-API-Proxy</text>
-        <text x="600" y="344" class="t-muted" font-size="9" text-anchor="middle">/api/v1/proxy</text>
-        <text x="600" y="352" class="t-security" font-size="7" text-anchor="middle">forwardApiKey</text>
+          <text data-node-label="" x="650" y="328" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">B-API-Proxy</text>
+        <text x="650" y="344" class="t-muted" font-size="9" text-anchor="middle">/api/v1/proxy</text>
+        <text x="650" y="352" class="t-security" font-size="7" text-anchor="middle">forwardApiKey</text>
         </g>
 
-        <g id="node-agent" data-node-id="agent" data-node-label="Metadata Agent" tabindex="0" role="button" aria-label="Metadata Agent fokussieren, FastAPI :8000, Architekturkomponente" aria-pressed="false" data-node-kind="backend" data-node-sublabel="FastAPI :8000" data-node-tag="3.0.1" data-node-context="Architekturkomponente">
-          <title>Metadata Agent · FastAPI :8000 · Architekturkomponente · 3.0.1</title>
-          <rect x="790" y="298" width="170" height="64" rx="8" class="c-mask"/>
-          <rect x="790" y="298" width="170" height="64" rx="8" class="c-backend" data-animate="node" style="--step: 3; --flow-node-name: archify-relay-node-5;" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(796 304) scale(0.6875)">
+        <g id="node-agent" data-node-id="agent" data-node-label="Metadata Agent" tabindex="0" role="button" aria-label="Metadata Agent fokussieren, FastAPI :8000, Agent-Pod · NetworkPolicy" aria-pressed="false" data-node-kind="backend" data-node-sublabel="FastAPI :8000" data-node-tag="4.0.0" data-node-context="Agent-Pod · NetworkPolicy">
+          <title>Metadata Agent · FastAPI :8000 · Agent-Pod · NetworkPolicy · 4.0.0</title>
+          <rect x="840" y="298" width="260" height="64" rx="8" class="c-mask"/>
+          <rect x="840" y="298" width="260" height="64" rx="8" class="c-backend" data-animate="node" style="--step: 3; --flow-node-name: archify-relay-node-5;" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(846 304) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" x="875" y="328" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Metadata Agent</text>
-        <text x="875" y="344" class="t-muted" font-size="9" text-anchor="middle">FastAPI :8000</text>
-        <text x="875" y="354" class="t-backend" font-size="7" text-anchor="middle">3.0.1</text>
+          <text data-node-label="" x="970" y="328" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Metadata Agent</text>
+        <text x="970" y="344" class="t-muted" font-size="9" text-anchor="middle">FastAPI :8000</text>
+        <text x="970" y="354" class="t-backend" font-size="7" text-anchor="middle">4.0.0</text>
         </g>
 
         <g id="node-bapi" data-node-id="bapi" data-node-label="B-API" tabindex="0" role="button" aria-label="B-API fokussieren, LLM · Proxy-Dienste, Architekturkomponente" aria-pressed="false" data-node-kind="cloud" data-node-sublabel="LLM · Proxy-Dienste" data-node-tag="ein Schlüssel" data-node-context="Architekturkomponente">
           <title>B-API · LLM · Proxy-Dienste · Architekturkomponente · ein Schlüssel</title>
-          <rect x="1090" y="300" width="190" height="60" rx="8" class="c-mask"/>
-          <rect x="1090" y="300" width="190" height="60" rx="8" class="c-cloud" data-animate="node" style="--step: 4; --flow-node-name: archify-relay-node-6;" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="cloud" class="semantic-sigil s-cloud" transform="translate(1096 306) scale(0.6875)">
+          <rect x="1235" y="300" width="190" height="60" rx="8" class="c-mask"/>
+          <rect x="1235" y="300" width="190" height="60" rx="8" class="c-cloud" data-animate="node" style="--step: 4; --flow-node-name: archify-relay-node-6;" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="cloud" class="semantic-sigil s-cloud" transform="translate(1241 306) scale(0.6875)">
             <path d="M4.3 12.5h7.3a2.4 2.4 0 0 0 .2-4.8 4 4 0 0 0-7.5-1.3A3.1 3.1 0 0 0 4.3 12.5Z"/>
           </g>
-          <text data-node-label="" x="1185" y="328" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">B-API</text>
-        <text x="1185" y="344" class="t-muted" font-size="9" text-anchor="middle">LLM · Proxy-Dienste</text>
-        <text x="1185" y="352" class="t-cloud" font-size="7" text-anchor="middle">ein Schlüssel</text>
+          <text data-node-label="" x="1330" y="328" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">B-API</text>
+        <text x="1330" y="344" class="t-muted" font-size="9" text-anchor="middle">LLM · Proxy-Dienste</text>
+        <text x="1330" y="352" class="t-cloud" font-size="7" text-anchor="middle">ein Schlüssel</text>
         </g>
 
         <g id="node-extraction" data-node-id="extraction" data-node-label="Textextraktion" tabindex="0" role="button" aria-label="Textextraktion fokussieren, proxy/text-extraction, Architekturkomponente" aria-pressed="false" data-node-kind="backend" data-node-sublabel="proxy/text-extraction" data-node-context="Architekturkomponente">
           <title>Textextraktion · proxy/text-extraction · Architekturkomponente</title>
-          <rect x="1440" y="110" width="180" height="60" rx="8" class="c-mask"/>
-          <rect x="1440" y="110" width="180" height="60" rx="8" class="c-backend" data-animate="node" style="--step: 6; --flow-node-name: archify-relay-node-10;" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(1446 116) scale(0.6875)">
+          <rect x="1540" y="110" width="190" height="60" rx="8" class="c-mask"/>
+          <rect x="1540" y="110" width="190" height="60" rx="8" class="c-backend" data-animate="node" style="--step: 6; --flow-node-name: archify-relay-node-10;" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(1546 116) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" x="1530" y="138" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Textextraktion</text>
-        <text x="1530" y="154" class="t-muted" font-size="9" text-anchor="middle">proxy/text-extraction</text>
+          <text data-node-label="" x="1635" y="138" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Textextraktion</text>
+        <text x="1635" y="154" class="t-muted" font-size="9" text-anchor="middle">proxy/text-extraction</text>
         </g>
 
-        <g id="node-models" data-node-id="models" data-node-label="KI-Modelle" tabindex="0" role="button" aria-label="KI-Modelle fokussieren, OpenAI · GWDG AcademicCloud, Architekturkomponente" aria-pressed="false" data-node-kind="external" data-node-sublabel="OpenAI · GWDG AcademicCloud" data-node-context="Architekturkomponente">
-          <title>KI-Modelle · OpenAI · GWDG AcademicCloud · Architekturkomponente</title>
-          <rect x="1440" y="300" width="180" height="60" rx="8" class="c-mask"/>
-          <rect x="1440" y="300" width="180" height="60" rx="8" class="c-external" data-animate="node" style="--step: 5; --flow-node-name: archify-relay-node-9;" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(1446 306) scale(0.6875)">
+        <g id="node-models" data-node-id="models" data-node-label="KI-Modelle" tabindex="0" role="button" aria-label="KI-Modelle fokussieren, OpenAI · GWDG AcademicCloud, Architekturkomponente" aria-pressed="false" data-node-kind="external" data-node-sublabel="OpenAI · GWDG AcademicCloud" data-node-tag="bis 20 parallel" data-node-context="Architekturkomponente">
+          <title>KI-Modelle · OpenAI · GWDG AcademicCloud · Architekturkomponente · bis 20 parallel</title>
+          <rect x="1540" y="300" width="190" height="60" rx="8" class="c-mask"/>
+          <rect x="1540" y="300" width="190" height="60" rx="8" class="c-external" data-animate="node" style="--step: 5; --flow-node-name: archify-relay-node-9;" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(1546 306) scale(0.6875)">
             <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
             <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
           </g>
-          <text data-node-label="" x="1530" y="328" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">KI-Modelle</text>
-        <text x="1530" y="344" class="t-muted" font-size="9" text-anchor="middle">OpenAI · GWDG AcademicCloud</text>
+          <text data-node-label="" x="1635" y="328" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">KI-Modelle</text>
+        <text x="1635" y="344" class="t-muted" font-size="9" text-anchor="middle">OpenAI · GWDG AcademicCloud</text>
+        <text x="1635" y="352" class="t-external" font-size="7" text-anchor="middle">bis 20 parallel</text>
         </g>
 
         <g id="node-geocoder" data-node-id="geocoder" data-node-label="Photon-Geocoder" tabindex="0" role="button" aria-label="Photon-Geocoder fokussieren, proxy/photon_geocoding, Architekturkomponente" aria-pressed="false" data-node-kind="external" data-node-sublabel="proxy/photon_geocoding" data-node-context="Architekturkomponente">
           <title>Photon-Geocoder · proxy/photon_geocoding · Architekturkomponente</title>
-          <rect x="1440" y="490" width="180" height="60" rx="8" class="c-mask"/>
-          <rect x="1440" y="490" width="180" height="60" rx="8" class="c-external" data-animate="node" style="--step: 7; --flow-node-name: archify-relay-node-11;" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(1446 496) scale(0.6875)">
+          <rect x="1540" y="490" width="190" height="60" rx="8" class="c-mask"/>
+          <rect x="1540" y="490" width="190" height="60" rx="8" class="c-external" data-animate="node" style="--step: 7; --flow-node-name: archify-relay-node-11;" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(1546 496) scale(0.6875)">
             <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
             <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
           </g>
-          <text data-node-label="" x="1530" y="518" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Photon-Geocoder</text>
-        <text x="1530" y="534" class="t-muted" font-size="9" text-anchor="middle">proxy/photon_geocoding</text>
+          <text data-node-label="" x="1635" y="518" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Photon-Geocoder</text>
+        <text x="1635" y="534" class="t-muted" font-size="9" text-anchor="middle">proxy/photon_geocoding</text>
         </g>
 
         <g id="node-repository" data-node-id="repository" data-node-label="edu-sharing Repository" tabindex="0" role="button" aria-label="edu-sharing Repository fokussieren, REST: Node, Upload, Architekturkomponente" aria-pressed="false" data-node-kind="database" data-node-sublabel="REST: Node, Upload" data-node-context="Architekturkomponente">
           <title>edu-sharing Repository · REST: Node, Upload · Architekturkomponente</title>
-          <rect x="790" y="90" width="170" height="60" rx="8" class="c-mask"/>
-          <rect x="790" y="90" width="170" height="60" rx="8" class="c-database" data-animate="node" style="--step: 8; --flow-node-name: archify-relay-node-7;" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(796 96) scale(0.6875)">
+          <rect x="895" y="90" width="180" height="60" rx="8" class="c-mask"/>
+          <rect x="895" y="90" width="180" height="60" rx="8" class="c-database" data-animate="node" style="--step: 8; --flow-node-name: archify-relay-node-7;" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(901 96) scale(0.6875)">
             <ellipse cx="8" cy="4" rx="5" ry="2"/>
             <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
           </g>
-          <text data-node-label="" x="875" y="118" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">edu-sharing Repository</text>
-        <text x="875" y="134" class="t-muted" font-size="9" text-anchor="middle">REST: Node, Upload</text>
+          <text data-node-label="" x="985" y="118" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">edu-sharing Repository</text>
+        <text x="985" y="134" class="t-muted" font-size="9" text-anchor="middle">REST: Node, Upload</text>
         </g>
 
-        <g id="node-chromium" data-node-id="chromium" data-node-label="Chromium" tabindex="0" role="button" aria-label="Chromium fokussieren, Screenshots im Container, Architekturkomponente" aria-pressed="false" data-node-kind="backend" data-node-sublabel="Screenshots im Container" data-node-context="Architekturkomponente">
-          <title>Chromium · Screenshots im Container · Architekturkomponente</title>
-          <rect x="520" y="510" width="160" height="60" rx="8" class="c-mask"/>
-          <rect x="520" y="510" width="160" height="60" rx="8" class="c-backend" data-animate="node" style="--step: 9; --flow-node-name: archify-relay-node-8;" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(526 516) scale(0.6875)">
+        <g id="node-chromium" data-node-id="chromium" data-node-label="Chromium" tabindex="0" role="button" aria-label="Chromium fokussieren, Screenshots im Container, Agent-Pod · NetworkPolicy" aria-pressed="false" data-node-kind="backend" data-node-sublabel="Screenshots im Container" data-node-context="Agent-Pod · NetworkPolicy">
+          <title>Chromium · Screenshots im Container · Agent-Pod · NetworkPolicy</title>
+          <rect x="820" y="500" width="150" height="60" rx="8" class="c-mask"/>
+          <rect x="820" y="500" width="150" height="60" rx="8" class="c-backend" data-animate="node" style="--step: 9; --flow-node-name: archify-relay-node-8;" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(826 506) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" x="600" y="538" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Chromium</text>
-        <text x="600" y="554" class="t-muted" font-size="9" text-anchor="middle">Screenshots im Container</text>
+          <text data-node-label="" x="895" y="528" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Chromium</text>
+        <text x="895" y="544" class="t-muted" font-size="9" text-anchor="middle">Screenshots im Container</text>
         </g>
 
-        <g id="node-internal" data-node-id="internal" data-node-label="Interner Port" tabindex="0" role="button" aria-label="Interner Port fokussieren, :9000 /health /ready /metrics, Architekturkomponente" aria-pressed="false" data-node-kind="security" data-node-sublabel=":9000 /health /ready /metrics" data-node-context="Architekturkomponente">
-          <title>Interner Port · :9000 /health /ready /metrics · Architekturkomponente</title>
-          <rect x="790" y="510" width="170" height="60" rx="8" class="c-mask"/>
-          <rect x="790" y="510" width="170" height="60" rx="8" class="c-security" data-animate="node" style="--step: 10; --flow-node-name: archify-relay-node-3;" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(796 516) scale(0.6875)">
+        <g id="node-internal" data-node-id="internal" data-node-label="Interner Port" tabindex="0" role="button" aria-label="Interner Port fokussieren, :9000 /health /ready /metrics, Agent-Pod · NetworkPolicy" aria-pressed="false" data-node-kind="security" data-node-sublabel=":9000 /health /ready /metrics" data-node-tag="eigener Service" data-node-context="Agent-Pod · NetworkPolicy">
+          <title>Interner Port · :9000 /health /ready /metrics · Agent-Pod · NetworkPolicy · eigener Service</title>
+          <rect x="990" y="500" width="180" height="60" rx="8" class="c-mask"/>
+          <rect x="990" y="500" width="180" height="60" rx="8" class="c-security" data-animate="node" style="--step: 10; --flow-node-name: archify-relay-node-3;" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(996 506) scale(0.6875)">
             <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
             <path d="m5.8 8 1.5 1.5 3-3"/>
           </g>
-          <text data-node-label="" x="875" y="538" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Interner Port</text>
-        <text x="875" y="554" class="t-muted" font-size="9" text-anchor="middle">:9000 /health /ready /metrics</text>
+          <text data-node-label="" x="1080" y="528" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Interner Port</text>
+        <text x="1080" y="544" class="t-muted" font-size="9" text-anchor="middle">:9000 /health /ready /metrics</text>
+        <text x="1080" y="552" class="t-security" font-size="7" text-anchor="middle">eigener Service</text>
         </g>
 
-        <g id="node-ops" data-node-id="ops" data-node-label="Kubernetes · Prometheus" tabindex="0" role="button" aria-label="Kubernetes · Prometheus fokussieren, Probes · Metriken, Architekturkomponente" aria-pressed="false" data-node-kind="external" data-node-sublabel="Probes · Metriken" data-node-context="Architekturkomponente">
-          <title>Kubernetes · Prometheus · Probes · Metriken · Architekturkomponente</title>
-          <rect x="1070" y="510" width="190" height="60" rx="8" class="c-mask"/>
-          <rect x="1070" y="510" width="190" height="60" rx="8" class="c-external" data-animate="node" style="--step: 10; --flow-node-name: archify-relay-node-1;" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(1076 516) scale(0.6875)">
+        <g id="node-ops" data-node-id="ops" data-node-label="Kubernetes · Prometheus" tabindex="0" role="button" aria-label="Kubernetes · Prometheus fokussieren, Probes · Metriken · Alarme, Architekturkomponente" aria-pressed="false" data-node-kind="external" data-node-sublabel="Probes · Metriken · Alarme" data-node-context="Architekturkomponente">
+          <title>Kubernetes · Prometheus · Probes · Metriken · Alarme · Architekturkomponente</title>
+          <rect x="985" y="680" width="190" height="60" rx="8" class="c-mask"/>
+          <rect x="985" y="680" width="190" height="60" rx="8" class="c-external" data-animate="node" style="--step: 10; --flow-node-name: archify-relay-node-1;" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(991 686) scale(0.6875)">
             <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
             <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
           </g>
-          <text data-node-label="" x="1165" y="538" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Kubernetes · Prometheus</text>
-        <text x="1165" y="554" class="t-muted" font-size="9" text-anchor="middle">Probes · Metriken</text>
+          <text data-node-label="" x="1080" y="708" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Kubernetes · Prometheus</text>
+        <text x="1080" y="724" class="t-muted" font-size="9" text-anchor="middle">Probes · Metriken · Alarme</text>
         </g>
 
         <!-- Connection labels -->
         <g data-edge-from="editor" data-edge-to="widget" data-edge-label="bearbeitet" data-edge-key="0" data-edge-id="editor-uses-widget">
-          <rect x="171" y="310" width="58" height="14" rx="3" class="c-mask"/>
-          <text x="200" y="320" class="t-edge-default" font-size="8" text-anchor="middle">bearbeitet</text>
+          <rect x="186" y="310" width="58" height="14" rx="3" class="c-mask"/>
+          <text x="215" y="320" class="t-edge-default" font-size="8" text-anchor="middle">bearbeitet</text>
         </g>
         <g data-edge-from="widget" data-edge-to="proxy" data-edge-label="/generate · JSON" data-edge-key="1" data-edge-id="widget-calls-proxy">
-          <rect x="411.6" y="310" width="86.8" height="14" rx="3" class="c-mask"/>
-          <text x="455" y="320" class="t-edge-emphasis" font-size="8" text-anchor="middle">/generate · JSON</text>
+          <rect x="461.6" y="310" width="86.8" height="14" rx="3" class="c-mask"/>
+          <text x="505" y="320" class="t-edge-emphasis" font-size="8" text-anchor="middle">/generate · JSON</text>
         </g>
         <g data-edge-from="proxy" data-edge-to="agent" data-edge-label="Bearer-Key" data-edge-key="2" data-edge-id="proxy-forwards-key">
-          <rect x="706" y="303" width="58" height="14" rx="3" class="c-mask"/>
-          <text x="735" y="313" class="t-edge-security" font-size="8" text-anchor="middle">Bearer-Key</text>
+          <rect x="756" y="310" width="58" height="14" rx="3" class="c-mask"/>
+          <text x="785" y="320" class="t-edge-security" font-size="8" text-anchor="middle">Bearer-Key</text>
         </g>
         <g data-edge-from="agent" data-edge-to="bapi" data-edge-label="LLM · Text · Orte" data-edge-key="3" data-edge-id="agent-calls-b-api">
-          <rect x="979.2" y="310" width="91.6" height="14" rx="3" class="c-mask"/>
-          <text x="1025" y="320" class="t-edge-emphasis" font-size="8" text-anchor="middle">LLM · Text · Orte</text>
+          <rect x="1121.7" y="310" width="91.6" height="14" rx="3" class="c-mask"/>
+          <text x="1167.5" y="320" class="t-edge-emphasis" font-size="8" text-anchor="middle">LLM · Text · Orte</text>
         </g>
         <g data-edge-from="bapi" data-edge-to="models" data-edge-label="Route / Modell" data-edge-key="4" data-edge-id="b-api-routes-model">
-          <rect x="1321.4" y="310" width="77.2" height="14" rx="3" class="c-mask"/>
-          <text x="1360" y="320" class="t-edge-default" font-size="8" text-anchor="middle">Route / Modell</text>
+          <rect x="1443.9" y="310" width="77.2" height="14" rx="3" class="c-mask"/>
+          <text x="1482.5" y="320" class="t-edge-default" font-size="8" text-anchor="middle">Route / Modell</text>
         </g>
         <g data-edge-from="bapi" data-edge-to="extraction" data-edge-label="URL → Text" data-edge-key="5" data-edge-id="b-api-extracts-text">
-          <rect x="1323" y="134" width="58" height="14" rx="3" class="c-mask"/>
-          <text x="1352" y="144" class="t-edge-default" font-size="8" text-anchor="middle">URL → Text</text>
+          <rect x="1406" y="120" width="58" height="14" rx="3" class="c-mask"/>
+          <text x="1435" y="130" class="t-edge-default" font-size="8" text-anchor="middle">URL → Text</text>
         </g>
         <g data-edge-from="bapi" data-edge-to="geocoder" data-edge-label="Orte" data-edge-key="6" data-edge-id="b-api-geocodes">
-          <rect x="1337" y="486" width="30" height="14" rx="3" class="c-mask"/>
-          <text x="1352" y="496" class="t-edge-dashed" font-size="8" text-anchor="middle">Orte</text>
+          <rect x="1459.5" y="486" width="30" height="14" rx="3" class="c-mask"/>
+          <text x="1474.5" y="496" class="t-edge-dashed" font-size="8" text-anchor="middle">Orte</text>
         </g>
         <g data-edge-from="agent" data-edge-to="repository" data-edge-label="lesen · schreiben" data-edge-key="7" data-edge-id="agent-reads-repository">
-          <rect x="829.2" y="278" width="91.6" height="14" rx="3" class="c-mask"/>
-          <text x="875" y="288" class="t-edge-default" font-size="8" text-anchor="middle">lesen · schreiben</text>
+          <rect x="924.2" y="278" width="91.6" height="14" rx="3" class="c-mask"/>
+          <text x="970" y="288" class="t-edge-default" font-size="8" text-anchor="middle">lesen · schreiben</text>
         </g>
         <g data-edge-from="agent" data-edge-to="chromium" data-edge-label="Screenshot" data-edge-key="8" data-edge-id="agent-screenshots">
-          <rect x="706" y="418.5" width="58" height="14" rx="3" class="c-mask"/>
-          <text x="735" y="428.5" class="t-edge-dashed" font-size="8" text-anchor="middle">Screenshot</text>
+          <rect x="890" y="424" width="58" height="14" rx="3" class="c-mask"/>
+          <text x="919" y="434" class="t-edge-dashed" font-size="8" text-anchor="middle">Screenshot</text>
         </g>
         <g data-edge-from="agent" data-edge-to="internal" data-edge-label="2. Server" data-edge-key="9" data-edge-id="agent-serves-internal">
-          <rect x="815.8" y="429" width="53.199999999999996" height="14" rx="3" class="c-mask"/>
-          <text x="842.4" y="439" class="t-edge-default" font-size="8" text-anchor="middle">2. Server</text>
+          <rect x="1011.9999999999999" y="424" width="53.199999999999996" height="14" rx="3" class="c-mask"/>
+          <text x="1038.6" y="434" class="t-edge-default" font-size="8" text-anchor="middle">2. Server</text>
         </g>
         <g data-edge-from="ops" data-edge-to="internal" data-edge-label="Probes · /metrics" data-edge-key="10" data-edge-id="ops-probes-internal">
-          <rect x="969.2" y="520" width="91.6" height="14" rx="3" class="c-mask"/>
-          <text x="1015" y="530" class="t-edge-default" font-size="8" text-anchor="middle">Probes · /metrics</text>
+          <rect x="1034.2" y="660" width="91.6" height="14" rx="3" class="c-mask"/>
+          <text x="1080" y="670" class="t-edge-default" font-size="8" text-anchor="middle">Probes · /metrics</text>
         </g>
 
         <!-- Boundary labels (foreground masks keep routes out of titles) -->
-
+        <g data-graph-role="structural-frame-label" data-composition-frame-id="0" data-composition-frame-kind="security-group" data-composition-frame-label="Agent-Pod · NetworkPolicy">
+          <rect data-graph-role="structural-frame-label-mask" x="1023.8000000000001" y="275" width="181.29033758064512" height="19" rx="3" class="c-mask"/>
+          <text data-boundary-label="" x="1027.8000000000002" y="290.4193558387097" class="t-security" font-size="11.419355838709675" font-weight="600">Agent-Pod · NetworkPolicy</text>
+        </g>
 
         <!-- Legend -->
         <g data-legend="">
-          <text x="40" y="602" class="t-primary" font-size="12" font-weight="650">Legende</text>
-          <g data-legend-semantic-kind="frontend" data-legend-x="40" data-legend-baseline="622" data-legend-width="93">
-            <rect x="40" y="613" width="16" height="10" rx="2.5" class="c-frontend" stroke-width="1"/>
-            <text x="62" y="622" class="t-muted" font-size="10" font-weight="500">Frontend</text>
+          <text x="40" y="772" class="t-primary" font-size="12" font-weight="650">Legende</text>
+          <g data-legend-semantic-kind="frontend" data-legend-x="40" data-legend-baseline="792" data-legend-width="93">
+            <rect x="40" y="783" width="16" height="10" rx="2.5" class="c-frontend" stroke-width="1"/>
+            <text x="62" y="792" class="t-muted" font-size="10" font-weight="500">Frontend</text>
           </g>
-          <g data-legend-semantic-kind="backend" data-legend-x="155" data-legend-baseline="622" data-legend-width="87">
-            <rect x="155" y="613" width="16" height="10" rx="2.5" class="c-backend" stroke-width="1"/>
-            <text x="177" y="622" class="t-muted" font-size="10" font-weight="500">Backend</text>
+          <g data-legend-semantic-kind="backend" data-legend-x="155" data-legend-baseline="792" data-legend-width="87">
+            <rect x="155" y="783" width="16" height="10" rx="2.5" class="c-backend" stroke-width="1"/>
+            <text x="177" y="792" class="t-muted" font-size="10" font-weight="500">Backend</text>
           </g>
-          <g data-legend-semantic-kind="database" data-legend-x="264" data-legend-baseline="622" data-legend-width="99">
-            <rect x="264" y="613" width="16" height="10" rx="2.5" class="c-database" stroke-width="1"/>
-            <text x="286" y="622" class="t-muted" font-size="10" font-weight="500">Datenbank</text>
+          <g data-legend-semantic-kind="database" data-legend-x="264" data-legend-baseline="792" data-legend-width="99">
+            <rect x="264" y="783" width="16" height="10" rx="2.5" class="c-database" stroke-width="1"/>
+            <text x="286" y="792" class="t-muted" font-size="10" font-weight="500">Datenbank</text>
           </g>
-          <g data-legend-semantic-kind="cloud" data-legend-x="385" data-legend-baseline="622" data-legend-width="74">
-            <rect x="385" y="613" width="16" height="10" rx="2.5" class="c-cloud" stroke-width="1"/>
-            <text x="407" y="622" class="t-muted" font-size="10" font-weight="500">Cloud</text>
+          <g data-legend-semantic-kind="cloud" data-legend-x="385" data-legend-baseline="792" data-legend-width="74">
+            <rect x="385" y="783" width="16" height="10" rx="2.5" class="c-cloud" stroke-width="1"/>
+            <text x="407" y="792" class="t-muted" font-size="10" font-weight="500">Cloud</text>
           </g>
-          <g data-legend-semantic-kind="security" data-legend-x="481" data-legend-baseline="622" data-legend-width="105">
-            <rect x="481" y="613" width="16" height="10" rx="2.5" class="c-security" stroke-width="1"/>
-            <text x="503" y="622" class="t-muted" font-size="10" font-weight="500">Sicherheit</text>
+          <g data-legend-semantic-kind="security" data-legend-x="481" data-legend-baseline="792" data-legend-width="105">
+            <rect x="481" y="783" width="16" height="10" rx="2.5" class="c-security" stroke-width="1"/>
+            <text x="503" y="792" class="t-muted" font-size="10" font-weight="500">Sicherheit</text>
           </g>
-          <g data-legend-semantic-kind="external" data-legend-x="608" data-legend-baseline="622" data-legend-width="81">
-            <rect x="608" y="613" width="16" height="10" rx="2.5" class="c-external" stroke-width="1"/>
-            <text x="630" y="622" class="t-muted" font-size="10" font-weight="500">Extern</text>
+          <g data-legend-semantic-kind="external" data-legend-x="608" data-legend-baseline="792" data-legend-width="81">
+            <rect x="608" y="783" width="16" height="10" rx="2.5" class="c-external" stroke-width="1"/>
+            <text x="630" y="792" class="t-muted" font-size="10" font-weight="500">Extern</text>
           </g>
         </g>
       </svg>

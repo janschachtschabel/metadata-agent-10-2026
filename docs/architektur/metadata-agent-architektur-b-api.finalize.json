@@ -5,16 +5,16 @@
   "status": "pass",
   "type": "architecture",
   "quality": "showcase",
-  "startedAt": "2026-11-13T15:12:27.927Z",
+  "startedAt": "2026-11-15T11:43:13.530Z",
   "specification": {
     "path": "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent-3\\docs\\architektur\\metadata-agent-architektur-b-api.json",
-    "sha256": "c1949a69b4ad6eb531d606ac56ea1de608cc8cbfcaacde9c3de13e7fe7fac554",
-    "bytes": 37161
+    "sha256": "6ce12aa95d6db4f81e55a03171d79ba4cf7fcba8f78a50ff3cb2fb0838e686e6",
+    "bytes": 42079
   },
   "artifact": {
     "path": "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent-3\\docs\\architektur\\metadata-agent-architektur-b-api.html",
-    "sha256": "e6298619d064b13679adf7772a22eac1929700b05320b82b7b1d191203300af2",
-    "bytes": 836501
+    "sha256": "df9246b8218662d67840785045824bec9cbf430ad437b25cab2fc0271f426f43",
+    "bytes": 844344
   },
   "stages": {
     "validate": {
@@ -31,6 +31,8 @@
         "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent-3\\docs\\architektur\\metadata-agent-architektur-b-api.html",
         "--quality",
         "showcase",
+        "--repo-root",
+        "C:\\Users\\jan\\AppData\\Local\\Temp\\claude\\c8e4ce0f7ced844a\\d181bcd5-68cb-4345-a515-34f1bfd95a3f\\scratchpad\\gh-sync\\agent",
         "--json"
       ],
       "receipt": {
@@ -38,8 +40,8 @@
         "ok": true,
         "command": "validate",
         "specification": {
-          "sha256": "c1949a69b4ad6eb531d606ac56ea1de608cc8cbfcaacde9c3de13e7fe7fac554",
-          "bytes": 37161
+          "sha256": "6ce12aa95d6db4f81e55a03171d79ba4cf7fcba8f78a50ff3cb2fb0838e686e6",
+          "bytes": 42079
         },
         "validation": {
           "checksPassed": 9,
@@ -54,7 +56,7 @@
     "deliver": {
       "status": "pass",
       "exitCode": 0,
-      "durationMs": 896,
+      "durationMs": 1032,
       "command": [
         "C:\\Program Files\\nodejs\\node.exe",
         "C:\\Users\\jan\\.claude\\skills\\archify\\bin\\archify.mjs",
@@ -64,23 +66,25 @@
         "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent-3\\docs\\architektur\\metadata-agent-architektur-b-api.html",
         "--quality",
         "showcase",
+        "--repo-root",
+        "C:\\Users\\jan\\AppData\\Local\\Temp\\claude\\c8e4ce0f7ced844a\\d181bcd5-68cb-4345-a515-34f1bfd95a3f\\scratchpad\\gh-sync\\agent",
         "--json"
       ],
       "receipt": {
         "schemaVersion": 1,
-        "receiptId": "993c3fb1-7c3e-4207-ab96-b21982b8eff4",
+        "receiptId": "2b877302-3124-4de1-b4f0-ad73137dee0e",
         "ok": true,
         "command": "deliver",
         "type": "architecture",
         "input": "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent-3\\docs\\architektur\\metadata-agent-architektur-b-api.json",
         "output": "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent-3\\docs\\architektur\\metadata-agent-architektur-b-api.html",
         "specification": {
-          "sha256": "c1949a69b4ad6eb531d606ac56ea1de608cc8cbfcaacde9c3de13e7fe7fac554",
-          "bytes": 37161
+          "sha256": "6ce12aa95d6db4f81e55a03171d79ba4cf7fcba8f78a50ff3cb2fb0838e686e6",
+          "bytes": 42079
         },
         "artifact": {
-          "sha256": "e6298619d064b13679adf7772a22eac1929700b05320b82b7b1d191203300af2",
-          "bytes": 836501
+          "sha256": "df9246b8218662d67840785045824bec9cbf430ad437b25cab2fc0271f426f43",
+          "bytes": 844344
         },
         "validation": {
           "checksPassed": 9,
@@ -89,6 +93,12 @@
           "compositionStatus": "pass",
           "errors": 0,
           "warnings": 0
+        },
+        "evidence": {
+          "verified": true,
+          "repository": "https://github.com/janschachtschabel/metadata-agent-10-2026",
+          "revision": "7eac5e1d3bd1db78070171b6834933e1583fe81a",
+          "references": 23
         },
         "diagnostics": [
           {
@@ -154,7 +164,7 @@
     "check": {
       "status": "pass",
       "exitCode": 0,
-      "durationMs": 322,
+      "durationMs": 295,
       "command": [
         "C:\\Program Files\\nodejs\\node.exe",
         "C:\\Users\\jan\\.claude\\skills\\archify\\bin\\archify.mjs",
@@ -166,8 +176,8 @@
         "ok": true,
         "file": "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent-3\\docs\\architektur\\metadata-agent-architektur-b-api.html",
         "artifact": {
-          "sha256": "e6298619d064b13679adf7772a22eac1929700b05320b82b7b1d191203300af2",
-          "bytes": 836501
+          "sha256": "df9246b8218662d67840785045824bec9cbf430ad437b25cab2fc0271f426f43",
+          "bytes": 844344
         },
         "checks": [
           {
@@ -234,16 +244,16 @@
             "containerBorderRuns": 0,
             "labelRouteClearanceIssues": 0,
             "labelCanvasOverflowIssues": 0,
-            "minLabelRouteClearance": 20,
+            "minLabelRouteClearance": 50.1,
             "desktopReadabilityIssues": 0,
             "viewportHeightIssues": 0,
-            "minProjectedNodeTextPx": 6.486746987951808,
-            "maxBends": 2,
+            "minProjectedNodeTextPx": 6.083615819209039,
+            "maxBends": 1,
             "routesOverSuggestedBends": 0,
             "maxStretch": 1,
             "routesOverSuggestedStretch": 0,
-            "minSegmentPx": 55,
-            "minInteriorSegmentPx": 203,
+            "minSegmentPx": 90,
+            "minInteriorSegmentPx": null,
             "shortSegmentCount": 0,
             "shortEndpointSegmentCount": 0,
             "shortInteriorSegmentCount": 0,
@@ -262,10 +272,10 @@
           "leadingSpace": {
             "measured": true,
             "emptyTopPx": 90,
-            "emptyTopRatio": 0.141,
+            "emptyTopRatio": 0.111,
             "occupiedTop": 90,
             "viewBoxTop": 0,
-            "canvasHeight": 638,
+            "canvasHeight": 808,
             "typicalNodeHeight": 60,
             "reviewSuggested": false
           },
@@ -275,7 +285,7 @@
             "availableDiagramWidth": 1346,
             "actualBudgetPx": 1346,
             "actualReaderWidth": 1376,
-            "desiredReaderWidth": 1586.25,
+            "desiredReaderWidth": 1689.375,
             "viewportCap": 1376,
             "limit": "viewport-cap",
             "requestedTargetPx": 7.5,
@@ -289,19 +299,19 @@
               "to": "widget"
             },
             "minimumSourceTextPx": 8,
-            "minimumProjectedTextPx": 6.486746987951808,
-            "semanticTextCount": 35
+            "minimumProjectedTextPx": 6.083615819209039,
+            "semanticTextCount": 36
           },
           "issues": []
         },
         "provenance": "current",
-        "deliveryReceiptId": "993c3fb1-7c3e-4207-ab96-b21982b8eff4"
+        "deliveryReceiptId": "2b877302-3124-4de1-b4f0-ad73137dee0e"
       }
     },
     "browser-check": {
       "status": "pass",
       "exitCode": 0,
-      "durationMs": 3079,
+      "durationMs": 2334,
       "command": [
         "C:\\Program Files\\nodejs\\node.exe",
         "C:\\Users\\jan\\.claude\\skills\\archify\\bin\\archify.mjs",
@@ -319,11 +329,11 @@
         "status": "pass",
         "visualReview": "not-requested",
         "provenance": "current",
-        "deliveryReceiptId": "993c3fb1-7c3e-4207-ab96-b21982b8eff4",
+        "deliveryReceiptId": "2b877302-3124-4de1-b4f0-ad73137dee0e",
         "artifact": {
           "path": "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent-3\\docs\\architektur\\metadata-agent-architektur-b-api.html",
-          "sha256": "e6298619d064b13679adf7772a22eac1929700b05320b82b7b1d191203300af2",
-          "bytes": 836501
+          "sha256": "df9246b8218662d67840785045824bec9cbf430ad437b25cab2fc0271f426f43",
+          "bytes": 844344
         },
         "state": {
           "detail": "read",
@@ -360,14 +370,14 @@
                 "bodyPaddingPx": 12,
                 "headerPx": 52,
                 "diagramChromePx": 78,
-                "svgPx": 517,
+                "svgPx": 614,
                 "cardsPx": 0,
-                "viewBoxHeight": 638
+                "viewBoxHeight": 808
               },
-              "viewBoxWidth": 1660,
-              "minimumProjectedNodeTextPx": 6.486746987951808,
-              "minimumProjectedNonEdgeTextPx": 7.297590361445783,
-              "minimumProjectedEdgeTextPx": 6.486746987951808,
+              "viewBoxWidth": 1770,
+              "minimumProjectedNodeTextPx": 6.083615819209039,
+              "minimumProjectedNonEdgeTextPx": 6.844067796610169,
+              "minimumProjectedEdgeTextPx": 6.083615819209039,
               "minimumProjectedNodeText": "bearbeitet",
               "minimumProjectedNodeTextDetail": "edge",
               "minimumProjectedNodeTextOwner": {
@@ -412,14 +422,14 @@
                 "bodyPaddingPx": 64,
                 "headerPx": 60,
                 "diagramChromePx": 84,
-                "svgPx": 579,
+                "svgPx": 687,
                 "cardsPx": 0,
-                "viewBoxHeight": 638
+                "viewBoxHeight": 808
               },
-              "viewBoxWidth": 1660,
-              "minimumProjectedNodeTextPx": 7.257831325301205,
-              "minimumProjectedNonEdgeTextPx": 8.165060240963856,
-              "minimumProjectedEdgeTextPx": 7.257831325301205,
+              "viewBoxWidth": 1770,
+              "minimumProjectedNodeTextPx": 6.806779661016949,
+              "minimumProjectedNonEdgeTextPx": 7.657627118644068,
+              "minimumProjectedEdgeTextPx": 6.806779661016949,
               "minimumProjectedNodeText": "bearbeitet",
               "minimumProjectedNodeTextDetail": "edge",
               "minimumProjectedNodeTextOwner": {
@@ -464,11 +474,11 @@
                 "bodyPaddingPx": 64,
                 "headerPx": 60,
                 "diagramChromePx": 84,
-                "svgPx": 702,
+                "svgPx": 834,
                 "cardsPx": 0,
-                "viewBoxHeight": 638
+                "viewBoxHeight": 808
               },
-              "viewBoxWidth": 1660,
+              "viewBoxWidth": 1770,
               "minimumProjectedNodeTextPx": 8,
               "minimumProjectedNonEdgeTextPx": 9,
               "minimumProjectedEdgeTextPx": 8,
@@ -516,11 +526,11 @@
                 "bodyPaddingPx": 64,
                 "headerPx": 68,
                 "diagramChromePx": 94,
-                "svgPx": 719,
+                "svgPx": 854,
                 "cardsPx": 0,
-                "viewBoxHeight": 638
+                "viewBoxHeight": 808
               },
-              "viewBoxWidth": 1660,
+              "viewBoxWidth": 1770,
               "minimumProjectedNodeTextPx": 8,
               "minimumProjectedNonEdgeTextPx": 9,
               "minimumProjectedEdgeTextPx": 8,
@@ -621,14 +631,14 @@
                 "bodyPaddingPx": 12,
                 "headerPx": 52,
                 "diagramChromePx": 78,
-                "svgPx": 517,
+                "svgPx": 614,
                 "cardsPx": 0,
-                "viewBoxHeight": 638
+                "viewBoxHeight": 808
               },
-              "viewBoxWidth": 1660,
-              "minimumProjectedNodeTextPx": 6.486746987951808,
-              "minimumProjectedNonEdgeTextPx": 7.297590361445783,
-              "minimumProjectedEdgeTextPx": 6.486746987951808,
+              "viewBoxWidth": 1770,
+              "minimumProjectedNodeTextPx": 6.083615819209039,
+              "minimumProjectedNonEdgeTextPx": 6.844067796610169,
+              "minimumProjectedEdgeTextPx": 6.083615819209039,
               "minimumProjectedNodeText": "bearbeitet",
               "minimumProjectedNodeTextDetail": "edge",
               "minimumProjectedNodeTextOwner": {
@@ -673,14 +683,14 @@
                 "bodyPaddingPx": 64,
                 "headerPx": 60,
                 "diagramChromePx": 84,
-                "svgPx": 579,
+                "svgPx": 687,
                 "cardsPx": 0,
-                "viewBoxHeight": 638
+                "viewBoxHeight": 808
               },
-              "viewBoxWidth": 1660,
-              "minimumProjectedNodeTextPx": 7.257831325301205,
-              "minimumProjectedNonEdgeTextPx": 8.165060240963856,
-              "minimumProjectedEdgeTextPx": 7.257831325301205,
+              "viewBoxWidth": 1770,
+              "minimumProjectedNodeTextPx": 6.806779661016949,
+              "minimumProjectedNonEdgeTextPx": 7.657627118644068,
+              "minimumProjectedEdgeTextPx": 6.806779661016949,
               "minimumProjectedNodeText": "bearbeitet",
               "minimumProjectedNodeTextDetail": "edge",
               "minimumProjectedNodeTextOwner": {
@@ -725,11 +735,11 @@
                 "bodyPaddingPx": 64,
                 "headerPx": 60,
                 "diagramChromePx": 84,
-                "svgPx": 702,
+                "svgPx": 834,
                 "cardsPx": 0,
-                "viewBoxHeight": 638
+                "viewBoxHeight": 808
               },
-              "viewBoxWidth": 1660,
+              "viewBoxWidth": 1770,
               "minimumProjectedNodeTextPx": 8,
               "minimumProjectedNonEdgeTextPx": 9,
               "minimumProjectedEdgeTextPx": 8,
@@ -777,11 +787,11 @@
                 "bodyPaddingPx": 64,
                 "headerPx": 68,
                 "diagramChromePx": 94,
-                "svgPx": 719,
+                "svgPx": 854,
                 "cardsPx": 0,
-                "viewBoxHeight": 638
+                "viewBoxHeight": 808
               },
-              "viewBoxWidth": 1660,
+              "viewBoxWidth": 1770,
               "minimumProjectedNodeTextPx": 8,
               "minimumProjectedNonEdgeTextPx": 9,
               "minimumProjectedEdgeTextPx": 8,
@@ -834,14 +844,14 @@
                 "bodyPaddingPx": 12,
                 "headerPx": 52,
                 "diagramChromePx": 78,
-                "svgPx": 517,
+                "svgPx": 614,
                 "cardsPx": 0,
-                "viewBoxHeight": 638
+                "viewBoxHeight": 808
               },
-              "viewBoxWidth": 1660,
-              "minimumProjectedNodeTextPx": 6.486746987951808,
-              "minimumProjectedNonEdgeTextPx": 7.297590361445783,
-              "minimumProjectedEdgeTextPx": 6.486746987951808,
+              "viewBoxWidth": 1770,
+              "minimumProjectedNodeTextPx": 6.083615819209039,
+              "minimumProjectedNonEdgeTextPx": 6.844067796610169,
+              "minimumProjectedEdgeTextPx": 6.083615819209039,
               "minimumProjectedNodeText": "bearbeitet",
               "minimumProjectedNodeTextDetail": "edge",
               "minimumProjectedNodeTextOwner": {
@@ -886,14 +896,14 @@
                 "bodyPaddingPx": 64,
                 "headerPx": 60,
                 "diagramChromePx": 84,
-                "svgPx": 579,
+                "svgPx": 687,
                 "cardsPx": 0,
-                "viewBoxHeight": 638
+                "viewBoxHeight": 808
               },
-              "viewBoxWidth": 1660,
-              "minimumProjectedNodeTextPx": 7.257831325301205,
-              "minimumProjectedNonEdgeTextPx": 8.165060240963856,
-              "minimumProjectedEdgeTextPx": 7.257831325301205,
+              "viewBoxWidth": 1770,
+              "minimumProjectedNodeTextPx": 6.806779661016949,
+              "minimumProjectedNonEdgeTextPx": 7.657627118644068,
+              "minimumProjectedEdgeTextPx": 6.806779661016949,
               "minimumProjectedNodeText": "bearbeitet",
               "minimumProjectedNodeTextDetail": "edge",
               "minimumProjectedNodeTextOwner": {
@@ -938,11 +948,11 @@
                 "bodyPaddingPx": 64,
                 "headerPx": 60,
                 "diagramChromePx": 84,
-                "svgPx": 702,
+                "svgPx": 834,
                 "cardsPx": 0,
-                "viewBoxHeight": 638
+                "viewBoxHeight": 808
               },
-              "viewBoxWidth": 1660,
+              "viewBoxWidth": 1770,
               "minimumProjectedNodeTextPx": 8,
               "minimumProjectedNonEdgeTextPx": 9,
               "minimumProjectedEdgeTextPx": 8,
@@ -990,11 +1000,11 @@
                 "bodyPaddingPx": 64,
                 "headerPx": 68,
                 "diagramChromePx": 94,
-                "svgPx": 719,
+                "svgPx": 854,
                 "cardsPx": 0,
-                "viewBoxHeight": 638
+                "viewBoxHeight": 808
               },
-              "viewBoxWidth": 1660,
+              "viewBoxWidth": 1770,
               "minimumProjectedNodeTextPx": 8,
               "minimumProjectedNonEdgeTextPx": 9,
               "minimumProjectedEdgeTextPx": 8,
@@ -1091,15 +1101,15 @@
     "browserCheckReceipt": "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent-3\\docs\\architektur\\metadata-agent-architektur-b-api.browser-check.json"
   },
   "visualReview": "not-requested",
-  "finishedAt": "2026-11-13T15:12:33.276Z",
-  "durationMs": 5349,
+  "finishedAt": "2026-11-15T11:43:18.382Z",
+  "durationMs": 4852,
   "update": {
     "status": "current",
     "installedVersion": "3.2.0",
     "availableVersion": "3.2.0",
     "releaseNotes": null,
-    "checkedAt": "2026-11-13T15:12:28.371Z",
-    "source": "network",
+    "checkedAt": "2026-11-15T11:40:36.219Z",
+    "source": "cache",
     "noticeRequired": false,
     "noticeText": null
   }

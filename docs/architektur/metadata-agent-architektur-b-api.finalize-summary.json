@@ -7,13 +7,13 @@
   "quality": "showcase",
   "specification": {
     "path": "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent-3\\docs\\architektur\\metadata-agent-architektur-b-api.json",
-    "sha256": "c1949a69b4ad6eb531d606ac56ea1de608cc8cbfcaacde9c3de13e7fe7fac554",
-    "bytes": 37161
+    "sha256": "6ce12aa95d6db4f81e55a03171d79ba4cf7fcba8f78a50ff3cb2fb0838e686e6",
+    "bytes": 42079
   },
   "artifact": {
     "path": "C:\\Users\\jan\\staging\\Windsurf\\metadata-agent-005\\metadata-agent-3\\docs\\architektur\\metadata-agent-architektur-b-api.html",
-    "sha256": "e6298619d064b13679adf7772a22eac1929700b05320b82b7b1d191203300af2",
-    "bytes": 836501
+    "sha256": "df9246b8218662d67840785045824bec9cbf430ad437b25cab2fc0271f426f43",
+    "bytes": 844344
   },
   "gates": {
     "validate": "pass",
@@ -83,13 +83,13 @@
     "installedVersion": "3.2.0",
     "availableVersion": "3.2.0",
     "releaseNotes": null,
-    "checkedAt": "2026-11-13T15:12:28.371Z",
-    "source": "network",
+    "checkedAt": "2026-11-15T11:40:36.219Z",
+    "source": "cache",
     "noticeRequired": false,
     "noticeText": null
   },
   "visualReview": "not-requested",
-  "durationMs": 5349,
+  "durationMs": 4852,
   "browserCheck": {
     "requested": true,
     "ran": true

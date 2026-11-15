@@ -23,6 +23,11 @@ Tag `v4.0.0` zeigt auf den Stand davor.
   Element. Aufgefallen, weil die Browser-Tests erstmals lokal liefen.
 - **Tests:** 4607 bestanden, 1 übersprungen (manueller Netztest), Abdeckung
   95 %, einschließlich der Browser-Tests; `pip-audit` ohne Befund.
+- **Architektur-Map für 4.0.0:** `docs/architektur/metadata-agent-architektur-b-api.*`
+  neu gezeichnet (Archify 3.2.0): Rahmen um den Pod des Agenten, interner
+  Port als eigener Service, Versionen 4.0.0, Cache-Vorlauf und Haltepunkt in
+  den Erläuterungen. Jede Komponente verweist auf ihre Stelle im Code am
+  Commit `7eac5e1`.
 
 ## 4.0.0 — 2026-11-15 — Entwicklerleitfaden für Dienste, Audit-Korrekturen, schnellere Erschließung
 

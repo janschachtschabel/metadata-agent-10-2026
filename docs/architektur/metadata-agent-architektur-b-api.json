@@ -2,7 +2,7 @@
   "schema_version": 1,
   "diagram_type": "architecture",
   "meta": {
-    "title": "Metadata Agent – Architektur im Betrieb über die B-API (3.0.1)",
+    "title": "Metadata Agent 4.0.0 – Architektur im Betrieb über die B-API",
     "output": "docs/architektur/metadata-agent-architektur-b-api.html",
     "locale": "de",
     "quality_profile": "showcase",
@@ -468,6 +468,12 @@
       "legend.waterfall.error": "Fehler",
       "legend.waterfall.cancelled": "Abgebrochen",
       "legend.waterfall.incomplete": "Unvollständig (kein Ende aufgezeichnet)"
+    },
+    "repository": {
+      "url": "https://github.com/janschachtschabel/metadata-agent-10-2026.git",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "7eac5e1d3bd1db78070171b6834933e1583fe81a"
     }
   },
   "components": [
@@ -489,16 +495,30 @@
       "id": "widget",
       "type": "frontend",
       "label": "Webkomponente",
-      "sublabel": "metadata-agent-canvas",
+      "sublabel": "metadata-agent-canvas 4.0.0",
       "pos": [
-        230,
+        260,
         300
       ],
       "size": [
-        160,
+        180,
         60
       ],
-      "tag": "Angular 21"
+      "tag": "Angular 21",
+      "sources": [
+        {
+          "path": "src/static/widget/dist/build.json",
+          "line": 2,
+          "end_line": 4,
+          "label": "Ausgeliefertes Bundle"
+        },
+        {
+          "path": "src/main.py",
+          "line": 247,
+          "end_line": 259,
+          "label": "Auslieferung unter /widget"
+        }
+      ]
     },
     {
       "id": "proxy",
@@ -506,14 +526,22 @@
       "label": "B-API-Proxy",
       "sublabel": "/api/v1/proxy",
       "pos": [
-        520,
+        570,
         300
       ],
       "size": [
         160,
         60
       ],
-      "tag": "forwardApiKey"
+      "tag": "forwardApiKey",
+      "sources": [
+        {
+          "path": "src/services/llm_auth.py",
+          "line": 96,
+          "end_line": 129,
+          "label": "Schlüssel des Aufrufers oder eigener"
+        }
+      ]
     },
     {
       "id": "agent",
@@ -521,14 +549,34 @@
       "label": "Metadata Agent",
       "sublabel": "FastAPI :8000",
       "pos": [
-        790,
+        840,
         298
       ],
       "size": [
-        170,
+        260,
         64
       ],
-      "tag": "3.0.1"
+      "tag": "4.0.0",
+      "sources": [
+        {
+          "path": "pyproject.toml",
+          "line": 2,
+          "end_line": 3,
+          "label": "Name und Version"
+        },
+        {
+          "path": "src/api/routers/generate.py",
+          "line": 99,
+          "end_line": 99,
+          "label": "POST /generate"
+        },
+        {
+          "path": "src/services/llm_service.py",
+          "line": 310,
+          "end_line": 332,
+          "label": "Cache-Vorlauf parallel"
+        }
+      ]
     },
     {
       "id": "bapi",
@@ -536,14 +584,34 @@
       "label": "B-API",
       "sublabel": "LLM · Proxy-Dienste",
       "pos": [
-        1090,
+        1235,
         300
       ],
       "size": [
         190,
         60
       ],
-      "tag": "ein Schlüssel"
+      "tag": "ein Schlüssel",
+      "sources": [
+        {
+          "path": "src/config.py",
+          "line": 452,
+          "end_line": 458,
+          "label": "LLM-Endpunkte"
+        },
+        {
+          "path": "src/config.py",
+          "line": 466,
+          "end_line": 466,
+          "label": "Textextraktion über die B-API"
+        },
+        {
+          "path": "src/config.py",
+          "line": 498,
+          "end_line": 498,
+          "label": "Geocoder über die B-API"
+        }
+      ]
     },
     {
       "id": "extraction",
@@ -551,12 +619,20 @@
       "label": "Textextraktion",
       "sublabel": "proxy/text-extraction",
       "pos": [
-        1440,
+        1540,
         110
       ],
       "size": [
-        180,
+        190,
         60
+      ],
+      "sources": [
+        {
+          "path": "src/services/input_source_service.py",
+          "line": 294,
+          "end_line": 301,
+          "label": "Aufruf /from-url"
+        }
       ]
     },
     {
@@ -565,12 +641,27 @@
       "label": "KI-Modelle",
       "sublabel": "OpenAI · GWDG AcademicCloud",
       "pos": [
-        1440,
+        1540,
         300
       ],
       "size": [
-        180,
+        190,
         60
+      ],
+      "tag": "bis 20 parallel",
+      "sources": [
+        {
+          "path": "src/config.py",
+          "line": 43,
+          "end_line": 52,
+          "label": "Provider und Grenzen"
+        },
+        {
+          "path": "src/services/llm_transport.py",
+          "line": 374,
+          "end_line": 374,
+          "label": "chat/completions"
+        }
       ]
     },
     {
@@ -579,12 +670,20 @@
       "label": "Photon-Geocoder",
       "sublabel": "proxy/photon_geocoding",
       "pos": [
-        1440,
+        1540,
         490
       ],
       "size": [
-        180,
+        190,
         60
+      ],
+      "sources": [
+        {
+          "path": "src/services/geocoding_service.py",
+          "line": 117,
+          "end_line": 135,
+          "label": "Ortssuche"
+        }
       ]
     },
     {
@@ -593,12 +692,26 @@
       "label": "edu-sharing Repository",
       "sublabel": "REST: Node, Upload",
       "pos": [
-        790,
+        895,
         90
       ],
       "size": [
-        170,
+        180,
         60
+      ],
+      "sources": [
+        {
+          "path": "src/services/repository_metadata.py",
+          "line": 234,
+          "end_line": 234,
+          "label": "Metadaten schreiben"
+        },
+        {
+          "path": "src/services/repository_preview_upload.py",
+          "line": 198,
+          "end_line": 198,
+          "label": "Vorschaubild hochladen"
+        }
       ]
     },
     {
@@ -607,12 +720,26 @@
       "label": "Chromium",
       "sublabel": "Screenshots im Container",
       "pos": [
-        520,
-        510
+        820,
+        500
       ],
       "size": [
-        160,
+        150,
         60
+      ],
+      "sources": [
+        {
+          "path": "src/services/screenshot_service.py",
+          "line": 376,
+          "end_line": 377,
+          "label": "Browser starten"
+        },
+        {
+          "path": "Dockerfile",
+          "line": 76,
+          "end_line": 76,
+          "label": "Chromium im Image"
+        }
       ]
     },
     {
@@ -621,27 +748,80 @@
       "label": "Interner Port",
       "sublabel": ":9000 /health /ready /metrics",
       "pos": [
-        790,
-        510
+        990,
+        500
       ],
       "size": [
-        170,
+        180,
         60
+      ],
+      "tag": "eigener Service",
+      "sources": [
+        {
+          "path": "src/main.py",
+          "line": 96,
+          "end_line": 109,
+          "label": "Zweiter Server"
+        },
+        {
+          "path": "helm/metadata-agent/templates/service.yaml",
+          "line": 22,
+          "end_line": 33,
+          "label": "Service <name>-internal"
+        },
+        {
+          "path": "helm/metadata-agent/values.yaml",
+          "line": 40,
+          "end_line": 43,
+          "label": "Port 9000"
+        }
       ]
     },
     {
       "id": "ops",
       "type": "external",
       "label": "Kubernetes · Prometheus",
-      "sublabel": "Probes · Metriken",
+      "sublabel": "Probes · Metriken · Alarme",
       "pos": [
-        1070,
-        510
+        985,
+        680
       ],
       "size": [
         190,
         60
+      ],
+      "sources": [
+        {
+          "path": "helm/metadata-agent/templates/deployment.yaml",
+          "line": 98,
+          "end_line": 103,
+          "label": "Probes"
+        },
+        {
+          "path": "helm/metadata-agent/templates/servicemonitor.yaml",
+          "line": 18,
+          "end_line": 18,
+          "label": "Scrape des internen Ports"
+        },
+        {
+          "path": "helm/metadata-agent/templates/prometheusrule.yaml",
+          "line": 3,
+          "end_line": 3,
+          "label": "Alarmregeln"
+        }
       ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "security-group",
+      "label": "Agent-Pod · NetworkPolicy",
+      "wraps": [
+        "agent",
+        "chromium",
+        "internal"
+      ],
+      "pad": 46
     }
   ],
   "connections": [
@@ -720,20 +900,22 @@
   "cards": [
     {
       "dot": "cyan",
-      "title": "Webkomponente",
+      "title": "Webkomponente 4.0.0",
       "items": [
         "Angular-21-Element <metadata-agent-canvas>, eingebettet in edu-sharing",
-        "Bundle und Texte liefert der Agent unter /widget/dist und /widget/i18n",
+        "Bundle und Texte liefert der Agent unter /widget/dist und /widget/i18n; dist/build.json nennt Version und Prüfsummen",
+        "der Datensatz enthält keine leeren Werte; metadataChange kommt sofort nach einer Eingabe",
         "zeigt Fehler mit Anfrage-ID und Warnungen bei Teilergebnissen"
       ]
     },
     {
       "dot": "emerald",
-      "title": "Metadata Agent",
+      "title": "Metadata Agent 4.0.0",
       "items": [
-        "/generate, /extract-field, /detect-content-type, /validate, /upload",
-        "Inhaltsart erkennen, Seitentext einmal in den Prompt-Cache legen, Felder parallel extrahieren, normalisieren",
-        "zustandslos; ein Worker je Container, skaliert über Replicas"
+        "/generate, /extract-field, /detect-content-type, /validate, /upload und weitere",
+        "erkennt die Inhaltsart und legt zugleich den Seitentext in den Prompt-Cache (Haltepunkt nach dem Text); danach lesen bis zu 20 Feld-Aufrufe parallel aus dem Cache",
+        "/generate endet spätestens nach 300 s mit dem, was fertig ist (200, status partial)",
+        "zustandslos; ein Prozess je Container, skaliert über Replicas"
       ]
     },
     {
@@ -753,9 +935,9 @@
         "Fehler mit error.code und X-Request-ID; JSON-Logs mit service, trace_id, span_id",
         "Tracing-Header (x-client-trace-id, B3) gehen an B-API und Repository; ohne B3 legt der Agent eine Trace-ID an",
         "das Repository ruft der Agent direkt mit dem Dienstkonto auf (WLO_GUEST_*)",
-        "ohne B-API (B_API_SERVICES=direct oder LLM_PROVIDER=openai): Textextraktion und Photon direkt – siehe die Map „Architektur“",
-        "Helm-Chart: NetworkPolicy (API nur aus dem B-API-Namespace, intern nur Prometheus; ausgehend Cluster-DNS, B-API-Ports, Internet ohne private Netze), schreibgeschütztes Root-Dateisystem",
-        "/generate endet spätestens nach 300 s (504), unter den 320 s von Ingress und Grace Period"
+        "Metriken: Dauer und Ergebnis der LLM-Aufrufe, Tokens (prompt, cached, cache_write), Erschließungen nach Ausgang; 13 Alarmregeln im Chart",
+        "Helm-Chart: der interne Port liegt auf einem eigenen Service <name>-internal; NetworkPolicy (API nur aus dem B-API-Namespace, intern nur Prometheus; ausgehend Cluster-DNS, B-API-Ports, Internet ohne private Netze), schreibgeschütztes Root-Dateisystem",
+        "ohne B-API (B_API_SERVICES=direct oder LLM_PROVIDER=openai): Textextraktion und Photon direkt – siehe die Map „Architektur“"
       ]
     }
   ]
