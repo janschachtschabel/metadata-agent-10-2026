@@ -159,11 +159,18 @@ async def test_loading_the_widget_scripts_twice_registers_the_element_once(embed
     embedding = await embed(script_sets=2)
 
     assert embedding.errors == []
-    assert sum(line.startswith("✅ Web Component") for line in embedding.logs) == 1
+    # The first bundle registers the element and stays quiet in the host's
+    # console (widget 4.0.0, W-ARCH-01): the element itself names its version.
+    version = await embedding.page.evaluate(
+        "customElements.get('metadata-agent-canvas').widgetVersion"
+    )
+    assert re.fullmatch(r"\d+\.\d+\.\d+", version)
+    assert not [line for line in embedding.logs if "Web Component" in line]
     # The skipped bundle says so, naming the running and the skipped version.
     skipped = [line for line in embedding.logs if "skipping this bundle" in line]
     assert len(skipped) == 1
     assert re.search(r"v(\d+\.\d+\.\d+) is already registered.*\(v\1\)", skipped[0])
+    assert f"v{version} is already registered" in skipped[0]
 
 
 async def test_a_foreign_angular_app_root_does_not_block_the_widget(embed):

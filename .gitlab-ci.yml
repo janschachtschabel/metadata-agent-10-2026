@@ -36,7 +36,7 @@ variables:
   UV_VERSION: 0.7.13
   # The tests run on the image's own base (Debian 13 "trixie", Dockerfile) -
   # uv 0.7.13 has no trixie image, so uv is installed into it.
-  CI_PYTHON_IMAGE: python:3.13-slim@sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f
+  CI_PYTHON_IMAGE: python:3.13-slim@sha256:e48f59cdba69a3cbd9ed2cf0f348d90d45a8d350d98134cf1070bc106ee9ed90
   # GitLab CI creates a separate mountpoint for the build directory,
   # so we need to copy instead of using hard links.
   UV_LINK_MODE: copy
@@ -49,7 +49,7 @@ variables:
   image:
     # Same ruff as uv.lock, so `ruff format --diff` agrees with local runs
     # (tests/test_ci_hygiene.py holds the two together).
-    name: ghcr.io/astral-sh/ruff:0.17.0-alpine@sha256:6b7108a0fc173dbc1cd49dc10f99fd168f290c13288362cddd2c012d4d9a55f6
+    name: ghcr.io/astral-sh/ruff:0.17.4-alpine@sha256:7a717be3a7cfbef698a9b99e1555add93ec6b195242fe273997683e49b051f51
   before_script:
     - cd $CI_PROJECT_DIR
     - ruff --version

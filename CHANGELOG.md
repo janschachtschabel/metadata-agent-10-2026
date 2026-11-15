@@ -1,5 +1,29 @@
 # Änderungen
 
+## Unveröffentlicht — Abhängigkeiten nach 4.0.0 (15.11.)
+
+Nur Abhängigkeiten und ein Test; Verhalten und Schnittstellen wie 4.0.0. Das
+Tag `v4.0.0` zeigt auf den Stand davor.
+
+- **Python-Pakete** auf Stände, die mindestens sieben Tage alt sind: fastapi
+  0.162.2, starlette 1.10.0, pydantic 2.14.3, pydantic-settings 2.16.2,
+  playwright 1.64.1 (bringt das Chromium der Screenshots mit), pyee 14.0.0,
+  anyio 4.16.0, httpx2 2.16.0, pytest 9.2.0, ruff 0.17.4, mypy 2.4.1 und
+  kleinere. `uv.lock` und `requirements.txt` sind gemeinsam neu erzeugt.
+  Der Dependabot-PR dazu passte in sich nicht zusammen: Seine
+  `requirements.txt` verlangte `pyee==16.0.1`, Playwright 1.64.1 erlaubt aber
+  nur `pyee<15` – der Image-Build über `requirements.txt` wäre gescheitert.
+- **Basis-Image** `python:3.13-slim` auf den aktuellen Digest, im Dockerfile
+  und in der GitLab-CI; `docker/login-action` 4.7.0; das Ruff-Image der
+  GitLab-CI folgt der Lock-Datei (0.17.4).
+- **Browser-Test an die Webkomponente 4.0.0 angepasst:**
+  `test_loading_the_widget_scripts_twice_registers_the_element_once` erwartete
+  noch die Registrierungs-Meldung in der Konsole, die das Widget seit 4.0.0
+  nur im Debug-Modus schreibt. Geprüft wird jetzt die Version am registrierten
+  Element. Aufgefallen, weil die Browser-Tests erstmals lokal liefen.
+- **Tests:** 4607 bestanden, 1 übersprungen (manueller Netztest), Abdeckung
+  95 %, einschließlich der Browser-Tests; `pip-audit` ohne Befund.
+
 ## 4.0.0 — 2026-11-15 — Entwicklerleitfaden für Dienste, Audit-Korrekturen, schnellere Erschließung
 
 > **Warum 4.0.0:** Mehrere Änderungen sind für Aufrufer und Betrieb sichtbar
