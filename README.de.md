@@ -6,7 +6,7 @@ Die Metadata Agent API erschließt Bildungsinhalte mit einem Sprachmodell
 (LLM). Aus einem Text, einer Webseite oder einem Repository-Node erzeugt sie
 strukturierte Metadaten nach dem [WLO/OEH-Schema](https://wirlernenonline.de)
 und kann das Ergebnis in ein WLO-edu-sharing-Repository schreiben. Der Dienst
-ist eine FastAPI-Anwendung für Python 3.13 (Version 4.0.1). Er liefert auch
+ist eine FastAPI-Anwendung für Python 3.13 (Version 4.0.2). Er liefert auch
 die Webkomponente `<metadata-agent-canvas>` aus, die die Metadaten anzeigt und
 bearbeitbar macht.
 
@@ -112,7 +112,7 @@ uv run uvicorn src.main:app --reload --port 8000
 
 ```bash
 curl http://localhost:8000/health
-# → {"status":"healthy","version":"4.0.1"}
+# → {"status":"healthy","version":"4.0.2"}
 
 curl -X POST http://localhost:8000/generate \
   -H "Content-Type: application/json" \
@@ -224,7 +224,8 @@ erreicht:
   Proxy-Dienste `text-extraction` und `photon_geocoding`. Direkte Aufrufe
   tragen keinen Schlüssel.
 - Fehlt das Recht, endet das Erschließen aus einer URL mit `502`
-  `TEXT_EXTRACTION_AUTH_REFUSED`. Orte bleiben ohne Koordinaten, und
+  `TEXT_EXTRACTION_AUTH_REFUSED`. Den Geocoder fragt der Agent mit `auto`
+  dann direkt bei Photon; mit `proxy` bleiben Orte ohne Koordinaten, und
   `processing.warnings` nennt den Grund.
 - `METADATA_AGENT_TEXT_EXTRACTION_API_URL` nennt eine eigene Textextraktion
   und überschreibt die Wahl. Sie ist zu setzen, wenn `direct` gilt und das
@@ -408,11 +409,11 @@ Die CI veröffentlicht das Image `metadata-agent-api` in der internen Registry:
 Tag `v<version>` für einen Release-Tag, `main` und `develop` für die Branches.
 
 ```bash
-docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v4.0.1
+docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v4.0.2
 docker run -d --name metadata-agent-api -p 127.0.0.1:8000:8000 \
   --read-only --tmpfs /tmp --tmpfs /home/appuser --stop-timeout 320 \
   -e B_API_KEY=<key> \
-  $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v4.0.1
+  $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v4.0.2
 ```
 
 - Das Image enthält Chromium (die Headless-Shell) für Screenshots und die

@@ -3,7 +3,7 @@
 [English](DEPLOYMENT.md) · **Deutsch**
 
 Wie die Metadata Agent API (Dienst-ID `metadata-agent`, Image
-`metadata-agent-api`, Version 4.0.1) produktiv läuft: mit Docker oder auf
+`metadata-agent-api`, Version 4.0.2) produktiv läuft: mit Docker oder auf
 Kubernetes, hinter dem B-API-Proxy oder eigenständig.
 
 Verwandte Dokumente:
@@ -163,7 +163,7 @@ einen Schlüssel mitbringt; der Agent warnt nur beim Start.
 
 | Wert | Textextraktion (`/from-url`) | Geocoder |
 |---|---|---|
-| `auto` (Default) | Wie `proxy`, wenn der Provider ein `b-api-*`-Provider ist und seine LLM-Adresse unter `METADATA_AGENT_B_API_BASE_URL` liegt. Sonst wie `direct` | wie links |
+| `auto` (Default) | Wie `proxy`, wenn der Provider ein `b-api-*`-Provider ist und seine LLM-Adresse unter `METADATA_AGENT_B_API_BASE_URL` liegt. Sonst wie `direct` | wie links; scheitert der Weg über die B-API (abgelehnt, Fehlerstatus, keine Antwort, kein Schlüssel): `https://photon.komoot.io/api` direkt, ohne Schlüssel |
 | `proxy` | `<B-API>/api/v1/proxy/text-extraction`, mit dem Schlüssel der LLM-Aufrufe | `<B-API>/api/v1/proxy/photon_geocoding/api`, mit dem Schlüssel der LLM-Aufrufe |
 | `direct` | Nach der Repository-URL, ohne Schlüssel (siehe unten) | `https://photon.komoot.io/api`, ohne Schlüssel |
 
@@ -193,7 +193,7 @@ Jeder Schlüssel, mit dem der Agent aufgerufen wird, braucht in der B-API:
 |---|---|---|
 | Den LLM-Endpunkt des Providers (`openai`, `academiccloud` oder `router`) | Jede Erschließung | `502` `LLM_AUTH_FORBIDDEN` |
 | Proxy-Dienst `text-extraction` | Erschließung aus einer URL | `502` `TEXT_EXTRACTION_AUTH_REFUSED` |
-| Proxy-Dienst `photon_geocoding` | Koordinaten von Orten | Orte bleiben ohne Koordinaten; `processing.warnings` nennt den Grund |
+| Proxy-Dienst `photon_geocoding` | Koordinaten von Orten | Mit `auto` fragt der Agent Photon direkt (Log-Warnung); mit `proxy` bleiben Orte ohne Koordinaten, `processing.warnings` nennt den Grund |
 
 Das gilt für den Nutzer- und den Gast-Schlüssel, die edu-sharing verwendet, und
 für `B_API_KEY`. Die Rechte werden in der B-API vergeben, nicht im Agent. Wer
@@ -215,7 +215,7 @@ $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api
 |---|---|
 | `main` | Jedem Push auf `main` |
 | `develop` | Jedem Push auf `develop` |
-| `v4.0.1` | Dem Git-Tag `v4.0.1`. Ein Release-Tag muss die Form `vX.Y.Z` haben und zur Version in `pyproject.toml` passen; andere Tags veröffentlichen nichts |
+| `v4.0.2` | Dem Git-Tag `v4.0.2`. Ein Release-Tag muss die Form `vX.Y.Z` haben und zur Version in `pyproject.toml` passen; andere Tags veröffentlichen nichts |
 
 Vor dem Push startet die Pipeline das Image schreibgeschützt und ohne
 Schlüssel (`scripts/smoke-image.sh`): Sie wartet auf `/health`, prüft `/ready`,
@@ -228,7 +228,7 @@ ein Jahr aufbewahrt). In der Produktion Versions-Tags verwenden; `main` und
 `develop` wandern.
 
 ```bash
-docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v4.0.1
+docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v4.0.2
 ```
 
 Der GitHub-Spiegel (`.github/workflows/docker-publish.yml`) führt dieselben
@@ -284,7 +284,7 @@ docker run -d \
   -e WLO_GUEST_PASSWORD=<password> \
   -e METADATA_AGENT_B_API_BASE_URL=https://b-api.prod.openeduhub.net \
   -e METADATA_AGENT_REPOSITORY_URL=https://redaktion.openeduhub.net/edu-sharing/rest \
-  $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v4.0.1
+  $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v4.0.2
 ```
 
 | Option | Warum |
@@ -310,7 +310,7 @@ Ein Dienst für die Produktion mit dem Image aus der Registry:
 ```yaml
 services:
   metadata-agent-api:
-    image: ${DOCKER_REGISTRY}/projects/wlo/meta-services/metadata-agent-api:v4.0.1
+    image: ${DOCKER_REGISTRY}/projects/wlo/meta-services/metadata-agent-api:v4.0.2
     ports:
       - "127.0.0.1:8000:8000"   # nur dieser Rechner; andere nur hinter einer Zugangsbeschränkung
     read_only: true
@@ -363,8 +363,8 @@ Client-Adresse einer Anfrage übernimmt.
 ## Kubernetes mit dem Helm-Chart
 
 Der Chart liegt unter [`helm/metadata-agent/`](helm/metadata-agent/README.md).
-Seine Version ist die Version des Dienstes: Chart 4.0.1 deployt das Image-Tag
-`v4.0.1`. Der Chart ist bisher statisch geprüft (`helm lint`, kubeconform,
+Seine Version ist die Version des Dienstes: Chart 4.0.2 deployt das Image-Tag
+`v4.0.2`. Der Chart ist bisher statisch geprüft (`helm lint`, kubeconform,
 Tests), nicht in einem Cluster. Die erste Installation ist die
 [Prüfliste unten](#erste-installation-im-cluster-prüfliste).
 
@@ -393,7 +393,7 @@ kubectl rollout restart deployment/metadata-agent
 | Wert | Default | Was zu tun ist |
 |---|---|---|
 | `image.repository` | leer | **Pflicht.** Ohne ihn scheitert das Rendern |
-| `image.tag` | `v4.0.1` | Das Image muss in der Registry liegen und aus demselben Stand gebaut sein wie der Chart (siehe [Updates](#updates)) |
+| `image.tag` | `v4.0.2` | Das Image muss in der Registry liegen und aus demselben Stand gebaut sein wie der Chart (siehe [Updates](#updates)) |
 | `image.digest` | leer | `sha256:` und 64 Hex-Ziffern legen das Image fest: Es wird als `<repository>@<digest>` geholt, das Tag wird nicht verwendet. Ein Tag lässt sich auf ein anderes Image umsetzen, ein Digest nicht |
 | `secret.existingSecret` | leer | Name des Secrets mit `B_API_KEY`, `WLO_GUEST_USERNAME`, `WLO_GUEST_PASSWORD`. Leer: Der Chart erwartet ein Secret, das wie seine Ressourcen heißt. `B_API_KEY` ist im Modus `forward` nicht nötig |
 | `env.METADATA_AGENT_B_API_BASE_URL`, `env.METADATA_AGENT_REPOSITORY_URL` | Produktion | Für Staging beide setzen. Keine der beiden darf leer sein |
@@ -585,7 +585,7 @@ Einen ausgefallenen oder neu startenden Pod melden die Regeln des Clusters
 
 | Pfad | Antwort | Bedeutung |
 |---|---|---|
-| `/health` | `200` `{"status": "healthy", "version": "4.0.1"}`. Auf dem internen Port zusätzlich `llm_provider` und `b_api_auth_mode` | Der Prozess antwortet. Über die abhängigen Dienste sagt das nichts |
+| `/health` | `200` `{"status": "healthy", "version": "4.0.2"}`. Auf dem internen Port zusätzlich `llm_provider` und `b_api_auth_mode` | Der Prozess antwortet. Über die abhängigen Dienste sagt das nichts |
 | `/ready` | `200` `{"status": "ready"}`, oder `503` mit `status: "not_ready"`, `detail` und `error.code` `NOT_READY`. Auf dem internen Port zusätzlich die Gründe (`problems`) | Die Konfiguration kann arbeiten |
 
 `/ready` antwortet mit `503`, wenn:
@@ -933,7 +933,8 @@ Test 2, mit diesem Body:
 | Ergebnis | Bedeutung |
 |---|---|
 | Ort mit `geo.latitude` und `geo.longitude` | In Ordnung: Der Schlüssel darf den Proxy-Dienst `photon_geocoding` nutzen |
-| Ort ohne `geo`, und „Orte bleiben ohne Koordinaten …“ in `processing.warnings` | Die B-API lehnt den Schlüssel für den Geocoder ab oder drosselt ihn; die Warnung nennt den Status. Recht für `photon_geocoding` ergänzen |
+| Ort ohne `geo`, und „Orte bleiben ohne Koordinaten …“ in `processing.warnings` | Die B-API lehnt den Schlüssel für den Geocoder ab oder drosselt ihn (mit `auto`: und Photon direkt antwortet auch nicht); die Warnung nennt den Status. Recht für `photon_geocoding` ergänzen |
+| Ort mit `geo`, im Log „… Photon wird direkt gefragt.“ | Mit `auto`: Der Weg über die B-API zum Geocoder scheiterte (abgelehnt, Fehlerstatus, keine Antwort oder kein Schlüssel; die Zeile nennt den Grund), der Agent hat Photon direkt gefragt. Bei einer Ablehnung das Recht für `photon_geocoding` prüfen |
 
 Die Tests 3 und 4 je einmal eingeloggt und als Gast ausführen: edu-sharing
 nutzt dafür zwei verschiedene Schlüssel.
@@ -971,11 +972,11 @@ Ziel-Namespace, `<release>` der Release-Name und `<name>` der Name der
 Ressourcen: der Release-Name, wenn er „metadata-agent“ enthält, sonst
 `<release>-metadata-agent` (`helm install` nennt ihn).
 
-1. **Image bauen und pushen.** Das Git-Tag der Version (`v4.0.1`) auf den
+1. **Image bauen und pushen.** Das Git-Tag der Version (`v4.0.2`) auf den
    Commit setzen, aus dem der Chart stammt. Die GitLab-Pipeline baut, startet
    den Smoke-Test (schreibgeschützt, Chromium), scannt mit Trivy und pusht
    erst danach. Prüfen:
-   `docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v4.0.1`.
+   `docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v4.0.2`.
    Ohne dieses Tag in der Registry endet `helm install` mit den Defaults in
    `ImagePullBackOff`.
 2. **Namespaces und Ports ermitteln:**
@@ -1092,8 +1093,8 @@ Der Agent ist zustandslos: Es gibt keine Datenbank und keine Migration.
 
 ### Update von 3.0.x auf 4.0.0
 
-Die Einzelheiten stehen im CHANGELOG unter 4.0.0 und 4.0.1. Der Chart nennt
-`image.tag: v4.0.1` und braucht das Image dieser Version: Mit
+Die Einzelheiten stehen im CHANGELOG unter 4.0.0 bis 4.0.2. Der Chart nennt
+`image.tag: v4.0.2` und braucht das Image dieser Version: Mit
 dem am 20.10.2026 als 3.0.1 veröffentlichten Image funktioniert er nicht (siehe
 „Chart und Image zusammenhalten“ unten).
 
@@ -1103,8 +1104,9 @@ dem am 20.10.2026 als 3.0.1 veröffentlichten Image funktioniert er nicht (siehe
       Agent aufgerufen wird (Nutzer- und Gast-Schlüssel aus edu-sharing,
       `B_API_KEY`), braucht zusätzlich zu den LLM-Endpunkten die Proxy-Dienste
       `text-extraction` und `photon_geocoding`. Sonst endet die Erschließung
-      aus einer URL mit `502` `TEXT_EXTRACTION_AUTH_REFUSED`, und Orte bleiben
-      ohne Koordinaten. Wer beim bisherigen Weg bleiben will, setzt
+      aus einer URL mit `502` `TEXT_EXTRACTION_AUTH_REFUSED`. Den Geocoder
+      fragt der Agent dann direkt bei Photon (nur mit `auto`). Wer beim
+      bisherigen Weg bleiben will, setzt
       `METADATA_AGENT_B_API_SERVICES=direct`.
 - [ ] **Eigene Values-Dateien durchsehen.** Steht dort
       `METADATA_AGENT_TEXT_EXTRACTION_API_URL` (der Chart setzte bisher

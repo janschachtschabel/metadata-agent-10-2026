@@ -10354,8 +10354,8 @@
         "en": "Does this offering require payment?"
       },
       "prompt": {
-        "de": "Bestimme den Kostenstatus. Wähle GENAU eine Option: 'nein (kostenfrei)' wenn kostenlos zugänglich (free, gratis, Open Access, CC-lizenziert); 'ja (kostenpflichtig)' wenn ein Preis, Abo oder Lizenzkosten genannt werden; 'zusätzliche Inhalte / Features per Kauf möglich' wenn ein Basisangebot frei ist, aber kostenpflichtige Erweiterungen existieren (Freemium). Falls keine Angabe: Feld leer lassen.",
-        "en": "Determine the cost status. Choose EXACTLY one option: 'nein (kostenfrei)' if freely accessible (free, open access, CC-licensed); 'ja (kostenpflichtig)' if a price, subscription or license fee is mentioned; 'zusätzliche Inhalte / Features per Kauf möglich' if a free base offering exists but paid add-ons are available (freemium). If unknown: leave field empty."
+        "de": "Bestimme, ob das Angebot kostet. 'nein (kostenfrei)' nur, wenn der Text ausdrücklich sagt, dass es kostenlos ist (kostenlos, kostenfrei, gratis, gebührenfrei, 0 €); 'ja (kostenpflichtig)', wenn ein Preis, eine Gebühr, ein Abo oder Lizenzkosten genannt werden; 'zusätzliche Inhalte / Features per Kauf möglich', wenn ein Basisangebot frei ist, aber kostenpflichtige Erweiterungen existieren (Freemium). Eine freie Lizenz von Materialien (CC, OER) sagt nichts darüber, ob das Angebot selbst kostet. Steht im Text nichts zu Kosten: null (keine Angabe).",
+        "en": "Determine whether the offering costs money. 'nein (kostenfrei)' only if the text states explicitly that it is free (free, free of charge, no fee, €0); 'ja (kostenpflichtig)' if a price, fee, subscription or licence cost is mentioned; 'zusätzliche Inhalte / Features per Kauf möglich' if a free base offering exists but paid add-ons are available (freemium). A free licence of materials (CC, OER) says nothing about whether the offering itself costs money. If the text says nothing about costs: null (not stated)."
       },
       "system": {
         "path": "ccm:price",

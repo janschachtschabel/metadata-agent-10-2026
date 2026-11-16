@@ -3,6 +3,9 @@ Geocoding service using Photon API (Komoot) to convert addresses to coordinates.
 
 A deployment with a B-API calls Photon through the B-API's proxy path, with the
 same key as the LLM calls (Settings.geocoder_api_url); otherwise Photon itself.
+With METADATA_AGENT_B_API_SERVICES=auto a failing B-API path is not the end:
+the request asks Photon itself, as before 4.0.0 (staging 16.11.: the B-API
+answered the forwarded key with 401 on photon_geocoding).
 """
 
 import asyncio
@@ -14,7 +17,7 @@ from typing import Any, Optional
 import httpx
 import logging
 
-from ..config import get_settings
+from ..config import PHOTON_URL, get_settings
 from ..metrics import OWN_SERVICE_HOOKS, THIRD_PARTY_HOOKS
 from ..utils.tls_context import shared_tls_context
 from .llm_auth import b_api_headers_for
@@ -29,6 +32,24 @@ MAX_GEOCODED_LOCATIONS = 10
 # Of the /generate deadline, this much is left over for output normalisation
 # and the answer: geocoding stops this long before it.
 GEOCODING_RESERVE_SECONDS = 1.0
+
+
+class _PathFailed(Exception):
+    """
+    The geocoder answered with an error status, with no JSON or not at all
+    (no refusal). `status`: the HTTP status, None without one.
+    """
+
+    def __init__(self, message: str, status: Optional[int] = None) -> None:
+        super().__init__(message)
+        self.status = status
+
+    @property
+    def place_only(self) -> bool:
+        """A 4xx (not 429) concerns the place asked for, not the service."""
+        return (
+            self.status is not None and 400 <= self.status < 500 and self.status != 429
+        )
 
 
 class GeocoderRefused(Exception):
@@ -72,20 +93,24 @@ class _Lookups:
 
     def __init__(self) -> None:
         self._stack = AsyncExitStack()
-        self._client: Optional[httpx.AsyncClient] = None
+        self._clients: dict[bool, httpx.AsyncClient] = {}
+        # Set once the B-API path failed in this request: the remaining
+        # lookups go to Photon itself without trying it again.
+        self.direct_only = False
+        self.reason: Optional[str] = None
 
     async def client(self, via_b_api: bool) -> httpx.AsyncClient:
-        if self._client is None:
+        if via_b_api not in self._clients:
             # Counted. Tracing headers only on the way through the B-API:
             # Photon itself is a third party.
-            self._client = await self._stack.enter_async_context(
+            self._clients[via_b_api] = await self._stack.enter_async_context(
                 httpx.AsyncClient(
                     timeout=10.0,
                     verify=shared_tls_context(),
                     event_hooks=OWN_SERVICE_HOOKS if via_b_api else THIRD_PARTY_HOOKS,
                 )
             )
-        return self._client
+        return self._clients[via_b_api]
 
     async def aclose(self) -> None:
         await self._stack.aclose()
@@ -133,90 +158,39 @@ class GeocodingService:
 
         settings = get_settings()
         api_url = settings.geocoder_api_url
-        try:
-            # Before the rate-limit slot: a lookup that cannot be made must not
-            # make every other request wait for it.
-            auth = b_api_headers_for(api_url, settings)
-        except LLMCredentialsMissing as e:
-            raise GeocoderRefused(
-                "Für den Geocoder über die B-API (Proxy-Dienst photon_geocoding) "
-                "gibt es keinen Schlüssel."
-            ) from e
-
+        # auto: Photon itself when the B-API path fails. proxy: no way around.
+        fallback = settings.b_api_services == "auto" and api_url != PHOTON_URL
         # The client of the request (enrich_metadata_with_geocoding), else one
         # for this lookup alone.
         shared = _SHARED_LOOKUPS.get()
         session = shared or _Lookups()
         try:
-            # Rate limiting
-            await self._wait_for_rate_limit()
-
-            # Build API URL
-            params: dict[str, str | int] = {"q": address, "limit": 1}
-            lang = photon_language(language)
-            if lang:
-                params["lang"] = lang
-            headers = {"User-Agent": "MetadataAgentAPI/1.0 (geocoding service)"}
-            client = await session.client(bool(auth))
-            response = await client.get(
-                api_url, params=params, headers={**headers, **auth}
-            )
-
-            if response.status_code != 200:
-                if auth and response.status_code in (401, 403, 429):
-                    raise GeocoderRefused(
-                        "Die B-API hat den Aufruf des Geocoders abgelehnt "
-                        f"(HTTP {response.status_code}, Proxy-Dienst "
-                        "photon_geocoding)."
-                    )
-                via = "B-API (photon_geocoding)" if auth else "Photon"
-                logger.error(f"❌ Geocoder {via}: HTTP {response.status_code}")
-                return None
-
-            data = response.json()
-
-            # Check if we got results
-            if not data.get("features") or len(data["features"]) == 0:
-                # The place itself only at DEBUG: an address can be personal.
-                logger.warning("⚠️ No geocoding result for a place")
-                logger.debug(f"No geocoding result for: {address}")
-                return None
-
-            feature = data["features"][0]
-            coords = feature.get("geometry", {}).get("coordinates", [])
-            props = feature.get("properties", {})
-
-            if len(coords) < 2:
-                logger.error("❌ Invalid coordinates in Photon response")
-                return None
-
-            # Photon returns [longitude, latitude]
-            result = {
-                "latitude": round(coords[1], 7),
-                "longitude": round(coords[0], 7),
-                "enriched_address": {
-                    "street": props.get("street"),
-                    "housenumber": props.get("housenumber"),
-                    "postal_code": props.get("postcode"),
-                    "city": props.get("city"),
-                    "state": props.get("state"),
-                    "country": props.get("country"),
-                    "country_code": props.get("countrycode"),
-                    "district": props.get("district"),
-                },
-                "osm_data": {
-                    "osm_type": props.get("osm_type"),
-                    "osm_id": props.get("osm_id"),
-                    "osm_key": props.get("osm_key"),
-                    "osm_value": props.get("osm_value"),
-                    "type": props.get("type"),
-                },
-            }
-
-            logger.debug(
-                f"✅ Geocoded '{address}' → {result['latitude']}, {result['longitude']}"
-            )
-            return result
+            if session.direct_only:
+                return await self._lookup_directly(session, address, language, None)
+            try:
+                # Before the rate-limit slot: a lookup that cannot be made must
+                # not make every other request wait for it.
+                auth = b_api_headers_for(api_url, settings)
+            except LLMCredentialsMissing as e:
+                refusal = (
+                    "Für den Geocoder über die B-API (Proxy-Dienst photon_geocoding) "
+                    "gibt es keinen Schlüssel."
+                )
+                if not fallback:
+                    raise GeocoderRefused(refusal) from e
+                return await self._lookup_directly(session, address, language, refusal)
+            try:
+                return await self._lookup(session, api_url, auth, address, language)
+            except GeocoderRefused as e:
+                if not fallback:
+                    raise
+                return await self._lookup_directly(session, address, language, str(e))
+            except _PathFailed as e:
+                if not fallback:
+                    logger.error(f"❌ Geocoder {e}")
+                    return None
+                reason = f"Der Geocoder über die B-API war nicht nutzbar ({e})."
+                return await self._lookup_directly(session, address, language, reason)
 
         except GeocoderRefused:
             raise
@@ -226,6 +200,130 @@ class GeocodingService:
         finally:
             if session is not shared:
                 await session.aclose()
+
+    async def _lookup_directly(
+        self,
+        session: "_Lookups",
+        address: str,
+        language: str,
+        reason: Optional[str],
+    ) -> Optional[dict]:
+        """
+        Photon itself, after the B-API path failed for `reason` (None: an
+        earlier lookup of this request already found it failing).
+
+        Raises GeocoderRefused when Photon fails as well: reported once for
+        the request, and no further place is tried.
+        """
+        if not session.direct_only:
+            session.direct_only = True
+            logger.warning(f"⚠️ {reason} Photon wird direkt gefragt.")
+            session.reason = reason
+        try:
+            return await self._lookup(session, PHOTON_URL, {}, address, language)
+        except _PathFailed as e:
+            if e.place_only:
+                # As with `direct`: this place stays as it is, the next is tried.
+                logger.error(f"❌ Geocoder {e}")
+                return None
+            raise GeocoderRefused(
+                f"{session.reason} Auch Photon direkt war nicht nutzbar ({e})."
+            ) from e
+
+    async def _lookup(
+        self,
+        session: "_Lookups",
+        api_url: str,
+        auth: dict[str, str],
+        address: str,
+        language: str,
+    ) -> Optional[dict]:
+        """
+        One lookup at `api_url`; None when the place is not found.
+
+        Raises:
+            GeocoderRefused: the B-API refused the key (401, 403, 429).
+            _PathFailed: any other error status, an answer that is no JSON,
+                or no answer at all.
+        """
+        # The client before the slot: its first TLS setup blocks the event loop
+        # for a few hundred ms, and lookups whose slots fell into that time
+        # woke together and reached Photon in the same millisecond.
+        client = await session.client(bool(auth))
+        await self._wait_for_rate_limit()
+
+        params: dict[str, str | int] = {"q": address, "limit": 1}
+        lang = photon_language(language)
+        if lang:
+            params["lang"] = lang
+        headers = {"User-Agent": "MetadataAgentAPI/1.0 (geocoding service)"}
+        via = "B-API (photon_geocoding)" if auth else "Photon"
+        try:
+            response = await client.get(
+                api_url, params=params, headers={**headers, **auth}
+            )
+        except httpx.HTTPError as e:
+            raise _PathFailed(f"{via}: {type(e).__name__}") from e
+
+        if response.status_code != 200:
+            if auth and response.status_code in (401, 403, 429):
+                raise GeocoderRefused(
+                    "Die B-API hat den Aufruf des Geocoders abgelehnt "
+                    f"(HTTP {response.status_code}, Proxy-Dienst "
+                    "photon_geocoding)."
+                )
+            raise _PathFailed(
+                f"{via}: HTTP {response.status_code}", response.status_code
+            )
+
+        try:
+            data = response.json()
+        except ValueError as e:
+            # An error page of a proxy on the way, sent with 200.
+            raise _PathFailed(f"{via}: Antwort ist kein JSON") from e
+
+        # Check if we got results
+        if not data.get("features") or len(data["features"]) == 0:
+            # The place itself only at DEBUG: an address can be personal.
+            logger.warning("⚠️ No geocoding result for a place")
+            logger.debug(f"No geocoding result for: {address}")
+            return None
+
+        feature = data["features"][0]
+        coords = feature.get("geometry", {}).get("coordinates", [])
+        props = feature.get("properties", {})
+
+        if len(coords) < 2:
+            logger.error("❌ Invalid coordinates in Photon response")
+            return None
+
+        # Photon returns [longitude, latitude]
+        result = {
+            "latitude": round(coords[1], 7),
+            "longitude": round(coords[0], 7),
+            "enriched_address": {
+                "street": props.get("street"),
+                "housenumber": props.get("housenumber"),
+                "postal_code": props.get("postcode"),
+                "city": props.get("city"),
+                "state": props.get("state"),
+                "country": props.get("country"),
+                "country_code": props.get("countrycode"),
+                "district": props.get("district"),
+            },
+            "osm_data": {
+                "osm_type": props.get("osm_type"),
+                "osm_id": props.get("osm_id"),
+                "osm_key": props.get("osm_key"),
+                "osm_value": props.get("osm_value"),
+                "type": props.get("type"),
+            },
+        }
+
+        logger.debug(
+            f"✅ Geocoded '{address}' → {result['latitude']}, {result['longitude']}"
+        )
+        return result
 
     async def enrich_metadata_with_geocoding(
         self,

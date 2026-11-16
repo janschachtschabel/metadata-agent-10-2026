@@ -1,6 +1,6 @@
 # Übergabe an den Betrieb (Team 6)
 
-Stand 4.0.1. Gegliedert nach der Checkliste „Übergabepaket“ aus den
+Stand 4.0.2. Gegliedert nach der Checkliste „Übergabepaket“ aus den
 Anforderungen von Team 6. Einzelheiten stehen in
 [ENV-PARAMETER.de.md](ENV-PARAMETER.de.md) und [DEPLOYMENT.de.md](DEPLOYMENT.de.md);
 dieses Dokument verweist dorthin, statt sie zu wiederholen. Felder in
@@ -13,7 +13,7 @@ Anforderungen erfüllt sind, steht in
 | | |
 |---|---|
 | Repo | API: <https://scm.edu-sharing.com/edu-sharing/projects/wlo/metaservices/metadata-agent>; Webkomponente: <https://scm.edu-sharing.com/edu-sharing/projects/wlo/metaservices/metadata-agent-webcomponent> (das gebaute Widget liegt im API-Repo unter `src/static/widget/`). Ob T6 Zugriff hat, ist noch zu bestätigen. |
-| CI | `.gitlab-ci.yml` baut bei jedem Push auf `main`/`develop` ein Image mit dem Branch als Tag und bei jedem Git-Tag `v*` ein Image mit der Version (z.B. `v4.0.1`); andere Tags veröffentlichen nichts. Produktion nur mit Versions-Tags. Eine geplante Pipeline (in GitLab unter CI/CD > Schedules auf `main` anzulegen) führt nur die Jobs `scheduled dependency checks` (`pip-audit`, Alter des Chromium) und `scheduled image scan` (Trivy über das neueste Release-Image oder `SCAN_TAG`, SBOM als Artefakt) aus: Lücken, die nach einem Release bekannt werden, fallen so ohne neuen Push auf. |
+| CI | `.gitlab-ci.yml` baut bei jedem Push auf `main`/`develop` ein Image mit dem Branch als Tag und bei jedem Git-Tag `v*` ein Image mit der Version (z.B. `v4.0.2`); andere Tags veröffentlichen nichts. Produktion nur mit Versions-Tags. Eine geplante Pipeline (in GitLab unter CI/CD > Schedules auf `main` anzulegen) führt nur die Jobs `scheduled dependency checks` (`pip-audit`, Alter des Chromium) und `scheduled image scan` (Trivy über das neueste Release-Image oder `SCAN_TAG`, SBOM als Artefakt) aus: Lücken, die nach einem Release bekannt werden, fallen so ohne neuen Push auf. |
 | GitLab-CI/CD-Variablen | Die Docker-Jobs in `.gitlab-ci.yml` brauchen: `DIND_IMAGE`, `DIND_HOST`, `DIND_DRIVER`, `DIND_TLS_CERTDIR` (Docker-in-Docker), `DOCKER_REGISTRY`, `DOCKER_USERNAME`, `DOCKER_PASSWORD` (maskiert). Test- und Ruff-Jobs brauchen keine. Die Webkomponente braucht keine eigenen Variablen. |
 | GitHub-Spiegel | `.github/workflows/docker-publish.yml`: Tests, Chart-Prüfung und Image-Bau bei Pushes auf `main`, Tags `v*` und Pull Requests auf `main`; nach DockerHub nur außerhalb von Pull Requests und mit Secret `DOCKERHUB_PASSWORD`. `.github/workflows/scheduled-checks.yml` wiederholt täglich (04:23 UTC) und auf Knopfdruck `pip-audit`, die Altersprüfung des Chromium und den Trivy-Scan des neuesten Release-Images. Dependabot (`.github/dependabot.yml`) schlägt Updates für `uv.lock` (damit Playwright/Chromium), Basis-Images und Actions vor |
 | Helm-Chart | [`helm/metadata-agent/`](helm/metadata-agent/README.md); die CI prüft ihn mit `helm lint` und die Alarmregeln mit `promtool` (Jobs `helm lint`, `alert rules`) |
@@ -112,8 +112,9 @@ Anforderungen erfüllt sind, steht in
   **Kein** `LLM_ROUTE_MANAGE`. Das gilt für jeden Schlüssel, mit dem der Dienst
   aufgerufen wird: die Nutzer- und Gast-Schlüssel aus edu-sharing und
   `B_API_KEY`. Fehlt das Recht, endet das Erschließen aus einer URL mit `502`
-  `TEXT_EXTRACTION_AUTH_REFUSED`; Orte bleiben ohne Koordinaten, die Antwort
-  nennt das in `processing.warnings`.
+  `TEXT_EXTRACTION_AUTH_REFUSED`. Den Geocoder fragt der Agent mit `auto`
+  dann direkt bei Photon (Warnung im Log); mit `proxy` bleiben Orte ohne
+  Koordinaten, die Antwort nennt das in `processing.warnings`.
 - **Dienste über die B-API** (`METADATA_AGENT_B_API_SERVICES=auto`):
   Textextraktion und Geocoder ruft der Agent über die Pfade der B-API auf
   (`/api/v1/proxy/text-extraction`, `/api/v1/proxy/photon_geocoding`), mit
@@ -341,7 +342,9 @@ Browser ─ edu-sharing ─ B-API-Proxy ─┐
 
 So ist es im Betrieb über die B-API (Standard). Ohne B-API oder mit
 `METADATA_AGENT_B_API_SERVICES=direct` ruft der Agent die Textextraktion und
-`photon.komoot.io` direkt auf, ohne Schlüssel. Grafiken zu beiden Betriebsarten:
+`photon.komoot.io` direkt auf, ohne Schlüssel. Mit `auto` fragt er
+`photon.komoot.io` auch dann direkt, wenn der Weg über die B-API zum Geocoder
+scheitert (Adressen gehen dann ohne Schlüssel an den Fremddienst Photon). Grafiken zu beiden Betriebsarten:
 [docs/architektur](docs/architektur/README.md).
 
 ## 6. Ressourcen, Daten, Konfiguration
@@ -451,7 +454,8 @@ sind gegenüber dem 16.10. unverändert.
   der B-API zeigen nach den ersten Produktivwochen die tatsächlichen Kosten.
 - **Externe Dienste:** Photon-Geocoder und Textextraktion über die B-API
   (mit dem Schlüssel des Aufrufers; direkt aufgerufen frei und ohne
-  Schlüssel), Repository (eigener Dienst).
+  Schlüssel; der Geocoder mit `auto` auch als Ausweg, wenn der Weg über die
+  B-API scheitert), Repository (eigener Dienst).
 
 **Stand des Prompt-Cachings (umgesetzt und gemessen am 15.11.2026,
 `gpt-6-luna` über die B-API):**

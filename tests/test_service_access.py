@@ -213,9 +213,13 @@ async def test_without_any_address_the_answer_says_what_to_set(monkeypatch):
 
 
 class _Calls(list):
-    """The requests the geocoder got; `status` is what it answers."""
+    """
+    The requests the geocoder got; `status` is what it answers, `photon` what
+    Photon itself answers when it is asked directly (None: the same).
+    """
 
     status = 200
+    photon: int | None = None
 
 
 @pytest.fixture
@@ -225,11 +229,14 @@ def geocoder(monkeypatch):
 
     def handler(request):
         seen.append(request)
+        status = seen.status
+        if request.url.host == "photon.komoot.io" and seen.photon is not None:
+            status = seen.photon
         feature = {
             "geometry": {"coordinates": [11.3297921, 50.9793301]},
             "properties": {"city": "Weimar"},
         }
-        return httpx.Response(seen.status, json={"features": [feature]})
+        return httpx.Response(status, json={"features": [feature]})
 
     real_client = httpx.AsyncClient
 
@@ -291,7 +298,8 @@ def _fast(service: GeocodingService) -> GeocodingService:
 async def test_a_refusal_of_the_b_api_is_reported_once_and_ends_the_lookups(
     monkeypatch, geocoder, status
 ):
-    use_settings(monkeypatch, _settings())
+    # proxy: always through the B-API, no way around it.
+    use_settings(monkeypatch, _settings(b_api_services="proxy"))
     geocoder.status = status
     warnings: list[str] = []
 
@@ -309,7 +317,7 @@ async def test_a_refusal_of_the_b_api_is_reported_once_and_ends_the_lookups(
 async def test_without_any_key_no_call_is_made_and_no_slot_is_taken(
     monkeypatch, geocoder
 ):
-    use_settings(monkeypatch, _settings(b_api_key=""))
+    use_settings(monkeypatch, _settings(b_api_services="proxy", b_api_key=""))
     service = GeocodingService()
     warnings: list[str] = []
 
@@ -324,7 +332,7 @@ async def test_without_any_key_no_call_is_made_and_no_slot_is_taken(
 async def test_a_refusal_is_an_error_of_its_own_for_a_single_lookup(
     monkeypatch, geocoder
 ):
-    use_settings(monkeypatch, _settings())
+    use_settings(monkeypatch, _settings(b_api_services="proxy"))
     geocoder.status = 403
 
     with pytest.raises(GeocoderRefused):
@@ -344,6 +352,179 @@ async def test_photon_itself_answering_403_is_no_refused_key(monkeypatch, geocod
     # No key was sent, so none was refused: every place is tried, as before.
     assert len(geocoder) == 3
     assert warnings == []
+
+
+# auto: if the B-API path to the geocoder fails, Photon is asked directly, as
+# before 4.0.0. Staging 16.11.: the B-API answered the forwarded key of a
+# /generate with 401 on photon_geocoding while the LLM calls with the same key
+# went through - every place stayed without coordinates.
+
+
+def _hosts(calls) -> list[str]:
+    return [request.url.host for request in calls]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [401, 403, 429, 502])
+async def test_auto_asks_photon_itself_when_the_b_api_path_fails(
+    monkeypatch, geocoder, status
+):
+    use_settings(monkeypatch, _settings())
+    geocoder.status, geocoder.photon = status, 200
+    warnings: list[str] = []
+
+    with traced({"x-client-trace-id": "trace-abc"}):
+        with forwarded_authorization("Bearer user-key"):
+            result = await _fast(GeocodingService()).enrich_metadata_with_geocoding(
+                dict(PLACES), warnings=warnings
+            )
+
+    # One try through the B-API, then every place directly at Photon.
+    assert (
+        _hosts(geocoder) == ["b-api.staging.openeduhub.net"] + ["photon.komoot.io"] * 3
+    )
+    assert all(
+        place["geo"]["latitude"] == 50.9793301 for place in result["schema:location"]
+    )
+    assert warnings == []
+    for request in geocoder[1:]:
+        for header in ("authorization", "x-api-key", "x-b3-traceid"):
+            assert header not in request.headers
+
+
+@pytest.mark.asyncio
+async def test_auto_without_a_key_asks_photon_itself(monkeypatch, geocoder):
+    use_settings(monkeypatch, _settings(b_api_key=""))
+    warnings: list[str] = []
+
+    result = await _fast(GeocodingService()).enrich_metadata_with_geocoding(
+        dict(PLACES), warnings=warnings
+    )
+
+    assert _hosts(geocoder) == ["photon.komoot.io"] * 3
+    assert result["schema:location"][0]["geo"]["latitude"] == 50.9793301
+    assert warnings == []
+
+
+@pytest.mark.asyncio
+async def test_auto_reports_once_when_photon_itself_fails_as_well(
+    monkeypatch, geocoder
+):
+    use_settings(monkeypatch, _settings())
+    geocoder.status, geocoder.photon = 401, 503
+    warnings: list[str] = []
+
+    result = await _fast(GeocodingService()).enrich_metadata_with_geocoding(
+        dict(PLACES), warnings=warnings
+    )
+
+    assert _hosts(geocoder) == ["b-api.staging.openeduhub.net", "photon.komoot.io"]
+    assert result["schema:location"] == PLACES["schema:location"]
+    (warning,) = warnings
+    assert "401" in warning and "photon_geocoding" in warning and "503" in warning
+
+
+@pytest.mark.asyncio
+async def test_a_place_photon_itself_rejects_costs_that_place_only(
+    monkeypatch, geocoder
+):
+    """A 400 for one place is no outage: as in `direct`, every place is tried."""
+    use_settings(monkeypatch, _settings())
+    geocoder.status, geocoder.photon = 401, 400
+    warnings: list[str] = []
+
+    await _fast(GeocodingService()).enrich_metadata_with_geocoding(
+        dict(PLACES), warnings=warnings
+    )
+
+    assert (
+        _hosts(geocoder) == ["b-api.staging.openeduhub.net"] + ["photon.komoot.io"] * 3
+    )
+    assert warnings == []
+
+
+def _answering(monkeypatch, b_api_answer):
+    """B-API path answers via `b_api_answer(request)`, Photon itself with a place."""
+    seen: list = []
+
+    def handler(request):
+        seen.append(request)
+        if request.url.host != "photon.komoot.io":
+            return b_api_answer(request)
+        feature = {"geometry": {"coordinates": [11.33, 50.98]}, "properties": {}}
+        return httpx.Response(200, json={"features": [feature]})
+
+    def client(*args, **kwargs):
+        kwargs.pop("transport", None)
+        return _REAL_CLIENT(*args, transport=httpx.MockTransport(handler), **kwargs)
+
+    monkeypatch.setattr(geo_module.httpx, "AsyncClient", client)
+    return seen
+
+
+def _no_connection(request):
+    raise httpx.ConnectError("refused", request=request)
+
+
+def _proxy_error_page(request):
+    return httpx.Response(200, text="<html>Bad Gateway</html>")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("b_api_answer", [_no_connection, _proxy_error_page])
+async def test_auto_goes_around_a_b_api_that_gives_no_usable_answer(
+    monkeypatch, b_api_answer
+):
+    use_settings(monkeypatch, _settings())
+    seen = _answering(monkeypatch, b_api_answer)
+
+    result = await _fast(GeocodingService()).enrich_metadata_with_geocoding(
+        dict(PLACES)
+    )
+
+    assert _hosts(seen) == ["b-api.staging.openeduhub.net"] + ["photon.komoot.io"] * 3
+    assert all(place["geo"]["latitude"] == 50.98 for place in result["schema:location"])
+
+
+@pytest.mark.asyncio
+async def test_the_fallback_is_logged_once_per_request(monkeypatch, geocoder, caplog):
+    use_settings(monkeypatch, _settings())
+    geocoder.status, geocoder.photon = 401, 200
+
+    with caplog.at_level("WARNING", logger=geo_module.logger.name):
+        await _fast(GeocodingService()).enrich_metadata_with_geocoding(dict(PLACES))
+
+    fallbacks = [r for r in caplog.records if "Photon wird direkt gefragt" in r.message]
+    assert len(fallbacks) == 1
+    for place in PLACES["schema:location"]:
+        assert place not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_a_place_photon_does_not_know_is_no_reason_to_go_around_the_b_api(
+    monkeypatch, geocoder
+):
+    use_settings(monkeypatch, _settings())
+
+    def nothing_found(request):
+        geocoder.append(request)
+        return httpx.Response(200, json={"features": []})
+
+    def client(*args, **kwargs):
+        kwargs.pop("transport", None)
+        return _REAL_CLIENT(
+            *args, transport=httpx.MockTransport(nothing_found), **kwargs
+        )
+
+    monkeypatch.setattr(geo_module.httpx, "AsyncClient", client)
+
+    result = await _fast(GeocodingService()).geocode_address("Nirgendwo")
+
+    assert result is None
+    assert _hosts(geocoder) == ["b-api.staging.openeduhub.net"]
+
+
+_REAL_CLIENT = httpx.AsyncClient
 
 
 def test_a_foreign_host_named_staging_gets_no_openeduhub_service():

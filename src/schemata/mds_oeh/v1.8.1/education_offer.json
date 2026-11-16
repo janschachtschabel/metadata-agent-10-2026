@@ -1764,8 +1764,8 @@
         "en": "Is the educational offering free of charge?"
       },
       "prompt": {
-        "de": "Ist das Angebot kostenlos? true = ja, false = nein. Suche nach 'kostenlos', 'kostenfrei', 'gratis', 'gebührenfrei' oder Preisangaben wie '0 â‚¬'.",
-        "en": "Is the offering free? true = yes, false = no. Look for 'free', 'no charge', 'complimentary' or price indications like 'â‚¬0'."
+        "de": "Ist das Angebot kostenlos? true = ja, false = nein. Suche nach 'kostenlos', 'kostenfrei', 'gratis', 'gebührenfrei' oder Preisangaben wie '0 €'.",
+        "en": "Is the offering free? true = yes, false = no. Look for 'free', 'no charge', 'complimentary' or price indications like '€0'."
       },
       "system": {
         "path": "schema:isAccessibleForFree",

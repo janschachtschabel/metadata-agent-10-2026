@@ -125,15 +125,15 @@ groups:
 
       # No 5xx, so the rule above stays silent: the key is refused - by the
       # B-API on its proxy paths or, called directly, by the service itself.
-      # URL extractions then end with TEXT_EXTRACTION_AUTH_REFUSED, places stay
-      # without coordinates.
+      # URL extractions then end with TEXT_EXTRACTION_AUTH_REFUSED; places get
+      # their coordinates from Photon itself with `auto`, none with `proxy`.
       - alert: MetadataAgentUpstreamKeyRefused
         expr: sum by (namespace, service) (increase(metadata_agent_upstream_responses_total{status=~"401|403",service=~"text-extraction|geocoder"}[10m])) > 3
         labels:
           severity: warning
         annotations:
           summary: Textextraktion oder Geocoder lehnen den Schlüssel ab
-          description: Mehr als 3 Antworten mit Status 401 oder 403 in 10 Minuten vom Dienst im Label service; betroffen sind Erschließungen aus einer URL bzw. die Koordinaten von Orten. Über die B-API (METADATA_AGENT_B_API_SERVICES auto oder proxy) fehlt dem Schlüssel das Recht für deren Proxy-Dienst (text-extraction bzw. photon_geocoding); bei direktem Aufruf (direct oder eigene Adresse) verlangt der Dienst selbst eine Anmeldung.
+          description: Mehr als 3 Antworten mit Status 401 oder 403 in 10 Minuten vom Dienst im Label service; betroffen sind Erschließungen aus einer URL bzw. die Koordinaten von Orten (mit auto fragt der Agent Photon dann direkt, mit proxy bleiben Orte ohne Koordinaten). Über die B-API (METADATA_AGENT_B_API_SERVICES auto oder proxy) fehlt dem Schlüssel das Recht für deren Proxy-Dienst (text-extraction bzw. photon_geocoding); bei direktem Aufruf (direct oder eigene Adresse) verlangt der Dienst selbst eine Anmeldung.
 
       - alert: MetadataAgentGenerateSlow
         # The share of runs above 270 s, read from that bucket (audit 14.11.,

@@ -3,7 +3,7 @@
 [English](ENV-PARAMETER.md) · **Deutsch**
 
 Die vollständige Referenz aller Umgebungsvariablen, die die Metadata Agent API
-liest, für Version 4.0.1; die Änderungen seit 3.0.1 stehen in
+liest, für Version 4.0.2; die Änderungen seit 3.0.1 stehen in
 [CHANGELOG.md](CHANGELOG.md). Quelle ist `src/config.py`.
 `tests/test_env_parameters.py` gleicht dieses Dokument mit dem Settings-Modell
 ab: Es fehlt keine Variable, und es steht keine hier, die der Agent nicht
@@ -112,7 +112,7 @@ nie einen Schlüssel aus, nur ob `B_API_KEY` gesetzt ist (`gesetzt` oder
 (`https://user:password@host`) fehlen in den Adresszeilen.
 
 ```text
-Starting Metadata Agent API v4.0.1
+Starting Metadata Agent API v4.0.2
 LLM Provider: b-api-academiccloud
 LLM Model: deepseek-v4-flash
 LLM API Base: https://b-api.staging.openeduhub.net/api/v1/llm/academiccloud
@@ -434,8 +434,10 @@ je Umgebung. Über die B-API sind es immer die, die zu dieser B-API gehören.
   für eine in `METADATA_AGENT_TEXT_EXTRACTION_API_URL` gesetzte Adresse.
 - **Rechte.** Der Schlüssel braucht die Proxy-Dienste `text-extraction` und
   `photon_geocoding`. Ohne das Recht scheitert das Erschließen aus einer URL
-  mit `502` `TEXT_EXTRACTION_AUTH_REFUSED`, und Orte bleiben ohne Koordinaten
-  (Hinweis in `processing.warnings`). Ganz ohne Schlüssel lautet der Code
+  mit `502` `TEXT_EXTRACTION_AUTH_REFUSED`. Lehnt die B-API den Geocoder ab
+  oder antwortet sie nicht, fragt der Agent mit `auto` Photon direkt (wie vor
+  4.0.0, Warnung im Log); mit `proxy` bleiben Orte ohne Koordinaten (Hinweis
+  in `processing.warnings`). Ganz ohne Schlüssel lautet der Code
   `TEXT_EXTRACTION_AUTH_MISSING` (`502`).
 - **Keine Adresse.** Ohne Adresse der Textextraktion antwortet das Erschließen
   aus einer URL mit `503` `TEXT_EXTRACTION_NOT_CONFIGURED`. Der Agent warnt
@@ -713,7 +715,7 @@ die B-API den Schlüssel annimmt. Das Zeitlimit je Prüfung beträgt 5 s.
   einen Schlüssel.
 
 ```json
-{"version": "4.0.1", "llm_provider": "b-api-openai", "b_api_auth_mode": "auto",
+{"version": "4.0.2", "llm_provider": "b-api-openai", "b_api_auth_mode": "auto",
  "config_warnings": [],
  "checks": {
    "llm": {"url": "https://b-api.prod.openeduhub.net/api/v1/llm/openai/models",
@@ -736,7 +738,7 @@ die B-API den Schlüssel annimmt. Das Zeitlimit je Prüfung beträgt 5 s.
 | Variable | Default | Werte | Bedeutung und Einsatz |
 |---|---|---|---|
 | `METADATA_AGENT_APP_NAME` | `Metadata Agent API` | Text | Name im Startlog und Titel des OpenAPI-Dokuments. Wird normalerweise nicht gesetzt |
-| `METADATA_AGENT_APP_VERSION` | `4.0.1` | Text | Version, die der Agent meldet (`/health`, OpenAPI, `/widget/info`). Nicht setzen: Der Wert ändert nur die gemeldete Version, nicht die Software |
+| `METADATA_AGENT_APP_VERSION` | `4.0.2` | Text | Version, die der Agent meldet (`/health`, OpenAPI, `/widget/info`). Nicht setzen: Der Wert ändert nur die gemeldete Version, nicht die Software |
 
 Keine Einstellung wählt das Schema: Eine Anfrage nennt ihren eigenen
 `context`, Default `default` (der Wert, den `GET /info/schemata` als

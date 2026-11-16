@@ -3,7 +3,7 @@
 **English** · [Deutsch](API.de.md)
 
 Reference for everyone who calls the Metadata Agent API (service id
-`metadata-agent`, version 4.0.1). What changed for callers since the previous
+`metadata-agent`, version 4.0.2). What changed for callers since the previous
 release is listed under
 [Changes since release 3.0.1](#changes-since-release-301).
 
@@ -142,7 +142,9 @@ What a caller needs to know:
   services `text-extraction` and `photon_geocoding`. Without the first, the
   extraction fails with `LLM_AUTH_FORBIDDEN`. Without the second, extraction
   from a URL fails with `TEXT_EXTRACTION_AUTH_REFUSED`. Without the third,
-  places stay without coordinates and `processing.warnings` says so.
+  the agent asks Photon itself (with `METADATA_AGENT_B_API_SERVICES=auto`);
+  with `proxy` places stay without coordinates and `processing.warnings` says
+  so.
 - The agent never answers `401` or `403` for a key that an upstream service
   refused. It answers `502` with an error code, because edu-sharing would read
   a `401` or `403` as an expired user session.
@@ -317,7 +319,7 @@ Release 4.0.0 changed the points below. Callers written against
 | `metadataset`, `schemaVersion`, `contextName`, `_schema` of the wrong kind in `/upload`, `/nodes`, `/upload/verify` | Node written, then `500` | `422` before anything is written |
 | Options of `/validate` and `/export/markdown` in the flat form | Ignored | Applied |
 | `/extract-field` | Value in its own shape | Value shaped like `/generate` (coordinates for `schema:location`, day codes for opening hours) |
-| `processing.warnings` | few cases | Also: places without coordinates because the B-API refused the geocoder |
+| `processing.warnings` | few cases | Also: places without coordinates because the B-API refused the geocoder (with `proxy`, or with `auto` when Photon itself was not usable either) |
 | LLM answer cut off at the token limit | Half a value was used | The field fails with `LLM_ANSWER_TRUNCATED` |
 | Generated request ID | 16 hex characters | 32 hex characters (the B3 trace ID) |
 | `/validate`, `/export/markdown` with an unknown context, version or schema file | `200` (`valid: false`, or `Schema not found` as Markdown) | `404` |
@@ -678,7 +680,8 @@ object:
 Typical entries of `processing.warnings`: the source was cut to 150,000
 characters; the content type was guessed by keywords; with `node_url` the page
 could not be read and only title and description were used; places stay without
-coordinates because the B-API refused the geocoder or the time ran out; a long
+coordinates because the B-API refused the geocoder (with `proxy`, or with
+`auto` when Photon itself was not usable either) or the time ran out; a long
 `text` was taken as a new source.
 
 Further entries, in the wording of the code (`<field>` is the field ID):
@@ -1892,7 +1895,7 @@ layout, two attributes, one event and three example pages.
 ```json
 {
   "name": "metadata-agent-canvas",
-  "version": "4.0.1",
+  "version": "4.0.2",
   "description": "Angular Web Component zur Anzeige und Bearbeitung von Metadaten. Kann als <metadata-agent-canvas> Tag in beliebige Webanwendungen eingebettet werden. Die URLs dieser Antwort sind relativ zur Adresse von /widget/info; {AGENT_URL} in den Snippets steht für die Basis-URL des Dienstes.",
   "dist_base_url": "dist",
   "scripts": {
@@ -1973,7 +1976,7 @@ there is no `/metrics`. See [DEPLOYMENT](../DEPLOYMENT.md) and
 Liveness: the process answers. It says nothing about the dependencies.
 
 ```json
-{ "status": "healthy", "version": "4.0.1" }
+{ "status": "healthy", "version": "4.0.2" }
 ```
 
 ```bash

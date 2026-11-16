@@ -1832,8 +1832,8 @@
         "en": "Requires payment?"
       },
       "prompt": {
-        "de": "Bestimme, ob die Veranstaltung kostenpflichtig ist. Wähle GENAU eine der vorgegebenen URIs. 'kostenfrei', 'kostenlos', 'gratis', 'Eintritt frei' → 'http://w3id.org/openeduhub/vocabs/price/no'. Preisangaben, 'Teilnahmegebühr', 'kostenpflichtig' → 'http://w3id.org/openeduhub/vocabs/price/yes'. Freemium, 'In-App-Käufe', 'Premium-Version' → 'http://w3id.org/openeduhub/vocabs/price/yes_for_additional'. Beispiele: 'http://w3id.org/openeduhub/vocabs/price/no' (bei 'Eintritt frei'), 'http://w3id.org/openeduhub/vocabs/price/yes' (bei 'Teilnahmegebühr 25€').",
-        "en": "Determine if the event requires payment. Choose EXACTLY one of the given URIs. 'free', 'no charge', 'complimentary' → 'http://w3id.org/openeduhub/vocabs/price/no'. Prices, 'registration fee', 'paid' → 'http://w3id.org/openeduhub/vocabs/price/yes'. Freemium, 'in-app purchases', 'premium version' → 'http://w3id.org/openeduhub/vocabs/price/yes_for_additional'. Examples: 'http://w3id.org/openeduhub/vocabs/price/no' (for 'free admission'), 'http://w3id.org/openeduhub/vocabs/price/yes' (for 'registration fee €25')."
+        "de": "Bestimme, ob die Veranstaltung kostenpflichtig ist. Wähle eine der vorgegebenen URIs nur, wenn der Text Kosten oder Kostenfreiheit ausdrücklich nennt. 'kostenfrei', 'kostenlos', 'gratis', 'Eintritt frei' → 'http://w3id.org/openeduhub/vocabs/price/no'. Preisangaben, 'Teilnahmegebühr', 'kostenpflichtig' → 'http://w3id.org/openeduhub/vocabs/price/yes'. Freemium, 'In-App-Käufe', 'Premium-Version' → 'http://w3id.org/openeduhub/vocabs/price/yes_for_additional'. Beispiele: 'http://w3id.org/openeduhub/vocabs/price/no' (bei 'Eintritt frei'), 'http://w3id.org/openeduhub/vocabs/price/yes' (bei 'Teilnahmegebühr 25€'). Eine freie Lizenz der Materialien (CC, OER) sagt nichts über die Teilnahmekosten. Steht im Text nichts zu Kosten: null (keine Angabe).",
+        "en": "Determine if the event requires payment. Choose one of the given URIs only if the text explicitly mentions costs or that it is free. 'free', 'no charge', 'complimentary' → 'http://w3id.org/openeduhub/vocabs/price/no'. Prices, 'registration fee', 'paid' → 'http://w3id.org/openeduhub/vocabs/price/yes'. Freemium, 'in-app purchases', 'premium version' → 'http://w3id.org/openeduhub/vocabs/price/yes_for_additional'. Examples: 'http://w3id.org/openeduhub/vocabs/price/no' (for 'free admission'), 'http://w3id.org/openeduhub/vocabs/price/yes' (for 'registration fee €25'). A free licence of the materials (CC, OER) says nothing about the cost of taking part. If the text says nothing about costs: null (not stated)."
       },
       "system": {
         "path": "ccm:price",
@@ -2286,8 +2286,8 @@
         "en": "Ticket / price info"
       },
       "prompt": {
-        "de": "Extrahiere Ticket- und Preisangaben. Suche nach Preisen, Gebühren, Ticketlinks, Verkäufern. Gib strukturierte Offer-Objekte mit Preis, Währung und ggf. URL zurück. Beispiele: [{'price': 25, 'priceCurrency': 'EUR', 'url': 'https://tickets.example.com'}], [{'price': 0, 'priceCurrency': 'EUR'}] (bei 'kostenfrei').",
-        "en": "Extract ticket and pricing information. Look for prices, fees, ticket links, vendors. Return structured Offer objects with price, currency, and optional URL. Examples: [{'price': 25, 'priceCurrency': 'EUR', 'url': 'https://tickets.example.com'}], [{'price': 0, 'priceCurrency': 'EUR'}] (for 'free')."
+        "de": "Extrahiere Ticket- und Preisangaben. Suche nach Preisen, Gebühren, Ticketlinks, Verkäufern. Gib strukturierte Offer-Objekte mit Preis, Währung und ggf. URL zurück. Beispiele: [{'price': 25, 'priceCurrency': 'EUR', 'url': 'https://tickets.example.com'}], [{'price': 0, 'priceCurrency': 'EUR'}] (bei 'kostenfrei'). Sagt der Text nichts zu Kosten (weder einen Preis noch kostenlos): null.",
+        "en": "Extract ticket and pricing information. Look for prices, fees, ticket links, vendors. Return structured Offer objects with price, currency, and optional URL. Examples: [{'price': 25, 'priceCurrency': 'EUR', 'url': 'https://tickets.example.com'}], [{'price': 0, 'priceCurrency': 'EUR'}] (for 'free'). If the text says nothing about costs (neither a price nor free of charge): null."
       },
       "system": {
         "path": "schema:offers",

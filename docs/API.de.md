@@ -3,7 +3,7 @@
 [English](API.md) · **Deutsch**
 
 Referenz für alle, die die Metadata Agent API aufrufen (Dienst-ID
-`metadata-agent`, Version 4.0.1). Was sich für Aufrufer seit dem vorigen
+`metadata-agent`, Version 4.0.2). Was sich für Aufrufer seit dem vorigen
 Release geändert hat, steht unter
 [Änderungen seit Release 3.0.1](#änderungen-seit-release-301).
 
@@ -143,8 +143,9 @@ Was ein Aufrufer wissen muss:
   Proxy-Dienste `text-extraction` und `photon_geocoding`. Ohne das erste
   scheitert die Erschließung mit `LLM_AUTH_FORBIDDEN`. Ohne das zweite
   scheitert die Erschließung aus einer URL mit `TEXT_EXTRACTION_AUTH_REFUSED`.
-  Ohne das dritte bleiben Orte ohne Koordinaten, und `processing.warnings`
-  sagt das.
+  Ohne das dritte fragt der Agent Photon direkt (mit
+  `METADATA_AGENT_B_API_SERVICES=auto`); mit `proxy` bleiben Orte ohne
+  Koordinaten, und `processing.warnings` sagt das.
 - Der Agent antwortet nie mit `401` oder `403`, wenn ein nachgelagerter Dienst
   einen Schlüssel ablehnt. Er antwortet mit `502` und einem Fehlercode, weil
   edu-sharing ein `401` oder `403` als abgelaufene Sitzung des Nutzers läse.
@@ -687,7 +688,8 @@ Typische Einträge in `processing.warnings`: Die Quelle wurde auf 150.000
 Zeichen gekürzt; der Inhaltstyp wurde per Schlagwortsuche geraten; bei
 `node_url` war die Seite nicht lesbar, und nur Titel und Beschreibung wurden
 genutzt; Orte bleiben ohne Koordinaten, weil die B-API den Geocoder abgelehnt
-hat oder die Zeit nicht reichte; ein langer `text` wurde als neue Quelle
+hat (mit `proxy`, oder mit `auto`, wenn auch Photon direkt nicht nutzbar war)
+oder die Zeit nicht reichte; ein langer `text` wurde als neue Quelle
 genommen.
 
 Weitere Einträge, im Wortlaut des Codes (`<Feld>` ist die Feld-ID):
@@ -1924,7 +1926,7 @@ Layout, zwei Attribute, ein Event und drei Beispielseiten.
 ```json
 {
   "name": "metadata-agent-canvas",
-  "version": "4.0.1",
+  "version": "4.0.2",
   "description": "Angular Web Component zur Anzeige und Bearbeitung von Metadaten. Kann als <metadata-agent-canvas> Tag in beliebige Webanwendungen eingebettet werden. Die URLs dieser Antwort sind relativ zur Adresse von /widget/info; {AGENT_URL} in den Snippets steht für die Basis-URL des Dienstes.",
   "dist_base_url": "dist",
   "scripts": {
@@ -2005,7 +2007,7 @@ auch kein `/metrics`. Siehe [DEPLOYMENT](../DEPLOYMENT.de.md) und
 Liveness: Der Prozess antwortet. Über die abhängigen Dienste sagt das nichts.
 
 ```json
-{ "status": "healthy", "version": "4.0.1" }
+{ "status": "healthy", "version": "4.0.2" }
 ```
 
 ```bash

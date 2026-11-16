@@ -1843,8 +1843,8 @@
         "en": "Does this offering require payment?"
       },
       "prompt": {
-        "de": "Bestimme den Kostenstatus. Wähle GENAU eine Option: 'nein (kostenfrei)' wenn kostenlos zugänglich (free, gratis, Open Access, CC-lizenziert); 'ja (kostenpflichtig)' wenn ein Preis, Abo oder Lizenzkosten genannt werden; 'zusätzliche Inhalte / Features per Kauf möglich' wenn ein Basisangebot frei ist, aber kostenpflichtige Erweiterungen existieren (Freemium). Falls keine Angabe: Feld leer lassen.",
-        "en": "Determine the cost status. Choose EXACTLY one option: 'nein (kostenfrei)' if freely accessible (free, open access, CC-licensed); 'ja (kostenpflichtig)' if a price, subscription or license fee is mentioned; 'zusätzliche Inhalte / Features per Kauf möglich' if a free base offering exists but paid add-ons are available (freemium). If unknown: leave field empty."
+        "de": "Bestimme, ob die Teilnahme kostet. 'nein (kostenfrei)' nur, wenn der Text ausdrücklich sagt, dass sie kostenlos ist (kostenlos, kostenfrei, gratis, Eintritt frei, 0 €); 'ja (kostenpflichtig)', wenn ein Preis, eine Teilnahme- oder Anmeldegebühr genannt wird; 'zusätzliche Inhalte / Features per Kauf möglich', wenn die Teilnahme frei ist, aber kostenpflichtige Zusatzangebote bestehen. Eine freie Lizenz der Materialien (CC, OER) sagt nichts über die Teilnahmekosten. Steht im Text nichts zu Kosten: null (keine Angabe).",
+        "en": "Determine whether taking part costs money. 'nein (kostenfrei)' only if the text states explicitly that it is free (free, free of charge, no fee, €0); 'ja (kostenpflichtig)' if a price, participation or registration fee is mentioned; 'zusätzliche Inhalte / Features per Kauf möglich' if taking part is free but paid extras exist. A free licence of the materials (CC, OER) says nothing about the cost of taking part. If the text says nothing about costs: null (not stated)."
       },
       "system": {
         "path": "ccm:price",
@@ -2161,8 +2161,8 @@
         "en": "Ticket / price info"
       },
       "prompt": {
-        "de": "Extrahiere Ticket- und Preisangaben. Suche nach Preisen, Gebühren, Ticketlinks, Verkäufern. Gib strukturierte Offer-Objekte mit Preis, Währung und ggf. URL zurück. Beispiele: [{'price': 25, 'priceCurrency': 'EUR', 'url': 'https://tickets.example.com'}], [{'price': 0, 'priceCurrency': 'EUR'}] (bei 'kostenfrei').",
-        "en": "Extract ticket and pricing information. Look for prices, fees, ticket links, vendors. Return structured Offer objects with price, currency, and optional URL. Examples: [{'price': 25, 'priceCurrency': 'EUR', 'url': 'https://tickets.example.com'}], [{'price': 0, 'priceCurrency': 'EUR'}] (for 'free')."
+        "de": "Extrahiere Ticket- und Preisangaben. Suche nach Preisen, Gebühren, Ticketlinks, Verkäufern. Gib strukturierte Offer-Objekte mit Preis, Währung und ggf. URL zurück. Beispiele: [{'price': 25, 'priceCurrency': 'EUR', 'url': 'https://tickets.example.com'}], [{'price': 0, 'priceCurrency': 'EUR'}] (bei 'kostenfrei'). Sagt der Text nichts zu Kosten (weder einen Preis noch kostenlos): null.",
+        "en": "Extract ticket and pricing information. Look for prices, fees, ticket links, vendors. Return structured Offer objects with price, currency, and optional URL. Examples: [{'price': 25, 'priceCurrency': 'EUR', 'url': 'https://tickets.example.com'}], [{'price': 0, 'priceCurrency': 'EUR'}] (for 'free'). If the text says nothing about costs (neither a price nor free of charge): null."
       },
       "system": {
         "path": "schema:offers",

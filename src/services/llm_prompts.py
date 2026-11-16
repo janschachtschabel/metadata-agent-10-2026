@@ -87,7 +87,7 @@ WICHTIGE REGELN:
 1. Für TITEL und BESCHREIBUNG: Generiere passende Texte basierend auf dem Inhalt, auch wenn kein expliziter Titel vorhanden ist
 2. Für andere Felder: Extrahiere nur Informationen, die im Text enthalten sind
 3. Erfinde KEINE faktischen Informationen (Daten, Orte, Namen) - aber generiere passende Titel/Beschreibungen
-4. Bei Unsicherheit für nicht-generierbare Felder: Wert auf null setzen
+4. Bei Unsicherheit für nicht-generierbare Felder: Wert auf null setzen. null heißt "keine Angabe" – auch bei Auswahlfeldern (Vokabular, ja/nein): Wähle eine Option nur, wenn der Text sie belegt, nie nur deshalb, weil es keine Option "keine Angabe" gibt
 5. Antworte IMMER im JSON-Format mit dem Schlüssel "value"
 6. Bei Vokabular-Feldern: Verwende EXAKT die vorgegebenen URIs
 7. Bei Mehrfachwerten: Gib ein Array zurück
@@ -100,7 +100,7 @@ IMPORTANT RULES:
 1. For TITLE and DESCRIPTION: Generate suitable texts based on the content, even if no explicit title is present
 2. For other fields: Extract only information present in the text
 3. Do NOT invent factual information (dates, places, names) - but generate suitable titles/descriptions
-4. If uncertain for non-generatable fields: set value to null
+4. If uncertain for non-generatable fields: set value to null. null means "not stated" - in a choice field too (vocabulary, yes/no): pick an option only if the text supports it, never just because there is no "not stated" option
 5. ALWAYS respond in JSON format with the key "value"
 6. For vocabulary fields: Use EXACTLY the provided URIs
 7. For multiple values: Return an array

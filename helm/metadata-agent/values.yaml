@@ -6,7 +6,7 @@ image:
   ## @param image.repository Registry path of the image, required (e.g. <registry>/projects/wlo/meta-services/metadata-agent-api)
   repository: ""
   ## @param image.tag Image tag; the chart version names the service version it deploys
-  tag: v4.0.1
+  tag: v4.0.2
   # Set, the image is pulled as <repository>@<digest> and the tag is not used:
   # a tag can be moved to another image, a digest cannot.
   ## @param image.digest Digest of the image (sha256:...) to pin it; empty: pulled by tag

@@ -2542,8 +2542,8 @@
         "en": "Does this offering require payment?"
       },
       "prompt": {
-        "de": "Ist der Zutritt / die Nutzung der Organisation kostenlos? Wähle 'nein (kostenfrei)' wenn kostenlos; 'ja (kostenpflichtig)' wenn Eintritt oder Gebühren anfallen; 'zusätzliche Inhalte / Features per Kauf möglich' bei Freemium-Modellen.",
-        "en": "Is access / use of the organisation free of charge? Choose 'nein (kostenfrei)' if free; 'ja (kostenpflichtig)' if fees apply; 'zusätzliche Inhalte / Features per Kauf möglich' for freemium models."
+        "de": "Ist der Zutritt / die Nutzung der Organisation kostenlos? Wähle 'nein (kostenfrei)' wenn kostenlos; 'ja (kostenpflichtig)' wenn Eintritt oder Gebühren anfallen; 'zusätzliche Inhalte / Features per Kauf möglich' bei Freemium-Modellen. Steht im Text nichts dazu: null (keine Angabe).",
+        "en": "Is access / use of the organisation free of charge? Choose 'nein (kostenfrei)' if free; 'ja (kostenpflichtig)' if fees apply; 'zusätzliche Inhalte / Features per Kauf möglich' for freemium models. If the text says nothing about it: null (not stated)."
       },
       "system": {
         "path": "ccm:price",

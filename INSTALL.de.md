@@ -2,7 +2,7 @@
 
 [English](INSTALL.md) · **Deutsch**
 
-So kommt die Metadata Agent API (Version 4.0.1) zum Laufen und so lässt sich
+So kommt die Metadata Agent API (Version 4.0.2) zum Laufen und so lässt sich
 prüfen, dass sie arbeitet: lokal mit uv oder pip, in Docker und mit Docker
 Compose.
 
@@ -257,12 +257,12 @@ Varianten beim Bauen:
 
 | Befehl | Wirkung |
 |---|---|
-| `docker build --build-arg VERSION=v4.0.1 --build-arg REVISION=$(git rev-parse HEAD) -t metadata-agent-api:v4.0.1 .` | Schreibt Version und Commit in die Labels des Image (Standard: `dev`, `unknown`) |
+| `docker build --build-arg VERSION=v4.0.2 --build-arg REVISION=$(git rev-parse HEAD) -t metadata-agent-api:v4.0.2 .` | Schreibt Version und Commit in die Labels des Image (Standard: `dev`, `unknown`) |
 | `docker build --no-cache -t metadata-agent-api .` | Baut jede Ebene neu |
 | `docker build --progress=plain -t metadata-agent-api .` | Zeigt die vollständige Build-Ausgabe |
 
 Die CI-Pipelines veröffentlichen Images in der internen Registry (Tags `main`,
-`develop` und Release-Tags wie `v4.0.1`). Wie man sie bezieht und startet,
+`develop` und Release-Tags wie `v4.0.2`). Wie man sie bezieht und startet,
 steht in [DEPLOYMENT.de.md](DEPLOYMENT.de.md).
 
 ### Was das Image enthält
@@ -419,7 +419,8 @@ B_API_KEY=<key>
   Agent Textextraktion und Geocoder über die B-API auf, mit demselben
   Schlüssel (`METADATA_AGENT_B_API_SERVICES`, Standard `auto`). Ohne diese
   Rechte scheitert die Erschließung aus einer URL mit
-  `TEXT_EXTRACTION_AUTH_REFUSED`, und Orte bleiben ohne Koordinaten.
+  `TEXT_EXTRACTION_AUTH_REFUSED`; den Geocoder fragt der Agent mit `auto`
+  dann direkt bei Photon, mit `proxy` bleiben Orte ohne Koordinaten.
 - **Welcher Schlüssel die Aufrufe trägt:** `METADATA_AGENT_B_API_AUTH_MODE`,
   Standard `auto`. Ein Schlüssel, den der B-API-Proxy durchreicht
   (`Authorization: Bearer`), wird verwendet; sonst `B_API_KEY`. Eine
@@ -494,7 +495,7 @@ curl -X POST http://localhost:8000/screenshot \
 
 | Prüfung | Erwartet | Sonst |
 |---|---|---|
-| `GET /health` | `{"status":"healthy","version":"4.0.1"}` | Der Prozess läuft nicht oder lauscht woanders. `/health` sagt nichts über Schlüssel oder abhängige Dienste |
+| `GET /health` | `{"status":"healthy","version":"4.0.2"}` | Der Prozess läuft nicht oder lauscht woanders. `/health` sagt nichts über Schlüssel oder abhängige Dienste |
 | `GET /ready` | `200` mit `{"status":"ready"}` | `503` mit `error.code` `NOT_READY`: Die Konfiguration ist unvollständig. Die Gründe stehen im Log (`Nicht bereit: …`) und auf dem internen Port, nicht in dieser Antwort. Siehe [Repository-Zugang und `/ready`](#repository-zugang-und-ready) |
 | `/docs` im Browser | Swagger UI, vom Agenten selbst ausgeliefert, ohne CDN; die Spezifikation liegt unter `/openapi.json` | — |
 | `POST /generate` | JSON mit `contextName`, `schemaVersion` und `metadataset`, den erschlossenen Feldern unter ihren Feld-IDs und `processing` mit `status` (`success` oder `partial`), `llm_provider` und `llm_model` | `502` mit einem `error.code` wie `LLM_AUTH_MISSING`: siehe [Fehlersuche](#fehlersuche). Ein Lauf macht viele LLM-Aufrufe (etwa einen je Feld) und endet spätestens nach 300 s (`METADATA_AGENT_GENERATE_TIMEOUT`) |

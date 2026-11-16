@@ -2,7 +2,7 @@
 
 **English** · [Deutsch](INSTALL.de.md)
 
-How to get the Metadata Agent API (version 4.0.1) running and how to check that
+How to get the Metadata Agent API (version 4.0.2) running and how to check that
 it works: locally with uv or pip, in Docker, and with Docker Compose.
 
 Production topics — Kubernetes and Helm, proxies, scaling, updates, rollback,
@@ -250,12 +250,12 @@ Build variants:
 
 | Command | Effect |
 |---|---|
-| `docker build --build-arg VERSION=v4.0.1 --build-arg REVISION=$(git rev-parse HEAD) -t metadata-agent-api:v4.0.1 .` | Writes version and commit into the image labels (defaults: `dev`, `unknown`) |
+| `docker build --build-arg VERSION=v4.0.2 --build-arg REVISION=$(git rev-parse HEAD) -t metadata-agent-api:v4.0.2 .` | Writes version and commit into the image labels (defaults: `dev`, `unknown`) |
 | `docker build --no-cache -t metadata-agent-api .` | Rebuilds every layer |
 | `docker build --progress=plain -t metadata-agent-api .` | Shows the full build output |
 
 The CI pipelines publish images to the internal registry (tags `main`,
-`develop` and release tags such as `v4.0.1`). Pulling and running them is
+`develop` and release tags such as `v4.0.2`). Pulling and running them is
 described in [DEPLOYMENT.md](DEPLOYMENT.md).
 
 ### What the image contains
@@ -407,8 +407,9 @@ B_API_KEY=<key>
   `text-extraction` and `photon_geocoding`. With a B-API provider the agent
   calls text extraction and geocoder through the B-API, with the same key
   (`METADATA_AGENT_B_API_SERVICES`, default `auto`). Without these rights
-  extraction from a URL fails with `TEXT_EXTRACTION_AUTH_REFUSED`, and places
-  stay without coordinates.
+  extraction from a URL fails with `TEXT_EXTRACTION_AUTH_REFUSED`; the
+  geocoder is then asked at Photon itself with `auto`, with `proxy` places stay
+  without coordinates.
 - **Which key carries the calls:** `METADATA_AGENT_B_API_AUTH_MODE`, default
   `auto`. A key that the B-API proxy forwards (`Authorization: Bearer`) is
   used; otherwise `B_API_KEY`. An installation that is called directly, not
@@ -482,7 +483,7 @@ curl -X POST http://localhost:8000/screenshot \
 
 | Check | Expected | Otherwise |
 |---|---|---|
-| `GET /health` | `{"status":"healthy","version":"4.0.1"}` | The process is not running or listens elsewhere. `/health` says nothing about keys or dependencies |
+| `GET /health` | `{"status":"healthy","version":"4.0.2"}` | The process is not running or listens elsewhere. `/health` says nothing about keys or dependencies |
 | `GET /ready` | `200` with `{"status":"ready"}` | `503` with `error.code` `NOT_READY`: the configuration is incomplete. The reasons are in the log (`Nicht bereit: …`) and on the internal port, not in this answer. See [Repository account and `/ready`](#repository-account-and-ready) |
 | `/docs` in a browser | Swagger UI, served by the agent itself without a CDN; the specification is at `/openapi.json` | — |
 | `POST /generate` | JSON with `contextName`, `schemaVersion` and `metadataset`, the extracted fields under their field ids, and `processing` with `status` (`success` or `partial`), `llm_provider` and `llm_model` | `502` with an `error.code` such as `LLM_AUTH_MISSING`: see [Troubleshooting](#troubleshooting). A run makes many LLM calls (about one per field) and ends after 300 s at the latest (`METADATA_AGENT_GENERATE_TIMEOUT`) |

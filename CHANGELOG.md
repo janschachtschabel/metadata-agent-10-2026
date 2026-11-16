@@ -1,5 +1,63 @@
 # Änderungen
 
+## 4.0.2 — 2026-11-16 — Geocoder-Ausweg, Kosten ohne Angabe, Webkomponente 4.0.2
+
+Schnittstellen und Einstellungen wie 4.0.0. Aus dem ersten Test auf Staging
+(16.11.).
+
+- **Webkomponente 4.0.2:** Kalender- und Uhr-Symbol in einer Farbe, auch im
+  Theme von edu-sharing; ein vollständiges Beispiel gegen den kurz sichtbaren
+  Eingabebereich in edu-sharing (README der Webkomponente). Bundle neu gebaut
+  und ausgeliefert (`dist/build.json`).
+- **Doku und Alarmtext:** DEPLOYMENT, ENV-PARAMETER, README, INSTALL, API,
+  UEBERGABE, Steckbrief und die Beschreibung von
+  `MetadataAgentUpstreamKeyRefused` nennen den direkten Photon-Aufruf mit
+  `auto`.
+
+- **Geocoder: Photon direkt, wenn der Weg über die B-API scheitert.** Auf
+  Staging antwortete die B-API dem durchgereichten Schlüssel einer
+  `/generate`-Anfrage auf `photon_geocoding` mit `401`, während die
+  LLM-Aufrufe mit demselben Schlüssel durchgingen. Orte blieben ohne
+  Koordinaten. Mit `METADATA_AGENT_B_API_SERVICES=auto` (Default) fragt der
+  Agent dann Photon direkt, wie vor 4.0.0: bei Ablehnung (`401`, `403`,
+  `429`), anderem Fehlerstatus, einer Antwort ohne JSON (Fehlerseite eines
+  Proxys), keiner Antwort oder ohne Schlüssel. Danach gehen die übrigen Orte
+  der Anfrage gleich zu Photon. Das Log nennt den Grund einmal je Anfrage
+  („… Photon wird direkt gefragt.“). `processing.warnings` meldet nur, wenn
+  auch Photon direkt nicht nutzbar ist (`5xx`, `429`, keine Antwort); ein
+  `4xx` von Photon kostet wie bei `direct` nur den einen Ort. Der Ausweg
+  belegt einen zweiten Platz im Takt von einer Anfrage je Sekunde, den sich
+  alle Anfragen des Prozesses teilen. Ein dauerhaft abgelehnter Schlüssel
+  kostet deshalb je Anfrage eine zusätzliche Sekunde und eine Logzeile; der
+  Agent merkt sich die Ablehnung nicht über Anfragen hinweg. Mit `proxy`
+  bleibt es beim Weg über die B-API ohne Ausweg.
+  Die Ablehnung auf Staging selbst ist damit nicht erklärt: Mit demselben
+  Schlüssel, direkt an die B-API geschickt (als `X-API-KEY` und als
+  `Bearer`), antwortet `photon_geocoding` mit `200`.
+- **Kosten: Keine Angabe statt „kostenfrei“.** Eine Veranstaltung ohne ein
+  Wort zu Kosten kam als „nein (kostenfrei)“ zurück, wenn der Text eine
+  CC-Lizenz der Materialien nannte – der Prompt von `ccm:price` wertete
+  „CC-lizenziert“ und „Open Access“ als kostenfrei. Der System-Prompt sagt
+  jetzt, dass `null` „keine Angabe“ heißt, auch bei Auswahlfeldern ohne eine
+  solche Option. Die Kosten-Prompts in Schema 2.0.0 (`ccm:price` bei
+  Veranstaltung, Bildungsangebot, Organisation; `schema:isAccessibleForFree`
+  im Bildungsangebot von `mds_oeh`; `schema:offers` bei Veranstaltungen)
+  verlangen `null`, wenn der Text nichts zu Kosten sagt; eine freie Lizenz
+  zählt bei Veranstaltung und Bildungsangebot nicht mehr als kostenfrei.
+  Bei `schema:offers` bleibt „kostenlos“ eine Antwort (Preis `0`); `null`
+  nur, wenn der Text weder einen Preis noch Kostenfreiheit nennt. Geprüft mit
+  vier Texten je Kontext: ohne Angabe und ohne Angabe mit CC-Lizenz `null`,
+  „kostenlos“ → `no`, „Teilnahmegebühr 45 €“ → `yes`.
+- **Geocoder-Takt:** Gleichzeitige Nachschläge erreichten Photon in derselben
+  Millisekunde. Der erste baute seinen TLS-Kontext erst nach dem Warten auf
+  seinen Slot auf und hielt dabei die Event-Loop einige hundert Millisekunden
+  an; die Slots der anderen fielen in diese Zeit, und sie wachten gemeinsam
+  auf. Der Client entsteht jetzt vor dem Warten. (Der Test dafür scheiterte
+  schon mit 4.0.1, sobald der TLS-Aufbau länger dauerte als ein Slot.)
+- **Euro-Zeichen:** Der Prompt von `schema:isAccessibleForFree` im
+  Bildungsangebot (1.8.1 beider Kontexte, 2.0.0 von `mds_oeh`) enthielt
+  `0 â‚¬` statt `0 €`.
+
 ## 4.0.1 — 2026-11-15 — Abhängigkeiten, Korrekturen aus den ersten CI-Läufen, Webkomponente 4.0.1
 
 Schnittstellen und Einstellungen wie 4.0.0. Entstanden am Tag von 4.0.0: Erst
