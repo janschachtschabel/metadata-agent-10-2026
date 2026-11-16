@@ -432,7 +432,7 @@ tests:
         service: geocoder
       exp_annotations:
         summary: Textextraktion oder Geocoder lehnen den Schlüssel ab
-        description: Mehr als 3 Antworten mit Status 401 oder 403 in 10 Minuten vom Dienst im Label service; betroffen sind Erschließungen aus einer URL bzw. die Koordinaten von Orten. Über die B-API (METADATA_AGENT_B_API_SERVICES auto oder proxy) fehlt dem Schlüssel das Recht für deren Proxy-Dienst (text-extraction bzw. photon_geocoding); bei direktem Aufruf (direct oder eigene Adresse) verlangt der Dienst selbst eine Anmeldung.
+        description: Mehr als 3 Antworten mit Status 401 oder 403 in 10 Minuten vom Dienst im Label service; betroffen sind Erschließungen aus einer URL bzw. die Koordinaten von Orten (mit auto fragt der Agent Photon dann direkt, mit proxy bleiben Orte ohne Koordinaten). Über die B-API (METADATA_AGENT_B_API_SERVICES auto oder proxy) fehlt dem Schlüssel das Recht für deren Proxy-Dienst (text-extraction bzw. photon_geocoding); bei direktem Aufruf (direct oder eigene Adresse) verlangt der Dienst selbst eine Anmeldung.
 # OPS-13: service="other" is any URL a caller hands in (preview images):
 # their outages are not ours.
 - interval: 1m
