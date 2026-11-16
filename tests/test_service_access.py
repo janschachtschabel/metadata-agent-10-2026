@@ -170,8 +170,12 @@ async def test_a_service_outside_the_b_api_never_gets_the_key(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_no_key_at_all_is_named_before_any_call(monkeypatch):
+    # proxy: through the B-API or not at all. With auto the extraction of the
+    # repository's environment is asked instead (test_service_ways.py).
     seen = []
-    service = _extractor(monkeypatch, _settings(b_api_key=""), seen)
+    service = _extractor(
+        monkeypatch, _settings(b_api_key="", b_api_services="proxy"), seen
+    )
 
     with pytest.raises(TextExtractionError) as raised:
         await service.fetch_from_url("https://example.org/page")
@@ -379,15 +383,18 @@ async def test_auto_asks_photon_itself_when_the_b_api_path_fails(
                 dict(PLACES), warnings=warnings
             )
 
-    # One try through the B-API, then every place directly at Photon.
-    assert (
-        _hosts(geocoder) == ["b-api.staging.openeduhub.net"] + ["photon.komoot.io"] * 3
+    # Refused: the forwarded key, then the agent's own key. Throttled (the
+    # caller's quota) and a B-API that fails otherwise: not the own key. Then
+    # every place directly at Photon (service_ways.py).
+    tries = 1 if status in (429, 502) else 2
+    assert _hosts(geocoder) == (
+        ["b-api.staging.openeduhub.net"] * tries + ["photon.komoot.io"] * 3
     )
     assert all(
         place["geo"]["latitude"] == 50.9793301 for place in result["schema:location"]
     )
     assert warnings == []
-    for request in geocoder[1:]:
+    for request in geocoder[tries:]:
         for header in ("authorization", "x-api-key", "x-b3-traceid"):
             assert header not in request.headers
 

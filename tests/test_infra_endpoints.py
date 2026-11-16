@@ -129,7 +129,7 @@ def test_forward_mode_without_own_key_is_ready(monkeypatch):
 
 def test_auto_mode_without_own_key_stays_ready(monkeypatch):
     """
-    Behind the B-API proxy with forwardApiKey every call carries the caller's
+    Behind the B-API proxy with forwardDelegation/forwardApiKey every call carries the caller's
     key; auto without B_API_KEY is a working setup (startup warning only).
     """
     use_settings(monkeypatch, _settings(b_api_auth_mode="auto", b_api_key=""))

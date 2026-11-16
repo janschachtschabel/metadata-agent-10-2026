@@ -1,8 +1,8 @@
 {
   "name": "metadata-agent-canvas",
-  "version": "4.0.2",
-  "builtAt": "2026-11-16T11:17:41.718Z",
-  "hash": "4de1c4d454932eaf155860f4b0f08d43557db1da594db47d8790d4a44889cc95",
+  "version": "4.0.3",
+  "builtAt": "2026-11-16T13:23:17.990Z",
+  "hash": "4025c51e06eafd4d4e2a9cd106c354ffce44f0f2944a142457a0927216d30c2b",
   "files": {
     "assets/i18n/de.json": "81efcbc3bf2586d9de308b364ff8e9e16fd7fc39a4f8ff283ebb0a85e51bd8c7",
     "assets/i18n/en.json": "fe6ec6ea46ff45d7e022064cb0855c2395d97b1b5818d03b0fed19b032efb1dc",
@@ -18,8 +18,8 @@
     "dist/fonts/roboto-latin-ext-300-normal.woff2": "ccd24ea4a6eb7d7f2ad3d48078f64ffceb623faad8b4a52943bd7569d995dbec",
     "dist/fonts/roboto-latin-ext-400-normal.woff2": "5725eacca97303d8bce26f76cfcaee4393295bbf93c1eb6c3e5e4f260b2da189",
     "dist/fonts/roboto-latin-ext-500-normal.woff2": "1e597a6e3b163200475089698be3427ab1bb01553493d5b7d53694429948d8ec",
-    "dist/main.js": "07d636433f55d31faed9d84b45dd99a7c0aa3066a14a501788223e1a9d5eb1f1",
-    "dist/main.js.gz": "64d7ac99bf7c3e06664d38c852405f9589c42bfe22f5038c1505b4724088b856",
+    "dist/main.js": "46e810d884370c089e7fe54df3634403a510fc83dd586ceb1f91a9fcf91306eb",
+    "dist/main.js.gz": "f786dc4d8fc3f6b290131327732b56807905d75c3d2ffb19f0152a61328de6f7",
     "dist/polyfills.js": "ee2a6f5bdc1b6f4c0ad92b5bb975611ec1f65572f6ae64b675e4b6db9c11056f",
     "dist/polyfills.js.gz": "cf2fd8ba66f5fcc2cd77e93e8408373e78edf6bc390a4296bbd8387e85a77036",
     "dist/runtime.js": "dfec62526d27aa44162dbbb9a476ac9500dbcd8dd4e19e7cbe84062bdbf517a5",

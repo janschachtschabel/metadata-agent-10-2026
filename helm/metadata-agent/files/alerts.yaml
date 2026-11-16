@@ -28,7 +28,7 @@ groups:
           severity: critical
         annotations:
           summary: B-API lehnt den eigenen Schlüssel ab oder es fehlt jeder Schlüssel
-          description: KI-Aufrufe mit der konfigurierten Einstellung enden mit LLM_AUTH_* (401/403, oder kein Key - im Modus forward fehlt dann der vom Proxy weitergereichte). B_API_KEY im Secret bzw. forwardApiKey im B-API-Proxy prüfen.
+          description: KI-Aufrufe mit der konfigurierten Einstellung enden mit LLM_AUTH_* (401/403, oder kein Key - im Modus forward fehlt dann der vom Proxy weitergereichte). B_API_KEY im Secret bzw. forwardDelegation/forwardApiKey im B-API-Proxy prüfen.
 
       - alert: MetadataAgentLlmRouteMisconfigured
         expr: |

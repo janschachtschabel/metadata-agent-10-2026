@@ -30,6 +30,7 @@ from .llm_auth import b_api_auth, b_api_headers_for
 from .llm_errors import LLMError
 from ..utils.request_id import TRACE_EVENT_HOOKS
 from ..utils.tls_context import shared_tls_context
+from .service_ways import REFUSALS
 
 # Short on purpose: a dependency that needs longer is a finding in itself, and
 # the report waits for the slowest check.
@@ -172,6 +173,9 @@ async def check_dependencies(
         "llm_provider": settings.llm_provider,
         "b_api_auth_mode": settings.b_api_auth_mode,
         "config_warnings": settings.config_warnings(),
+        # Ways to text extraction and geocoder the B-API refused lately, with
+        # the seconds until they are tried again (service_ways.py).
+        "refused_ways": REFUSALS.snapshot(),
         "checks": {
             "llm": llm,
             "text_extraction": text_extraction,

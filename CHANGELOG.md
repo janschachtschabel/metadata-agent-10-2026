@@ -1,5 +1,64 @@
 # Änderungen
 
+## 4.0.3 — 2026-11-16 — Ausweichkette zu Textextraktion und Geocoder
+
+Schnittstellen und Einstellungen wie 4.0.0; neu ist nur `refused_ways` in
+`GET /debug/dependencies`. Webkomponente 4.0.3: ohne Änderung am Code, nur
+die Version, weil `/widget/info` die Version des Agents als die des Widgets
+meldet; Bundle neu gebaut und ausgeliefert (`dist/build.json`).
+
+- **Drei Wege zu Textextraktion und Geocoder, automatisch gewählt.** Die
+  aktuelle B-API kennt am Proxy-Eintrag kein `forwardApiKey` mehr, sondern
+  `forwardDelegation` (geprüft an `/v3/api-docs` der Staging-B-API): Sie reicht
+  ein befristetes Token mit den Rechten aus `delegationScopes` weiter, nicht
+  den Schlüssel des Aufrufers. Das erklärt wahrscheinlich die `401` auf
+  `photon_geocoding` vom 16.11. Mit `METADATA_AGENT_B_API_SERVICES=auto`
+  versucht ein Aufruf jetzt nacheinander (`src/services/service_ways.py`):
+  die weitergereichte Anmeldung, den eigenen `B_API_KEY` des Agents (nicht mit
+  `B_API_AUTH_MODE=forward`), den Dienst direkt ohne Schlüssel (Photon bzw. die
+  Textextraktion der Repository-Umgebung, wie vor 4.0.0).
+  - Weiter zum nächsten Weg bei `401` und `403`. Ein `429` auf dem
+    weitergereichten Weg (Kontingent des Aufrufers aufgebraucht) überspringt
+    den eigenen Schlüssel: Der Agent zahlt nicht für fremde Kontingente.
+    Antwortet die B-API anders nicht brauchbar (anderer Fehlerstatus, kein
+    JSON, keine Verbindung), geht der Aufruf gleich zum direkten Weg.
+  - Eine zu langsame Seite (auch ein `504` der B-API) und eine Seite ohne Text
+    sind die Antwort: kein zweiter Abruf.
+  - Einen mit `401`/`403` abgelehnten Weg überspringt der Prozess 10 Minuten
+    lang, dann versucht er ihn wieder: den eigenen Schlüssel für alle
+    Anfragen, eine weitergereichte Anmeldung nur für sich selbst (unter einem
+    Hash gemerkt, höchstens 1024). So stellt die kaputte Anmeldung eines
+    Aufrufers niemand anderen auf den Schlüssel des Agents um. Das Log nennt
+    eine Ablehnung einmal, `GET /debug/dependencies` zeigt die Wege unter
+    `refused_ways`. Ein nur aus dem Gedächtnis übersprungener Weg gibt
+    dieselbe Antwort wie eine frische Ablehnung.
+  - Bisher endete die Textextraktion bei einer Ablehnung sofort mit `502`
+    `TEXT_EXTRACTION_AUTH_REFUSED`; das gilt jetzt erst, wenn alle Wege
+    scheitern, und mit `proxy` (Wege 1 und 2). Ohne jede Anmeldung fragt
+    `auto` den Dienst direkt; `TEXT_EXTRACTION_AUTH_MISSING` bleibt, wo es
+    keinen direkten Weg gibt (`proxy`, Repository außerhalb von Staging und
+    Produktion).
+  - Der eigene Schlüssel bucht Textextraktion und Geocoder auf den Agent. Die
+    LLM-Aufrufe tragen weiter nur die Anmeldung des Aufrufers.
+  - Live geprüft gegen die Staging-B-API: abgelehntes Token → eigener
+    Schlüssel; beide abgelehnt → Photon bzw. `text-extraction.staging…`
+    direkt; `proxy` → Warnung bzw. `TEXT_EXTRACTION_AUTH_REFUSED`. Die
+    Textextraktion der Produktion ist direkt nicht nutzbar (selbstsigniertes
+    Zertifikat, 16.11.); dort bleibt nur der eigene Schlüssel als Ausweg.
+- `Way` zeigt in `repr` keinen Schlüssel; das Log der Textextraktion nennt
+  nur den Host, keine Zugangsdaten aus einer konfigurierten URL.
+- Geprüft auch durch einen unabhängigen Review (16.11.): seine Befunde
+  (Gedächtnis je Anmeldung, `429`, `504`, gleiche Antwort aus dem Gedächtnis,
+  Doku) sind behoben und mit Tests belegt.
+- **Doku:** Der Proxy-Eintrag in DEPLOYMENT („Hinter dem B-API-Proxy“) nennt
+  `forwardDelegation` bzw. `forwardApiKey`, die `delegationScopes`,
+  `responseTimeout` ≥ 310 000 ms (auf Staging stand er am 16.11. auf
+  300 000 ms) und die Freigaben `allowedRequestHeaders`,
+  `allowedResponseHeaders`, `allowedResponseContentTypes`. Der Test nach dem
+  Deployment für die Textextraktion liest `refused_ways` mit, weil ein `200`
+  mit `auto` die Rechte allein nicht mehr belegt. Übrige Stellen nennen
+  `forwardDelegation` bzw. `forwardApiKey`.
+
 ## 4.0.2 — 2026-11-16 — Geocoder-Ausweg, Kosten ohne Angabe, Webkomponente 4.0.2
 
 Schnittstellen und Einstellungen wie 4.0.0. Aus dem ersten Test auf Staging

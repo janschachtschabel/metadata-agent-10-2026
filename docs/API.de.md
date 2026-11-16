@@ -3,7 +3,7 @@
 [English](API.md) · **Deutsch**
 
 Referenz für alle, die die Metadata Agent API aufrufen (Dienst-ID
-`metadata-agent`, Version 4.0.2). Was sich für Aufrufer seit dem vorigen
+`metadata-agent`, Version 4.0.3). Was sich für Aufrufer seit dem vorigen
 Release geändert hat, steht unter
 [Änderungen seit Release 3.0.1](#änderungen-seit-release-301).
 
@@ -122,7 +122,7 @@ Welchen Schlüssel der Agent für seine eigenen Aufrufe nutzt:
 
 | Aufruf des Agents | Schlüssel | Gesendet als |
 |---|---|---|
-| LLM, Textextraktion und Geocoder über die B-API | Der Schlüssel des Aufrufers, wenn der Proxy ihn durchreicht (`forwardApiKey`), sonst der `B_API_KEY` des Agents. Es entscheidet `METADATA_AGENT_B_API_AUTH_MODE`, siehe unten | `Authorization: Bearer <key>` (durchgereicht, unverändert) oder `X-API-KEY` (eigener Schlüssel) |
+| LLM, Textextraktion und Geocoder über die B-API | Die Anmeldung des Aufrufers, wenn der Proxy sie durchreicht (Schlüssel per `forwardApiKey` oder Delegations-Token per `forwardDelegation`), sonst der `B_API_KEY` des Agents. Es entscheidet `METADATA_AGENT_B_API_AUTH_MODE`, siehe unten | `Authorization: Bearer <key>` (durchgereicht, unverändert) oder `X-API-KEY` (eigener Schlüssel) |
 | LLM mit `llm_provider=openai` | Der `OPENAI_API_KEY` des Agents | `Authorization: Bearer` |
 | Repository (edu-sharing), lesend und schreibend | Dienstkonto `WLO_GUEST_USERNAME` / `WLO_GUEST_PASSWORD` | Basic-Authentifizierung |
 
@@ -141,10 +141,11 @@ Was ein Aufrufer wissen muss:
   ein eingehender Header `X-API-KEY` werden ignoriert.
 - Der Schlüssel braucht die Rechte für die LLM-Endpunkte der B-API und für die
   Proxy-Dienste `text-extraction` und `photon_geocoding`. Ohne das erste
-  scheitert die Erschließung mit `LLM_AUTH_FORBIDDEN`. Ohne das zweite
-  scheitert die Erschließung aus einer URL mit `TEXT_EXTRACTION_AUTH_REFUSED`.
-  Ohne das dritte fragt der Agent Photon direkt (mit
-  `METADATA_AGENT_B_API_SERVICES=auto`); mit `proxy` bleiben Orte ohne
+  scheitert die Erschließung mit `LLM_AUTH_FORBIDDEN`. Ohne das zweite oder
+  dritte versucht der Agent mit `METADATA_AGENT_B_API_SERVICES=auto` seinen
+  eigenen `B_API_KEY` und dann den Dienst direkt (Textextraktion der
+  Repository-Umgebung, Photon). Scheitern alle Wege, endet die Erschließung
+  aus einer URL mit `TEXT_EXTRACTION_AUTH_REFUSED`; mit `proxy` bleiben Orte ohne
   Koordinaten, und `processing.warnings` sagt das.
 - Der Agent antwortet nie mit `401` oder `403`, wenn ein nachgelagerter Dienst
   einen Schlüssel ablehnt. Er antwortet mit `502` und einem Fehlercode, weil
@@ -1926,7 +1927,7 @@ Layout, zwei Attribute, ein Event und drei Beispielseiten.
 ```json
 {
   "name": "metadata-agent-canvas",
-  "version": "4.0.2",
+  "version": "4.0.3",
   "description": "Angular Web Component zur Anzeige und Bearbeitung von Metadaten. Kann als <metadata-agent-canvas> Tag in beliebige Webanwendungen eingebettet werden. Die URLs dieser Antwort sind relativ zur Adresse von /widget/info; {AGENT_URL} in den Snippets steht für die Basis-URL des Dienstes.",
   "dist_base_url": "dist",
   "scripts": {
@@ -2007,7 +2008,7 @@ auch kein `/metrics`. Siehe [DEPLOYMENT](../DEPLOYMENT.de.md) und
 Liveness: Der Prozess antwortet. Über die abhängigen Dienste sagt das nichts.
 
 ```json
-{ "status": "healthy", "version": "4.0.2" }
+{ "status": "healthy", "version": "4.0.3" }
 ```
 
 ```bash
@@ -2087,8 +2088,10 @@ verfügbar).
 `GET /debug/dependencies` ruft B-API, Textextraktion, Geocoder und Repository
 je einmal auf, mit dem Schlüssel der Anfrage, und meldet je Dienst `url`,
 `reachable`, `status`, `ms` und, wo ein Schlüssel im Spiel ist, `auth_source`
-und `authorized`. Dazu kommen `version`, `llm_provider`, `b_api_auth_mode` und
-`config_warnings`. Der Aufruf verbraucht keine LLM-Tokens.
+und `authorized`. Dazu kommen `version`, `llm_provider`, `b_api_auth_mode`, `config_warnings` und
+`refused_ways`: die Wege zu Textextraktion und Geocoder, die die B-API zuletzt
+abgelehnt hat (etwa `"geocoder:forwarded": 412`), mit den Sekunden, bis der
+Agent sie wieder versucht. Der Aufruf verbraucht keine LLM-Tokens.
 
 ```bash
 curl -s "$API/debug/auth" -H "Authorization: Bearer $B_API_KEY"

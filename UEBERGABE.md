@@ -1,6 +1,6 @@
 # Übergabe an den Betrieb (Team 6)
 
-Stand 4.0.2. Gegliedert nach der Checkliste „Übergabepaket“ aus den
+Stand 4.0.3. Gegliedert nach der Checkliste „Übergabepaket“ aus den
 Anforderungen von Team 6. Einzelheiten stehen in
 [ENV-PARAMETER.de.md](ENV-PARAMETER.de.md) und [DEPLOYMENT.de.md](DEPLOYMENT.de.md);
 dieses Dokument verweist dorthin, statt sie zu wiederholen. Felder in
@@ -13,7 +13,7 @@ Anforderungen erfüllt sind, steht in
 | | |
 |---|---|
 | Repo | API: <https://scm.edu-sharing.com/edu-sharing/projects/wlo/metaservices/metadata-agent>; Webkomponente: <https://scm.edu-sharing.com/edu-sharing/projects/wlo/metaservices/metadata-agent-webcomponent> (das gebaute Widget liegt im API-Repo unter `src/static/widget/`). Ob T6 Zugriff hat, ist noch zu bestätigen. |
-| CI | `.gitlab-ci.yml` baut bei jedem Push auf `main`/`develop` ein Image mit dem Branch als Tag und bei jedem Git-Tag `v*` ein Image mit der Version (z.B. `v4.0.2`); andere Tags veröffentlichen nichts. Produktion nur mit Versions-Tags. Eine geplante Pipeline (in GitLab unter CI/CD > Schedules auf `main` anzulegen) führt nur die Jobs `scheduled dependency checks` (`pip-audit`, Alter des Chromium) und `scheduled image scan` (Trivy über das neueste Release-Image oder `SCAN_TAG`, SBOM als Artefakt) aus: Lücken, die nach einem Release bekannt werden, fallen so ohne neuen Push auf. |
+| CI | `.gitlab-ci.yml` baut bei jedem Push auf `main`/`develop` ein Image mit dem Branch als Tag und bei jedem Git-Tag `v*` ein Image mit der Version (z.B. `v4.0.3`); andere Tags veröffentlichen nichts. Produktion nur mit Versions-Tags. Eine geplante Pipeline (in GitLab unter CI/CD > Schedules auf `main` anzulegen) führt nur die Jobs `scheduled dependency checks` (`pip-audit`, Alter des Chromium) und `scheduled image scan` (Trivy über das neueste Release-Image oder `SCAN_TAG`, SBOM als Artefakt) aus: Lücken, die nach einem Release bekannt werden, fallen so ohne neuen Push auf. |
 | GitLab-CI/CD-Variablen | Die Docker-Jobs in `.gitlab-ci.yml` brauchen: `DIND_IMAGE`, `DIND_HOST`, `DIND_DRIVER`, `DIND_TLS_CERTDIR` (Docker-in-Docker), `DOCKER_REGISTRY`, `DOCKER_USERNAME`, `DOCKER_PASSWORD` (maskiert). Test- und Ruff-Jobs brauchen keine. Die Webkomponente braucht keine eigenen Variablen. |
 | GitHub-Spiegel | `.github/workflows/docker-publish.yml`: Tests, Chart-Prüfung und Image-Bau bei Pushes auf `main`, Tags `v*` und Pull Requests auf `main`; nach DockerHub nur außerhalb von Pull Requests und mit Secret `DOCKERHUB_PASSWORD`. `.github/workflows/scheduled-checks.yml` wiederholt täglich (04:23 UTC) und auf Knopfdruck `pip-audit`, die Altersprüfung des Chromium und den Trivy-Scan des neuesten Release-Images. Dependabot (`.github/dependabot.yml`) schlägt Updates für `uv.lock` (damit Playwright/Chromium), Basis-Images und Actions vor |
 | Helm-Chart | [`helm/metadata-agent/`](helm/metadata-agent/README.md); die CI prüft ihn mit `helm lint` und die Alarmregeln mit `promtool` (Jobs `helm lint`, `alert rules`) |
@@ -51,7 +51,7 @@ Anforderungen erfüllt sind, steht in
 
 | Header | Richtung | Wozu |
 |---|---|---|
-| `Authorization: Bearer <key>` | ein | Schlüssel des Aufrufers, den der B-API-Proxy weiterreicht (`forwardApiKey`). Er wird für die KI-Aufrufe unverändert weitergegeben. |
+| `Authorization: Bearer <key>` | ein | Vom B-API-Proxy: die Anmeldung des Aufrufers: sein Schlüssel (`forwardApiKey`, ältere B-API) oder ein Delegations-Token dafür (`forwardDelegation`). Er wird für die KI-Aufrufe unverändert weitergegeben. |
 | `x-client-trace-id`, `x-request-id`, `x-b3-*`, `b3` | ein → weiter | Tracing. Wird unverändert an B-API und Repository weitergegeben (Textextraktion und Geocoder laufen über die B-API), nie direkt an Fremddienste wie Photon. Ein Wert mit mehr als 128 Zeichen oder anderen Zeichen als Buchstaben, Ziffern, `.`, `_`, `-` entfällt; anstelle eines `x-request-id` mit mehr als 64 Zeichen geht die Anfrage-ID des Agenten weiter. Fehlt eine B3-Trace-ID oder ist sie keine (16 oder 32 Hex-Zeichen), legt der Agent eine an. |
 | `X-Request-ID` | aus | Anfrage-ID (gleich `x-client-trace-id`, wenn vorhanden, sonst `x-request-id`, sonst die Trace-ID). Steht auch in Fehlerantworten als `error.request_id` und in der Logzeile zum Fehler. Ohne diesen Header können Nutzer einen Fehler nicht eindeutig melden. |
 
@@ -111,10 +111,11 @@ Anforderungen erfüllt sind, steht in
   Routing `router`) **und** auf die Proxy-Dienste `text-extraction` (Erschließen aus einer URL) und `photon_geocoding` (Koordinaten von Orten).
   **Kein** `LLM_ROUTE_MANAGE`. Das gilt für jeden Schlüssel, mit dem der Dienst
   aufgerufen wird: die Nutzer- und Gast-Schlüssel aus edu-sharing und
-  `B_API_KEY`. Fehlt das Recht, endet das Erschließen aus einer URL mit `502`
-  `TEXT_EXTRACTION_AUTH_REFUSED`. Den Geocoder fragt der Agent mit `auto`
-  dann direkt bei Photon (Warnung im Log); mit `proxy` bleiben Orte ohne
-  Koordinaten, die Antwort nennt das in `processing.warnings`.
+  `B_API_KEY`. Fehlt das Recht, versucht der Agent mit `auto` seinen eigenen
+  `B_API_KEY` und dann den Dienst direkt (Warnung im Log, 10 Minuten gemerkt).
+  Erst wenn alle Wege scheitern, oder mit `proxy`, endet das Erschließen aus
+  einer URL mit `502` `TEXT_EXTRACTION_AUTH_REFUSED`, und Orte bleiben ohne
+  Koordinaten (`processing.warnings`).
 - **Dienste über die B-API** (`METADATA_AGENT_B_API_SERVICES=auto`):
   Textextraktion und Geocoder ruft der Agent über die Pfade der B-API auf
   (`/api/v1/proxy/text-extraction`, `/api/v1/proxy/photon_geocoding`), mit

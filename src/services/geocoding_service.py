@@ -1,11 +1,11 @@
 """
 Geocoding service using Photon API (Komoot) to convert addresses to coordinates.
 
-A deployment with a B-API calls Photon through the B-API's proxy path, with the
-same key as the LLM calls (Settings.geocoder_api_url); otherwise Photon itself.
-With METADATA_AGENT_B_API_SERVICES=auto a failing B-API path is not the end:
-the request asks Photon itself, as before 4.0.0 (staging 16.11.: the B-API
-answered the forwarded key with 401 on photon_geocoding).
+A deployment with a B-API calls Photon through the B-API's proxy path
+(Settings.geocoder_api_url); otherwise Photon itself. Which credential, and
+what happens when the B-API refuses it or fails: services/service_ways.py -
+with METADATA_AGENT_B_API_SERVICES=auto the forwarded credential, then the
+agent's own key, then Photon itself, as before 4.0.0.
 """
 
 import asyncio
@@ -17,11 +17,10 @@ from typing import Any, Optional
 import httpx
 import logging
 
-from ..config import PHOTON_URL, get_settings
+from ..config import get_settings
 from ..metrics import OWN_SERVICE_HOOKS, THIRD_PARTY_HOOKS
 from ..utils.tls_context import shared_tls_context
-from .llm_auth import b_api_headers_for
-from .llm_errors import LLMCredentialsMissing
+from .service_ways import REFUSALS, Way, geocoder_ways
 
 logger = logging.getLogger(__name__)
 
@@ -54,11 +53,29 @@ class _PathFailed(Exception):
 
 class GeocoderRefused(Exception):
     """
-    The B-API does not let this key use the geocoder - or there is no key.
+    The B-API does not let this key use the geocoder - or there is no key, or
+    no way to the geocoder is left.
 
     True for every place of the request alike: asking again per place only
     costs time. The message is one for the caller (processing.warnings).
+    `status`: the B-API's HTTP status, None without one.
     """
+
+    def __init__(self, message: str, status: Optional[int] = None) -> None:
+        super().__init__(message)
+        self.status = status
+
+
+NO_KEY = (
+    "Für den Geocoder über die B-API (Proxy-Dienst photon_geocoding) gibt es "
+    "keinen Schlüssel."
+)
+
+# What the log says the request does next, once a way is given up.
+NEXT_STEP = {
+    "own": "Der Agent versucht es mit seinem eigenen Schlüssel (B_API_KEY).",
+    "direct": "Photon wird direkt gefragt.",
+}
 
 
 # The languages Photon answers in; any other is a 400 there, and the place
@@ -94,10 +111,32 @@ class _Lookups:
     def __init__(self) -> None:
         self._stack = AsyncExitStack()
         self._clients: dict[bool, httpx.AsyncClient] = {}
-        # Set once the B-API path failed in this request: the remaining
-        # lookups go to Photon itself without trying it again.
-        self.direct_only = False
+        # The ways still open to this request, chosen at its first lookup (in
+        # its context: the forwarded credential is the request's). A way that
+        # failed is dropped, so the next place does not try it again.
+        self.ways: Optional[list[Way]] = None
+        # Why the first way was given up: the warning names this one.
         self.reason: Optional[str] = None
+
+    def give_up(
+        self, way: Way, reason: str, all_b_api: bool = False, own_too: bool = False
+    ) -> None:
+        """
+        Drop `way` - or every way through the B-API, or the agent's own key with
+        it - and log what follows.
+        """
+        assert self.ways is not None
+        self.ways = [
+            w
+            for w in self.ways
+            if w is not way
+            and not (all_b_api and w.via_b_api)
+            and not (own_too and w.name == "own")
+        ]
+        if self.reason is None:
+            self.reason = reason
+        if self.ways:
+            logger.warning(f"⚠️ {reason} {NEXT_STEP[self.ways[0].name]}")
 
     async def client(self, via_b_api: bool) -> httpx.AsyncClient:
         if via_b_api not in self._clients:
@@ -156,42 +195,12 @@ class GeocodingService:
         if not address or not address.strip():
             return None
 
-        settings = get_settings()
-        api_url = settings.geocoder_api_url
-        # auto: Photon itself when the B-API path fails. proxy: no way around.
-        fallback = settings.b_api_services == "auto" and api_url != PHOTON_URL
         # The client of the request (enrich_metadata_with_geocoding), else one
         # for this lookup alone.
         shared = _SHARED_LOOKUPS.get()
         session = shared or _Lookups()
         try:
-            if session.direct_only:
-                return await self._lookup_directly(session, address, language, None)
-            try:
-                # Before the rate-limit slot: a lookup that cannot be made must
-                # not make every other request wait for it.
-                auth = b_api_headers_for(api_url, settings)
-            except LLMCredentialsMissing as e:
-                refusal = (
-                    "Für den Geocoder über die B-API (Proxy-Dienst photon_geocoding) "
-                    "gibt es keinen Schlüssel."
-                )
-                if not fallback:
-                    raise GeocoderRefused(refusal) from e
-                return await self._lookup_directly(session, address, language, refusal)
-            try:
-                return await self._lookup(session, api_url, auth, address, language)
-            except GeocoderRefused as e:
-                if not fallback:
-                    raise
-                return await self._lookup_directly(session, address, language, str(e))
-            except _PathFailed as e:
-                if not fallback:
-                    logger.error(f"❌ Geocoder {e}")
-                    return None
-                reason = f"Der Geocoder über die B-API war nicht nutzbar ({e})."
-                return await self._lookup_directly(session, address, language, reason)
-
+            return await self._geocode(session, address, language)
         except GeocoderRefused:
             raise
         except Exception as e:
@@ -201,55 +210,75 @@ class GeocodingService:
             if session is not shared:
                 await session.aclose()
 
-    async def _lookup_directly(
-        self,
-        session: "_Lookups",
-        address: str,
-        language: str,
-        reason: Optional[str],
+    async def _geocode(
+        self, session: "_Lookups", address: str, language: str
     ) -> Optional[dict]:
         """
-        Photon itself, after the B-API path failed for `reason` (None: an
-        earlier lookup of this request already found it failing).
+        The lookup along the ways still open (service_ways.py).
 
-        Raises GeocoderRefused when Photon fails as well: reported once for
-        the request, and no further place is tried.
+        A refusal (401, 403, 429) moves to the next way; 401 and 403 are
+        remembered (service_ways.py). A caller whose quota is used up (429 on
+        the forwarded way) does not get the agent's own key. A B-API that fails
+        otherwise (5xx, no JSON, no answer) is left for Photon itself, if a
+        direct way follows - another key would not help. Raises GeocoderRefused
+        when no way is left, before taking a slot when there was none to begin
+        with.
         """
-        if not session.direct_only:
-            session.direct_only = True
-            logger.warning(f"⚠️ {reason} Photon wird direkt gefragt.")
-            session.reason = reason
-        try:
-            return await self._lookup(session, PHOTON_URL, {}, address, language)
-        except _PathFailed as e:
-            if e.place_only:
-                # As with `direct`: this place stays as it is, the next is tried.
-                logger.error(f"❌ Geocoder {e}")
-                return None
-            raise GeocoderRefused(
-                f"{session.reason} Auch Photon direkt war nicht nutzbar ({e})."
-            ) from e
+        if session.ways is None:
+            ways = geocoder_ways(get_settings())
+            session.ways = list(ways)
+            # A way skipped for a remembered refusal: the same warning as when
+            # it was refused in this request.
+            session.reason = ways.refusal
+        while session.ways:
+            way = session.ways[0]
+            try:
+                return await self._lookup(session, way, address, language)
+            except GeocoderRefused as e:
+                if e.status in (401, 403):
+                    REFUSALS.refused(
+                        "geocoder", way.name, str(e), credential=way.credential
+                    )
+                session.give_up(
+                    way, str(e), own_too=e.status == 429 and way.name == "forwarded"
+                )
+            except _PathFailed as e:
+                if way.via_b_api and any(not w.via_b_api for w in session.ways):
+                    session.give_up(
+                        way,
+                        f"Der Geocoder über die B-API war nicht nutzbar ({e}).",
+                        all_b_api=True,
+                    )
+                    continue
+                if way.via_b_api or e.place_only or session.reason is None:
+                    # Only this place: the B-API with no way around it, a place
+                    # Photon cannot take, or Photon itself as the only way.
+                    logger.error(f"❌ Geocoder {e}")
+                    return None
+                raise GeocoderRefused(
+                    f"{session.reason} Auch Photon direkt war nicht nutzbar ({e})."
+                ) from e
+        raise GeocoderRefused(session.reason or NO_KEY)
 
     async def _lookup(
         self,
         session: "_Lookups",
-        api_url: str,
-        auth: dict[str, str],
+        way: Way,
         address: str,
         language: str,
     ) -> Optional[dict]:
         """
-        One lookup at `api_url`; None when the place is not found.
+        One lookup along `way`; None when the place is not found.
 
         Raises:
-            GeocoderRefused: the B-API refused the key (401, 403, 429).
+            GeocoderRefused: the B-API refused the credential (401, 403, 429).
             _PathFailed: any other error status, an answer that is no JSON,
                 or no answer at all.
         """
         # The client before the slot: its first TLS setup blocks the event loop
         # for a few hundred ms, and lookups whose slots fell into that time
         # woke together and reached Photon in the same millisecond.
-        client = await session.client(bool(auth))
+        client = await session.client(way.via_b_api)
         await self._wait_for_rate_limit()
 
         params: dict[str, str | int] = {"q": address, "limit": 1}
@@ -257,20 +286,21 @@ class GeocodingService:
         if lang:
             params["lang"] = lang
         headers = {"User-Agent": "MetadataAgentAPI/1.0 (geocoding service)"}
-        via = "B-API (photon_geocoding)" if auth else "Photon"
+        via = "B-API (photon_geocoding)" if way.via_b_api else "Photon"
         try:
             response = await client.get(
-                api_url, params=params, headers={**headers, **auth}
+                way.url, params=params, headers={**headers, **way.headers}
             )
         except httpx.HTTPError as e:
             raise _PathFailed(f"{via}: {type(e).__name__}") from e
 
         if response.status_code != 200:
-            if auth and response.status_code in (401, 403, 429):
+            if way.via_b_api and response.status_code in (401, 403, 429):
                 raise GeocoderRefused(
                     "Die B-API hat den Aufruf des Geocoders abgelehnt "
                     f"(HTTP {response.status_code}, Proxy-Dienst "
-                    "photon_geocoding)."
+                    "photon_geocoding).",
+                    response.status_code,
                 )
             raise _PathFailed(
                 f"{via}: HTTP {response.status_code}", response.status_code

@@ -2,7 +2,7 @@
 
 [English](INSTALL.md) · **Deutsch**
 
-So kommt die Metadata Agent API (Version 4.0.2) zum Laufen und so lässt sich
+So kommt die Metadata Agent API (Version 4.0.3) zum Laufen und so lässt sich
 prüfen, dass sie arbeitet: lokal mit uv oder pip, in Docker und mit Docker
 Compose.
 
@@ -257,12 +257,12 @@ Varianten beim Bauen:
 
 | Befehl | Wirkung |
 |---|---|
-| `docker build --build-arg VERSION=v4.0.2 --build-arg REVISION=$(git rev-parse HEAD) -t metadata-agent-api:v4.0.2 .` | Schreibt Version und Commit in die Labels des Image (Standard: `dev`, `unknown`) |
+| `docker build --build-arg VERSION=v4.0.3 --build-arg REVISION=$(git rev-parse HEAD) -t metadata-agent-api:v4.0.3 .` | Schreibt Version und Commit in die Labels des Image (Standard: `dev`, `unknown`) |
 | `docker build --no-cache -t metadata-agent-api .` | Baut jede Ebene neu |
 | `docker build --progress=plain -t metadata-agent-api .` | Zeigt die vollständige Build-Ausgabe |
 
 Die CI-Pipelines veröffentlichen Images in der internen Registry (Tags `main`,
-`develop` und Release-Tags wie `v4.0.2`). Wie man sie bezieht und startet,
+`develop` und Release-Tags wie `v4.0.3`). Wie man sie bezieht und startet,
 steht in [DEPLOYMENT.de.md](DEPLOYMENT.de.md).
 
 ### Was das Image enthält
@@ -418,9 +418,9 @@ B_API_KEY=<key>
   `text-extraction` und `photon_geocoding`. Mit einem B-API-Provider ruft der
   Agent Textextraktion und Geocoder über die B-API auf, mit demselben
   Schlüssel (`METADATA_AGENT_B_API_SERVICES`, Standard `auto`). Ohne diese
-  Rechte scheitert die Erschließung aus einer URL mit
-  `TEXT_EXTRACTION_AUTH_REFUSED`; den Geocoder fragt der Agent mit `auto`
-  dann direkt bei Photon, mit `proxy` bleiben Orte ohne Koordinaten.
+  Rechte versucht der Agent mit `auto` seinen eigenen `B_API_KEY` und dann
+  die Dienste direkt; mit `proxy` scheitert die Erschließung aus einer URL mit
+  `TEXT_EXTRACTION_AUTH_REFUSED`, und Orte bleiben ohne Koordinaten.
 - **Welcher Schlüssel die Aufrufe trägt:** `METADATA_AGENT_B_API_AUTH_MODE`,
   Standard `auto`. Ein Schlüssel, den der B-API-Proxy durchreicht
   (`Authorization: Bearer`), wird verwendet; sonst `B_API_KEY`. Eine
@@ -495,7 +495,7 @@ curl -X POST http://localhost:8000/screenshot \
 
 | Prüfung | Erwartet | Sonst |
 |---|---|---|
-| `GET /health` | `{"status":"healthy","version":"4.0.2"}` | Der Prozess läuft nicht oder lauscht woanders. `/health` sagt nichts über Schlüssel oder abhängige Dienste |
+| `GET /health` | `{"status":"healthy","version":"4.0.3"}` | Der Prozess läuft nicht oder lauscht woanders. `/health` sagt nichts über Schlüssel oder abhängige Dienste |
 | `GET /ready` | `200` mit `{"status":"ready"}` | `503` mit `error.code` `NOT_READY`: Die Konfiguration ist unvollständig. Die Gründe stehen im Log (`Nicht bereit: …`) und auf dem internen Port, nicht in dieser Antwort. Siehe [Repository-Zugang und `/ready`](#repository-zugang-und-ready) |
 | `/docs` im Browser | Swagger UI, vom Agenten selbst ausgeliefert, ohne CDN; die Spezifikation liegt unter `/openapi.json` | — |
 | `POST /generate` | JSON mit `contextName`, `schemaVersion` und `metadataset`, den erschlossenen Feldern unter ihren Feld-IDs und `processing` mit `status` (`success` oder `partial`), `llm_provider` und `llm_model` | `502` mit einem `error.code` wie `LLM_AUTH_MISSING`: siehe [Fehlersuche](#fehlersuche). Ein Lauf macht viele LLM-Aufrufe (etwa einen je Feld) und endet spätestens nach 300 s (`METADATA_AGENT_GENERATE_TIMEOUT`) |
@@ -573,7 +573,7 @@ beschreiben [UEBERGABE.md](UEBERGABE.md) und
 | `/ready` antwortet mit `503` (`NOT_READY`) | Der Repository-Zugang fehlt; oder `B_API_KEY` im Modus `static`; oder `OPENAI_API_KEY` mit Provider `openai` | Fehlende Werte setzen, oder `METADATA_AGENT_REQUIRE_REPOSITORY=false` für eine Installation, die nur erschließt |
 | `/generate` antwortet mit `502` und `LLM_AUTH_MISSING` | Kein Schlüssel für die B-API: `B_API_KEY` ist leer, und es wurde kein Schlüssel durchgereicht | `B_API_KEY` setzen; im Modus `forward` über den B-API-Proxy aufrufen |
 | `502` mit `LLM_AUTH_REJECTED` oder `LLM_AUTH_FORBIDDEN` | Die B-API nimmt den Schlüssel nicht an, oder dem Schlüssel fehlt das Recht für den Aufruf | Schlüssel prüfen, und ob `METADATA_AGENT_B_API_BASE_URL` die B-API (Staging oder Produktion) nennt, zu der er gehört |
-| Die Erschließung aus einer URL antwortet mit `502` und `TEXT_EXTRACTION_AUTH_REFUSED` | Dem Schlüssel fehlt das Recht für den Proxy-Dienst `text-extraction` | Recht ergänzen lassen oder `METADATA_AGENT_B_API_SERVICES=direct` setzen |
+| Die Erschließung aus einer URL antwortet mit `502` und `TEXT_EXTRACTION_AUTH_REFUSED` | Dem Schlüssel fehlt das Recht für den Proxy-Dienst `text-extraction` (mit `auto`: auch dem eigenen `B_API_KEY`, und die Textextraktion ist direkt nicht erreichbar) | Recht ergänzen lassen oder `METADATA_AGENT_B_API_SERVICES=direct` setzen |
 | Die Erschließung aus einer URL antwortet mit `503` und `TEXT_EXTRACTION_NOT_CONFIGURED` | Kein B-API-Provider, und das Repository ist weder OpenEduHub Staging noch Produktion | `METADATA_AGENT_TEXT_EXTRACTION_API_URL` setzen |
 | LLM-Aufrufe laufen ins Zeitlimit; `/generate` antwortet mit `504` und `GENERATION_TIMEOUT` | Ein Aufruf dauerte länger als `METADATA_AGENT_REQUEST_TIMEOUT` (90 s) oder der ganze Lauf länger als `METADATA_AGENT_GENERATE_TIMEOUT` (300 s) | `METADATA_AGENT_REQUEST_TIMEOUT` erhöhen; wie die Grenzen zusammenpassen, steht in [ENV-PARAMETER.de.md](ENV-PARAMETER.de.md) |
 | CORS-Fehler im Browser | Der aufrufende Origin ist nicht erlaubt | `METADATA_AGENT_CORS_ORIGINS` auf die Origins setzen, kommagetrennt, oder auf `*` (der Standard) |

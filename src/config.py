@@ -116,6 +116,11 @@ def _without_credentials(url: str) -> str:
     return urlunsplit(parts._replace(netloc=parts.netloc.rpartition("@")[2]))
 
 
+def environment_text_extraction(repository_url: str) -> str:
+    """The text extraction of the repository's environment, "" for any other."""
+    return TEXT_EXTRACTION_URLS.get(_environment_of(repository_url) or "", "")
+
+
 def _environment_of(url: str) -> Optional[str]:
     """'Staging' or 'Produktion' for the known OpenEduHub hosts, else None."""
     host = urlsplit(url).hostname or ""
@@ -135,7 +140,7 @@ class Settings(BaseSettings):
 
     # API Settings
     app_name: str = "Metadata Agent API"
-    app_version: str = "4.0.2"
+    app_version: str = "4.0.3"
 
     # Logs go to stdout. text: the message alone, as the agent always wrote
     # them; json: one object per line with timestamp, level, service, logger,
@@ -180,7 +185,7 @@ class Settings(BaseSettings):
 
     # Which key B-API calls carry (see src/services/llm_auth.py):
     #   auto     the caller's key forwarded by the B-API proxy
-    #            (Authorization: Bearer, forwardApiKey) if present, else B_API_KEY
+    #            (Authorization: Bearer, forwardDelegation/forwardApiKey) if present, else B_API_KEY
     #   forward  only the forwarded key; a request without it fails (LLM_AUTH_MISSING)
     #   static   only B_API_KEY (X-API-KEY), an incoming header is ignored
     b_api_auth_mode: Literal["static", "forward", "auto"] = "auto"
@@ -465,9 +470,7 @@ class Settings(BaseSettings):
             self.text_extraction_api_url = (
                 f"{self.b_api_base_url}/api/v1/proxy/text-extraction"
                 if self.services_via_b_api
-                else TEXT_EXTRACTION_URLS.get(
-                    _environment_of(self.repository_url) or "", ""
-                )
+                else environment_text_extraction(self.repository_url)
             )
         return self
 

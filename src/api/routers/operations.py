@@ -47,7 +47,7 @@ async def debug_auth(request: Request):
     Does a forwarded B-API key arrive? Masked - presence, scheme, length only.
 
     Exists only with METADATA_AGENT_DEBUG_ENDPOINTS=true; meant for setting up
-    the B-API proxy (forwardApiKey), not for normal operation.
+    the B-API proxy (forwardDelegation/forwardApiKey), not for normal operation.
     """
     if not deps.settings.debug_endpoints:
         raise HTTPException(status_code=404, detail="Not Found")

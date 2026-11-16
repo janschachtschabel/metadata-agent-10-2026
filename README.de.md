@@ -6,7 +6,7 @@ Die Metadata Agent API erschließt Bildungsinhalte mit einem Sprachmodell
 (LLM). Aus einem Text, einer Webseite oder einem Repository-Node erzeugt sie
 strukturierte Metadaten nach dem [WLO/OEH-Schema](https://wirlernenonline.de)
 und kann das Ergebnis in ein WLO-edu-sharing-Repository schreiben. Der Dienst
-ist eine FastAPI-Anwendung für Python 3.13 (Version 4.0.2). Er liefert auch
+ist eine FastAPI-Anwendung für Python 3.13 (Version 4.0.3). Er liefert auch
 die Webkomponente `<metadata-agent-canvas>` aus, die die Metadaten anzeigt und
 bearbeitbar macht.
 
@@ -112,7 +112,7 @@ uv run uvicorn src.main:app --reload --port 8000
 
 ```bash
 curl http://localhost:8000/health
-# → {"status":"healthy","version":"4.0.2"}
+# → {"status":"healthy","version":"4.0.3"}
 
 curl -X POST http://localhost:8000/generate \
   -H "Content-Type: application/json" \
@@ -203,7 +203,7 @@ Herkunft (`forwarded` oder `static`).
 | | Hinter dem B-API-Proxy | Eigenständig |
 |---|---|---|
 | Aufrufer | edu-sharing und die Webkomponente, über den B-API-Proxy-Eintrag `metadata-agent-canvas` (`/api/v1/proxy/metadata-agent-canvas/…`) | Jeder Client, der Port 8000 erreicht |
-| Schlüssel der LLM-Aufrufe | Der Schlüssel des Aufrufers (Nutzer- oder Gast-Schlüssel). Der Proxy reicht ihn weiter, wenn am Eintrag `forwardApiKey` gesetzt ist, und die B-API bucht Nutzung und Limits auf ihn | `B_API_KEY`, oder `OPENAI_API_KEY` mit dem Provider `openai` |
+| Schlüssel der LLM-Aufrufe | Die Anmeldung des Aufrufers (Nutzer- oder Gast-Schlüssel). Der Proxy reicht den Schlüssel weiter (`forwardApiKey`, ältere B-API) oder ein Delegations-Token dafür (`forwardDelegation`), und die B-API bucht Nutzung und Limits auf ihn | `B_API_KEY`, oder `OPENAI_API_KEY` mit dem Provider `openai` |
 | Auth-Modus | `auto`, oder `forward`, um nur mit weitergereichten Schlüsseln zu arbeiten (kein `B_API_KEY` nötig) | `auto` oder `static` |
 | Zugriff | Der Dienst darf nur über die B-API erreichbar sein. Die NetworkPolicy des Helm-Charts setzt das durch | Eine Zugriffsbeschränkung davorsetzen. Im Modus `auto` löst jeder, der den Port erreicht, Erschließungen auf `B_API_KEY` aus |
 
@@ -223,10 +223,11 @@ erreicht:
   verwendete Schlüssel braucht neben den LLM-Endpunkten die Rechte für die
   Proxy-Dienste `text-extraction` und `photon_geocoding`. Direkte Aufrufe
   tragen keinen Schlüssel.
-- Fehlt das Recht, endet das Erschließen aus einer URL mit `502`
-  `TEXT_EXTRACTION_AUTH_REFUSED`. Den Geocoder fragt der Agent mit `auto`
-  dann direkt bei Photon; mit `proxy` bleiben Orte ohne Koordinaten, und
-  `processing.warnings` nennt den Grund.
+- Fehlt das Recht, versucht der Agent mit `auto` seinen eigenen
+  `B_API_KEY` und dann den Dienst direkt (Photon, die Textextraktion der
+  Repository-Umgebung). Erst wenn alle Wege scheitern, oder mit `proxy`,
+  endet das Erschließen aus einer URL mit `502` `TEXT_EXTRACTION_AUTH_REFUSED`,
+  und Orte bleiben ohne Koordinaten (`processing.warnings` nennt den Grund).
 - `METADATA_AGENT_TEXT_EXTRACTION_API_URL` nennt eine eigene Textextraktion
   und überschreibt die Wahl. Sie ist zu setzen, wenn `direct` gilt und das
   Repository kein OpenEduHub-Host ist; sonst antwortet das Erschließen aus
@@ -409,11 +410,11 @@ Die CI veröffentlicht das Image `metadata-agent-api` in der internen Registry:
 Tag `v<version>` für einen Release-Tag, `main` und `develop` für die Branches.
 
 ```bash
-docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v4.0.2
+docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v4.0.3
 docker run -d --name metadata-agent-api -p 127.0.0.1:8000:8000 \
   --read-only --tmpfs /tmp --tmpfs /home/appuser --stop-timeout 320 \
   -e B_API_KEY=<key> \
-  $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v4.0.2
+  $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v4.0.3
 ```
 
 - Das Image enthält Chromium (die Headless-Shell) für Screenshots und die

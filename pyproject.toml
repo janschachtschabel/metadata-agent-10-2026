@@ -1,6 +1,6 @@
 [project]
 name = "metadata-agent-api"
-version = "4.0.2"
+version = "4.0.3"
 description = "AI-powered metadata extraction API for educational content"
 # SPDX (PEP 639); full text in LICENSE, third-party components in NOTICE.
 license = "Apache-2.0"

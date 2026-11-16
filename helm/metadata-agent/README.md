@@ -32,7 +32,7 @@ erschließt, setzt `env.METADATA_AGENT_REQUIRE_REPOSITORY: "false"` (bereit ohne
 sie, `/upload` und `/nodes` antworten dann mit `503`). Prüfliste für die erste
 Installation und Rollback: [DEPLOYMENT.de.md](../../DEPLOYMENT.de.md).
 
-**Kein Ingress hinter der B-API.** Der B-API-Proxy (`forwardApiKey`) ruft den
+**Kein Ingress hinter der B-API.** Der B-API-Proxy (`forwardDelegation` bzw. `forwardApiKey`) ruft den
 Service im Cluster auf, z.B. `http://metadata-agent.<namespace>:8000`. Ein
 Ingress machte den Dienst aus dem Internet erreichbar, und im Modus `auto`
 könnte dann jeder Erschließungen auf `B_API_KEY` auslösen. `ingress.enabled`

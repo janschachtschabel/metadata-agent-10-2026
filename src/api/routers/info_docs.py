@@ -111,7 +111,7 @@ SCHEMA_DEFINITION_RESPONSES = success_example(
 WIDGET_INFO_RESPONSES = success_example(
     {
         "name": "metadata-agent-canvas",
-        "version": "4.0.2",
+        "version": "4.0.3",
         "description": "Angular Web Component zur Anzeige und Bearbeitung von Metadaten. Kann als <metadata-agent-canvas> Tag in beliebige Webanwendungen eingebettet werden. Die URLs dieser Antwort sind relativ zur Adresse von /widget/info; {AGENT_URL} in den Snippets steht für die Basis-URL des Dienstes.",
         "dist_base_url": "dist",
         "scripts": {

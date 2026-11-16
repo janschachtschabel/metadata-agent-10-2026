@@ -5,9 +5,11 @@ Two ways, selected by METADATA_AGENT_B_API_AUTH_MODE (see ENV-PARAMETER.md):
 
 - the agent's own key from B_API_KEY, sent as X-API-KEY - the original way,
   needed for direct calls, tests and anything without an incoming request;
-- the caller's key, which the B-API proxy forwards as `Authorization: Bearer
-  <key>` when the service is registered with forwardApiKey. The B-API then
-  books usage and limits on that key (WLO user or guest key).
+- the caller's credential, which the B-API proxy forwards as
+  `Authorization: Bearer ...`: the caller's key with forwardApiKey (older
+  B-API), a delegation token with the rights of its delegationScopes with
+  forwardDelegation (current one). The B-API then books usage and limits on
+  the caller (WLO user or guest key).
 
 The forwarded value is passed on exactly as received and lives only in the
 context of the request that brought it: never on a shared object, never in a
@@ -83,7 +85,7 @@ def _missing_message(mode: str) -> str:
     if mode == "forward":
         return (
             "Kein Authorization-Header von der B-API erhalten (B_API_AUTH_MODE=forward). "
-            "Läuft der Aufruf über /api/v1/proxy/<dienst> und ist dort forwardApiKey gesetzt?"
+            "Läuft der Aufruf über /api/v1/proxy/<dienst> und ist dort forwardDelegation (ältere B-API: forwardApiKey) gesetzt?"
         )
     if mode == "static":
         return "B_API_KEY ist nicht gesetzt (B_API_AUTH_MODE=static)."
@@ -110,6 +112,11 @@ def b_api_auth(settings) -> tuple[dict[str, str], str]:
     if mode != "forward" and settings.b_api_key:
         return {"X-API-KEY": settings.b_api_key}, "static"
     raise LLMCredentialsMissing(_missing_message(mode))
+
+
+def forwarded_credential() -> Optional[str]:
+    """The Authorization value the B-API forwarded with this request, if any."""
+    return _forwarded.get()
 
 
 def b_api_headers_for(url: str, settings) -> dict[str, str]:

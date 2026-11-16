@@ -153,6 +153,16 @@ def _no_external_connections(request):
     assert not mine, f"external connections: {mine}"
 
 
+@pytest.fixture(autouse=True)
+def _no_remembered_refusals():
+    """A way the B-API refused in one test must not be skipped in the next."""
+    from src.services.service_ways import REFUSALS
+
+    REFUSALS.clear()
+    yield
+    REFUSALS.clear()
+
+
 def pytest_sessionfinish(session):
     """Refusals no test reported (its thread outlived it) fail the run."""
     if _external_connects:

@@ -51,7 +51,7 @@ def readiness_problems(settings: Settings) -> list[str]:
     every pod unready at once, and the ingress would answer for them.
 
     B_API_KEY missing in mode auto is no problem here: behind the B-API proxy
-    with forwardApiKey every call carries the caller's key (startup warning).
+    every call carries the caller's forwarded credential (startup warning).
     """
     problems = []
     if not get_available_contexts():

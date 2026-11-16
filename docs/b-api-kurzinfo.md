@@ -43,8 +43,10 @@ Regeln:
 ## 2. Auth: wessen Schlüssel zahlt
 
 Die B-API ruft den Agenten über ihren Proxy auf (`/api/v1/proxy/<dienst>/…`).
-Ist dort `forwardApiKey` gesetzt, reicht sie den Schlüssel des Aufrufers als
-`Authorization: Bearer <key>` durch. edu-sharing wählt dabei einen Schlüssel
+Ist dort `forwardApiKey` gesetzt (ältere B-API), reicht sie den Schlüssel des
+Aufrufers als `Authorization: Bearer <key>` durch; mit `forwardDelegation`
+(aktuelle B-API) ein Token mit den Rechten aus `delegationScopes`, in derselben
+Kopfzeile. edu-sharing wählt dabei einen Schlüssel
 für Nutzer oder Gäste, und die B-API bucht Kosten und Limits auf ihn.
 
 `METADATA_AGENT_B_API_AUTH_MODE`:
@@ -79,10 +81,15 @@ Staging zu Staging, Produktion zu Produktion.
 - **Rechte:** Jeder Schlüssel, mit dem der Dienst aufgerufen wird (Nutzer- und
   Gast-Schlüssel aus edu-sharing, `B_API_KEY`), braucht neben den
   LLM-Endpunkten die Proxy-Dienste `text-extraction` und `photon_geocoding`.
-- **Fehlt das Recht:** Das Erschließen aus einer URL endet mit `502`
-  `TEXT_EXTRACTION_AUTH_REFUSED`. Den Geocoder fragt der Agent mit `auto`
-  dann direkt bei Photon; mit `proxy` bleiben Orte ohne Koordinaten, und
-  `processing.warnings` sagt warum.
+- **Fehlt das Recht:** Mit `auto` versucht der Agent seinen eigenen
+  `B_API_KEY` und dann den Dienst direkt (Photon, die Textextraktion der
+  Repository-Umgebung). Erst wenn alle Wege scheitern, oder mit `proxy`,
+  endet das Erschließen aus einer URL mit `502` `TEXT_EXTRACTION_AUTH_REFUSED`,
+  und Orte bleiben ohne Koordinaten (`processing.warnings` sagt warum).
+- **Aktuelle B-API:** Statt `forwardApiKey` gibt es `forwardDelegation`; dann
+  braucht das weitergereichte Token in `delegationScopes` die Proxy-Dienste
+  `text-extraction` und `photon_geocoding` (DEPLOYMENT.de.md, „Hinter dem
+  B-API-Proxy“).
 - **`METADATA_AGENT_B_API_SERVICES`:** `auto` (Default) wie beschrieben, aber
   nur, wenn die LLM-Aufrufe an `METADATA_AGENT_B_API_BASE_URL` gehen; `direct`
   ruft beide Dienste direkt und ohne Schlüssel auf; `proxy` erzwingt die B-API.

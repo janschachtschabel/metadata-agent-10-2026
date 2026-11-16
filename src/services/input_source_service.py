@@ -5,7 +5,7 @@ import json
 import logging
 import re
 from functools import lru_cache
-from typing import Any, Callable, Optional
+from typing import Any, Callable, NoReturn, Optional
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
@@ -15,11 +15,12 @@ from ..utils.public_url import PublicUrlError, require_public_http_url
 from ..utils.schema_loader import get_available_schemas, get_schema_fields
 from ..utils.tls_context import shared_tls_context
 from ..metrics import OWN_SERVICE_HOOKS
-from .llm_auth import b_api_headers_for
+from .llm_auth import b_api_auth
 from .llm_errors import LLMCredentialsMissing
 from .repository_diff import WRITTEN_AS
 from .repository_service import build_auth_header
 from .repository_support import rest_base
+from .service_ways import REFUSALS, Way, text_extraction_ways
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,15 @@ SETUP_ERROR_CODES = frozenset(
         "TEXT_EXTRACTION_AUTH_MISSING",
         "TEXT_EXTRACTION_NOT_CONFIGURED",
     }
+)
+
+
+# Failures that say something about the page, not about the way to the
+# extraction: another way would wait as long or find as little.
+_ABOUT_THE_PAGE = frozenset({"TEXT_EXTRACTION_TIMEOUT", "TEXT_EXTRACTION_EMPTY"})
+# Failures of a credential: the next way may carry another one.
+_ABOUT_THE_CREDENTIAL = frozenset(
+    {"TEXT_EXTRACTION_AUTH_REFUSED", "TEXT_EXTRACTION_RATE_LIMITED"}
 )
 
 
@@ -291,23 +301,10 @@ class InputSourceService:
         # this URL is checked: redirects and subresources the remote crawler
         # follows itself need egress rules on the crawler's side.
         url = await require_public_http_url(url)
-        if not self.settings.text_extraction_api_url:
-            raise TextExtractionError(
-                "TEXT_EXTRACTION_NOT_CONFIGURED",
-                "Für diese Installation ist kein Textextraktionsdienst eingerichtet "
-                "(METADATA_AGENT_TEXT_EXTRACTION_API_URL).",
-                503,
-            )
-        api_url = f"{self.settings.text_extraction_api_url}/from-url"
-        try:
-            # Through the B-API: the same key as for the LLM calls.
-            auth = b_api_headers_for(api_url, self.settings)
-        except LLMCredentialsMissing as e:
-            raise TextExtractionError(
-                "TEXT_EXTRACTION_AUTH_MISSING",
-                f"Kein Schlüssel für die Textextraktion über die B-API: {e}",
-                502,
-            ) from e
+        found = text_extraction_ways(self.settings)
+        if not found:
+            self._no_way_to_the_extraction()
+        ways = list(found)
 
         payload = {
             "url": url,
@@ -320,15 +317,84 @@ class InputSourceService:
 
         logger.info(f"Fetching text from URL: {loggable_url(url)} (method: {method})")
 
+        # Along the ways of service_ways.py: the forwarded credential, the
+        # agent's own key, the service itself. The first failure is the one
+        # the caller hears about when no way is left - also when the way that
+        # failed first was only skipped for a remembered refusal: the same
+        # situation gives the same code (review 16.11.).
+        first: Optional[TextExtractionError] = (
+            TextExtractionError("TEXT_EXTRACTION_AUTH_REFUSED", found.refusal, 502)
+            if found.refusal
+            else None
+        )
+        while ways:
+            way = ways[0]
+            try:
+                return await self._extract_along(way, payload, url)
+            except TextExtractionError as e:
+                first = first or e
+                if e.code in _ABOUT_THE_PAGE:
+                    raise
+                if e.code == "TEXT_EXTRACTION_AUTH_REFUSED":
+                    REFUSALS.refused(
+                        "text-extraction",
+                        way.name,
+                        e.message,
+                        credential=way.credential,
+                    )
+                if e.code == "TEXT_EXTRACTION_RATE_LIMITED" and way.name == "forwarded":
+                    # The caller's quota is used up: not on the agent's key.
+                    ways = [w for w in ways if w.name not in ("forwarded", "own")]
+                elif e.code in _ABOUT_THE_CREDENTIAL or not way.via_b_api:
+                    ways = [w for w in ways if w is not way]
+                else:
+                    # The B-API itself failed: another key would not help.
+                    ways = [w for w in ways if not w.via_b_api]
+                if not ways:
+                    raise first from None
+                logger.warning(
+                    f"⚠️ Textextraktion über Weg '{way.name}': {e.code}; "
+                    f"nächster Weg: '{ways[0].name}'."
+                )
+        raise first or TextExtractionError(
+            "TEXT_EXTRACTION_NOT_CONFIGURED", "Kein Weg zur Textextraktion.", 503
+        )
+
+    def _no_way_to_the_extraction(self) -> NoReturn:
+        """No way at all: no address, or a B-API address and no key for it."""
+        configured = self.settings.text_extraction_api_url
+        if not configured:
+            raise TextExtractionError(
+                "TEXT_EXTRACTION_NOT_CONFIGURED",
+                "Für diese Installation ist kein Textextraktionsdienst eingerichtet "
+                "(METADATA_AGENT_TEXT_EXTRACTION_API_URL).",
+                503,
+            )
+        try:
+            b_api_auth(self.settings)
+        except LLMCredentialsMissing as e:
+            raise TextExtractionError(
+                "TEXT_EXTRACTION_AUTH_MISSING",
+                f"Kein Schlüssel für die Textextraktion über die B-API: {e}",
+                502,
+            ) from e
+        raise TextExtractionError(
+            "TEXT_EXTRACTION_NOT_CONFIGURED", "Kein Weg zur Textextraktion.", 503
+        )
+
+    async def _extract_along(self, way: Way, payload: dict[str, Any], url: str) -> str:
+        """The text of the page, fetched along `way`."""
+        api_url = f"{way.url}/from-url"
         # The message reaches the client (detail, error.message): the service's
         # host is internal and goes to the log only (audit S-06, review #5).
-        service = urlsplit(api_url).netloc or self.settings.text_extraction_api_url
+        # The host only: user and password of a configured URL stay out.
+        service = urlsplit(api_url).hostname or "text-extraction"
 
         def failure(code: str, message: str, status: int) -> TextExtractionError:
-            logger.warning(f"{code}: {message} [{service}]")
+            logger.warning(f"{code}: {message} [{service}, Weg '{way.name}']")
             return TextExtractionError(code, message, status)
 
-        response = await self._post_extraction(api_url, payload, auth, failure)
+        response = await self._post_extraction(api_url, payload, way.headers, failure)
 
         try:
             data = response.json()
@@ -382,6 +448,15 @@ class InputSourceService:
                         else "Ihm fehlt das Recht für den Proxy-Dienst text-extraction."
                     ),
                     502,
+                )
+            if response.status_code == 504:
+                # A gateway on the way gave up waiting for the page: as slow as
+                # a timeout of our own, and another way would wait as long.
+                raise failure(
+                    "TEXT_EXTRACTION_TIMEOUT",
+                    "Der Textextraktionsdienst hat nicht rechtzeitig geantwortet "
+                    "(HTTP 504 eines Gateways).",
+                    504,
                 )
             if response.status_code == 429:
                 # Like a throttled LLM call: worth trying again later.

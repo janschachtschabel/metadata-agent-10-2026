@@ -3,7 +3,7 @@
 **English** · [Deutsch](ENV-PARAMETER.de.md)
 
 The complete reference of every environment variable the Metadata Agent API
-reads, for version 4.0.2; the changes since 3.0.1 are listed in
+reads, for version 4.0.3; the changes since 3.0.1 are listed in
 [CHANGELOG.md](CHANGELOG.md) (German). The source is `src/config.py`.
 `tests/test_env_parameters.py` compares this document with the settings model:
 no variable is missing here, and none is listed that the service does not read.
@@ -105,7 +105,7 @@ never prints a key, only whether `B_API_KEY` is set (`gesetzt` or
 (`https://user:password@host`) are left out of the address lines.
 
 ```text
-Starting Metadata Agent API v4.0.2
+Starting Metadata Agent API v4.0.3
 LLM Provider: b-api-academiccloud
 LLM Model: deepseek-v4-flash
 LLM API Base: https://b-api.staging.openeduhub.net/api/v1/llm/academiccloud
@@ -268,7 +268,9 @@ the body.
 
 The B-API can call a registered service through `/api/v1/proxy/<service>/…` and
 pass on the caller's key as `Authorization: Bearer <key>` (admin option to
-forward the caller's API key, `forwardApiKey`). The proxy entry of this service
+forward the caller's API key, `forwardApiKey`). The current B-API forwards a
+delegation token with the rights in `delegationScopes` instead
+(`forwardDelegation`); for the agent it is the same header. The proxy entry of this service
 is called `metadata-agent-canvas`. edu-sharing picks the key, one for logged-in
 users and one for guests, and the B-API books usage, cost and limits on it. The
 other way is the service's own `B_API_KEY`, sent as `X-API-KEY`.
@@ -407,15 +409,21 @@ Through the B-API they are always the ones that belong to that B-API.
 | Through the B-API | `<B-API>/api/v1/proxy/text-extraction` | `<B-API>/api/v1/proxy/photon_geocoding/api` |
 | Directly | By the repository address: `https://text-extraction.staging.openeduhub.net` for OpenEduHub staging, `https://text-extraction.prod.openeduhub.net` for production, none for any other repository | `https://photon.komoot.io/api` (Photon, a third party) |
 
-- **Key.** A call to an address below `METADATA_AGENT_B_API_BASE_URL` carries
-  the same key as the LLM calls. Any other address never gets a key. This also
-  holds for an address set in `METADATA_AGENT_TEXT_EXTRACTION_API_URL`.
-- **Rights.** The key needs the proxy services `text-extraction` and
-  `photon_geocoding`. Without the right, extraction from a URL fails with `502`
-  `TEXT_EXTRACTION_AUTH_REFUSED`. If the B-API refuses the geocoder or does
-  not answer, the agent asks Photon itself with `auto` (as before 4.0.0,
-  warning in the log); with `proxy` places stay without coordinates (noted in
-  `processing.warnings`). Without any key the code is
+- **Key.** A call to an address below `METADATA_AGENT_B_API_BASE_URL` first
+  carries the same credential as the LLM calls (the forwarded token or the
+  caller's key), after a refusal the own `B_API_KEY`. Any other address never
+  gets a key. This also holds for an address set in
+  `METADATA_AGENT_TEXT_EXTRACTION_API_URL`.
+- **Way out with `auto`.** If the B-API refuses both (`401`, `403`, `429`) or
+  gives no usable answer, the agent asks the service directly, as before
+  4.0.0: Photon, or the text extraction of the repository's environment. A
+  refused way is skipped by the process for 10 minutes. Details in
+  DEPLOYMENT.md, "How text extraction and geocoder are reached".
+- **Rights.** The credential needs the proxy services `text-extraction` and
+  `photon_geocoding`. If every way fails, extraction from a URL answers `502`
+  `TEXT_EXTRACTION_AUTH_REFUSED`, and places stay without coordinates (noted
+  in `processing.warnings`). Without any credential and without a direct way
+  (`proxy`, or a repository outside staging and production) the code is
   `TEXT_EXTRACTION_AUTH_MISSING` (`502`).
 - **No address.** Without a text extraction address, extraction from a URL
   answers `503` `TEXT_EXTRACTION_NOT_CONFIGURED`. The service warns at start.
@@ -685,7 +693,7 @@ whether the B-API accepts the key. The time limit per check is 5 s.
   never a key.
 
 ```json
-{"version": "4.0.2", "llm_provider": "b-api-openai", "b_api_auth_mode": "auto",
+{"version": "4.0.3", "llm_provider": "b-api-openai", "b_api_auth_mode": "auto",
  "config_warnings": [],
  "checks": {
    "llm": {"url": "https://b-api.prod.openeduhub.net/api/v1/llm/openai/models",
@@ -708,7 +716,7 @@ whether the B-API accepts the key. The time limit per check is 5 s.
 | Variable | Default | Values | Meaning and use |
 |---|---|---|---|
 | `METADATA_AGENT_APP_NAME` | `Metadata Agent API` | Text | Name in the start log and title of the OpenAPI document. Normally not set |
-| `METADATA_AGENT_APP_VERSION` | `4.0.2` | Text | Version the service reports (`/health`, OpenAPI, `/widget/info`). Do not set it: it changes the reported version only, not the software |
+| `METADATA_AGENT_APP_VERSION` | `4.0.3` | Text | Version the service reports (`/health`, OpenAPI, `/widget/info`). Do not set it: it changes the reported version only, not the software |
 
 No setting chooses the schema: a request names its own `context`, default
 `default` (the value `GET /info/schemata` reports as `default_context`), and
@@ -740,7 +748,7 @@ WLO_GUEST_USERNAME=<repository user>
 WLO_GUEST_PASSWORD=<repository password>
 ```
 
-In the B-API the service must be registered with `forwardApiKey` set. The
+In the B-API the service must be registered with `forwardDelegation` or `forwardApiKey` set. The
 forwarded keys need the LLM endpoints and the proxy services `text-extraction`
 and `photon_geocoding`. The service must be reachable only through the B-API,
 and the proxy needs a timeout of at least about 310 s.

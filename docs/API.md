@@ -3,7 +3,7 @@
 **English** · [Deutsch](API.de.md)
 
 Reference for everyone who calls the Metadata Agent API (service id
-`metadata-agent`, version 4.0.2). What changed for callers since the previous
+`metadata-agent`, version 4.0.3). What changed for callers since the previous
 release is listed under
 [Changes since release 3.0.1](#changes-since-release-301).
 
@@ -121,7 +121,7 @@ Which key the agent uses for its own calls:
 
 | Call of the agent | Key | Sent as |
 |---|---|---|
-| LLM, text extraction and geocoder through the B-API | The caller's key if the proxy forwards it (`forwardApiKey`), else the agent's `B_API_KEY`. Decided by `METADATA_AGENT_B_API_AUTH_MODE`, see below | `Authorization: Bearer <key>` (forwarded, unchanged) or `X-API-KEY` (own key) |
+| LLM, text extraction and geocoder through the B-API | The caller's credential if the proxy forwards it (key via `forwardApiKey` or delegation token via `forwardDelegation`), else the agent's `B_API_KEY`. Decided by `METADATA_AGENT_B_API_AUTH_MODE`, see below | `Authorization: Bearer <key>` (forwarded, unchanged) or `X-API-KEY` (own key) |
 | LLM with `llm_provider=openai` | The agent's `OPENAI_API_KEY` | `Authorization: Bearer` |
 | Repository (edu-sharing), reading and writing | Service account `WLO_GUEST_USERNAME` / `WLO_GUEST_PASSWORD` | Basic authentication |
 
@@ -140,9 +140,11 @@ What a caller needs to know:
   an incoming `X-API-KEY` header are ignored.
 - The key needs the rights for the LLM endpoints of the B-API and for the proxy
   services `text-extraction` and `photon_geocoding`. Without the first, the
-  extraction fails with `LLM_AUTH_FORBIDDEN`. Without the second, extraction
-  from a URL fails with `TEXT_EXTRACTION_AUTH_REFUSED`. Without the third,
-  the agent asks Photon itself (with `METADATA_AGENT_B_API_SERVICES=auto`);
+  extraction fails with `LLM_AUTH_FORBIDDEN`. Without the second or third,
+  the agent with `METADATA_AGENT_B_API_SERVICES=auto` tries its own
+  `B_API_KEY` and then the service directly (text extraction of the
+  repository's environment, Photon). If every way fails, extraction from a
+  URL fails with `TEXT_EXTRACTION_AUTH_REFUSED`;
   with `proxy` places stay without coordinates and `processing.warnings` says
   so.
 - The agent never answers `401` or `403` for a key that an upstream service
@@ -1895,7 +1897,7 @@ layout, two attributes, one event and three example pages.
 ```json
 {
   "name": "metadata-agent-canvas",
-  "version": "4.0.2",
+  "version": "4.0.3",
   "description": "Angular Web Component zur Anzeige und Bearbeitung von Metadaten. Kann als <metadata-agent-canvas> Tag in beliebige Webanwendungen eingebettet werden. Die URLs dieser Antwort sind relativ zur Adresse von /widget/info; {AGENT_URL} in den Snippets steht für die Basis-URL des Dienstes.",
   "dist_base_url": "dist",
   "scripts": {
@@ -1976,7 +1978,7 @@ there is no `/metrics`. See [DEPLOYMENT](../DEPLOYMENT.md) and
 Liveness: the process answers. It says nothing about the dependencies.
 
 ```json
-{ "status": "healthy", "version": "4.0.2" }
+{ "status": "healthy", "version": "4.0.3" }
 ```
 
 ```bash
@@ -2056,7 +2058,10 @@ only presence, scheme and length:
 and the repository once, with the key of the request, and reports per service
 `url`, `reachable`, `status`, `ms` and, where a key is involved, `auth_source`
 and `authorized`. It also returns `version`, `llm_provider`,
-`b_api_auth_mode` and `config_warnings`. The call uses no LLM tokens.
+`b_api_auth_mode`, `config_warnings` and `refused_ways`: the ways to text
+extraction and geocoder the B-API refused lately (for example
+`"geocoder:forwarded": 412`), with the seconds until the agent tries them
+again. The call uses no LLM tokens.
 
 ```bash
 curl -s "$API/debug/auth" -H "Authorization: Bearer $B_API_KEY"

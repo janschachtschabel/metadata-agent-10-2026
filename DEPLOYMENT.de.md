@@ -3,7 +3,7 @@
 [English](DEPLOYMENT.md) · **Deutsch**
 
 Wie die Metadata Agent API (Dienst-ID `metadata-agent`, Image
-`metadata-agent-api`, Version 4.0.2) produktiv läuft: mit Docker oder auf
+`metadata-agent-api`, Version 4.0.3) produktiv läuft: mit Docker oder auf
 Kubernetes, hinter dem B-API-Proxy oder eigenständig.
 
 Verwandte Dokumente:
@@ -101,16 +101,36 @@ Der Proxy-Eintrag gehört zur B-API und wird dort eingerichtet. Er braucht:
 
 - die Adresse des Agents im Cluster, zum Beispiel
   `http://metadata-agent.<namespace>:8000`;
-- die Option `forwardApiKey`: Der Proxy reicht dann den Schlüssel des Aufrufers
-  als `Authorization: Bearer <key>` weiter. edu-sharing wählt den Schlüssel,
-  einen für eingeloggte Nutzer und einen für Gäste, und die B-API bucht Nutzung
-  und Limits auf ihn;
-- ein Timeout von mindestens ~310 s (siehe
-  [Timeouts und Größe der Anfragen](#timeouts-und-größe-der-anfragen)).
+- das Weiterreichen der Anmeldung des Aufrufers. Ältere B-API-Versionen haben
+  dafür `forwardApiKey`: Der Proxy reicht den Schlüssel des Aufrufers als
+  `Authorization: Bearer <key>` weiter. Die aktuelle hat stattdessen
+  `forwardDelegation` (geprüft an `/v3/api-docs` der Staging-B-API, 16.11.2026):
+  Weitergereicht wird ein befristetes Token mit den Rechten aus
+  `delegationScopes`, in der Kopfzeile aus `delegationHeader` (der Agent liest
+  `Authorization`), gültig für `delegationLifetimeSeconds`. edu-sharing wählt
+  den Schlüssel, einen für eingeloggte Nutzer und einen für Gäste, und die
+  B-API bucht Nutzung und Limits auf ihn;
+- in `delegationScopes` außer den LLM-Endpunkten auch die Proxy-Dienste
+  `text-extraction` und `photon_geocoding`, und eine `delegationLifetimeSeconds`
+  über der Dauer eines Laufs (≥ 320 s). Auf Staging (16.11.) reichte das Token
+  für die LLM-Aufrufe, `photon_geocoding` antwortete mit `401`;
+- `responseTimeout` von mindestens 310 000 ms, besser 320 000 (siehe
+  [Timeouts und Größe der Anfragen](#timeouts-und-größe-der-anfragen)). Auf
+  Staging stand der Eintrag am 16.11. auf 300 000 ms: Läufe kurz vor der Frist
+  von `/generate` bricht die B-API dann ab;
+- die Freigaben für Kopfzeilen und Inhaltstypen, wo die B-API sie verlangt:
+  `allowedRequestHeaders` `Content-Type`, `x-client-trace-id`, `X-Request-ID`,
+  `x-b3-traceid`, `x-b3-spanid`, `b3`; `allowedResponseHeaders` `X-Request-ID`,
+  `Retry-After`; `allowedResponseContentTypes` `application/json` und für das
+  Bundle der Webkomponente `text/javascript`, `text/css`, `font/woff2`,
+  `text/html`.
 
-Der Agent gibt den weitergereichten Schlüssel unverändert weiter: an die
-LLM-Endpunkte der B-API und an ihre Proxy-Dienste für Textextraktion und
-Geocoder.
+Der Agent gibt das weitergereichte Token bzw. den Schlüssel unverändert weiter:
+an die LLM-Endpunkte der B-API und an ihre Proxy-Dienste für Textextraktion und
+Geocoder. Lehnt die B-API es für Textextraktion oder Geocoder ab, versucht der
+Agent mit `METADATA_AGENT_B_API_SERVICES=auto` zuerst seinen eigenen
+`B_API_KEY` und dann den Dienst direkt
+([Wie Textextraktion und Geocoder erreicht werden](#wie-textextraktion-und-geocoder-erreicht-werden)).
 
 **Der Agent darf nur über die B-API erreichbar sein.** Er prüft den Header
 nicht selbst. Erreicht jemand anderes Port 8000, laufen Anfragen ohne Header im
@@ -163,12 +183,54 @@ einen Schlüssel mitbringt; der Agent warnt nur beim Start.
 
 | Wert | Textextraktion (`/from-url`) | Geocoder |
 |---|---|---|
-| `auto` (Default) | Wie `proxy`, wenn der Provider ein `b-api-*`-Provider ist und seine LLM-Adresse unter `METADATA_AGENT_B_API_BASE_URL` liegt. Sonst wie `direct` | wie links; scheitert der Weg über die B-API (abgelehnt, Fehlerstatus, keine Antwort, kein Schlüssel): `https://photon.komoot.io/api` direkt, ohne Schlüssel |
-| `proxy` | `<B-API>/api/v1/proxy/text-extraction`, mit dem Schlüssel der LLM-Aufrufe | `<B-API>/api/v1/proxy/photon_geocoding/api`, mit dem Schlüssel der LLM-Aufrufe |
+| `auto` (Default) | Wie `proxy`, wenn der Provider ein `b-api-*`-Provider ist und seine LLM-Adresse unter `METADATA_AGENT_B_API_BASE_URL` liegt, mit `direct` als letztem Ausweg (siehe unten). Sonst wie `direct` | wie links |
+| `proxy` | `<B-API>/api/v1/proxy/text-extraction`, mit der Anmeldung der LLM-Aufrufe, dann mit `B_API_KEY` | `<B-API>/api/v1/proxy/photon_geocoding/api`, ebenso |
 | `direct` | Nach der Repository-URL, ohne Schlüssel (siehe unten) | `https://photon.komoot.io/api`, ohne Schlüssel |
 
 Über die B-API gehören die Dienste immer zur selben Umgebung wie die B-API:
 Staging zu Staging, Produktion zu Produktion.
+
+Mit `auto` versucht ein Aufruf drei Wege, bis einer eine brauchbare Antwort
+gibt (`src/services/service_ways.py`):
+
+| Weg | Anmeldung | Weiter zum nächsten Weg bei |
+|---|---|---|
+| 1. über die B-API | das weitergereichte Token bzw. der Schlüssel des Aufrufers | `401`, `403`, `429` |
+| 2. über die B-API | der eigene `B_API_KEY` des Agents (nicht mit `B_API_AUTH_MODE=forward`) | `401`, `403`, `429` |
+| 3. direkt | keine: Photon bzw. die Textextraktion der Repository-Umgebung | – |
+
+- Antwortet die B-API anders nicht brauchbar (ein anderer Fehlerstatus wie
+  `404` oder `5xx`, kein JSON, keine Verbindung, Verbindungsaufbau dauert zu
+  lange), geht der Aufruf gleich zu Weg 3; ein anderer Schlüssel hilft dann
+  nicht. Ein `504` der B-API gilt als zu langsame Seite (siehe nächster
+  Punkt).
+- Ein `429` auf Weg 1 heißt: Das Kontingent des Aufrufers ist aufgebraucht.
+  Dann springt nicht der Schlüssel des Agents ein, der Aufruf geht zu Weg 3;
+  mit `proxy` antwortet die Textextraktion `503`
+  `TEXT_EXTRACTION_RATE_LIMITED`.
+- Eine zu langsame Seite (Lesezeit überschritten) und eine Seite ohne Text
+  sind die Antwort: Ein anderer Weg würde ebenso lange warten bzw. ebenso
+  wenig finden.
+- Einen Weg, den die B-API mit `401` oder `403` abgelehnt hat, überspringt der
+  Prozess 10 Minuten lang und versucht ihn dann wieder: den eigenen Schlüssel
+  für alle Anfragen, eine weitergereichte Anmeldung nur für sich selbst
+  (gemerkt unter einem Hash). Die abgelehnte Anmeldung eines Aufrufers stellt
+  also keinen anderen auf den Schlüssel des Agents um. Mit Delegations-Tokens,
+  die je Anfrage neu ausgestellt werden, zahlt deshalb jede Anfrage den einen
+  abgelehnten Versuch, bis die Scopes stimmen. Das Log nennt eine Ablehnung
+  einmal („Weg 'forwarded' abgelehnt …; für 600 s übersprungen“),
+  `GET /debug/dependencies` zeigt die Wege unter `refused_ways`. Ist ein Weg
+  nur aus dem Gedächtnis übersprungen, antwortet der Agent wie bei einer
+  frischen Ablehnung (`TEXT_EXTRACTION_AUTH_REFUSED`, Warnung des Geocoders).
+- Weg 2 bucht Textextraktion bzw. Geocoder auf den Schlüssel des Agents statt
+  auf den des Aufrufers. Die LLM-Aufrufe tragen weiter nur die Anmeldung des
+  Aufrufers.
+- Weg 3 gibt es für den Geocoder immer. Die Textextraktion direkt erreicht der
+  Agent nur, wo die Adresse der Repository-Umgebung öffentlich und mit gültigem
+  Zertifikat erreichbar ist: auf Staging ja, auf Produktion am 16.11.2026 nicht
+  (selbstsigniertes Zertifikat). Scheitern alle Wege, nennt die Antwort den
+  Grund des ersten.
+- `proxy` hat nur die Wege 1 und 2, `direct` nur Weg 3.
 
 Für `direct` leitet der Agent die Textextraktion aus
 `METADATA_AGENT_REPOSITORY_URL` ab:
@@ -192,11 +254,12 @@ Jeder Schlüssel, mit dem der Agent aufgerufen wird, braucht in der B-API:
 | Recht | Nötig für | Ohne das Recht |
 |---|---|---|
 | Den LLM-Endpunkt des Providers (`openai`, `academiccloud` oder `router`) | Jede Erschließung | `502` `LLM_AUTH_FORBIDDEN` |
-| Proxy-Dienst `text-extraction` | Erschließung aus einer URL | `502` `TEXT_EXTRACTION_AUTH_REFUSED` |
-| Proxy-Dienst `photon_geocoding` | Koordinaten von Orten | Mit `auto` fragt der Agent Photon direkt (Log-Warnung); mit `proxy` bleiben Orte ohne Koordinaten, `processing.warnings` nennt den Grund |
+| Proxy-Dienst `text-extraction` | Erschließung aus einer URL | Mit `auto` der eigene `B_API_KEY`, dann die Textextraktion direkt; scheitert beides oder mit `proxy`: `502` `TEXT_EXTRACTION_AUTH_REFUSED` |
+| Proxy-Dienst `photon_geocoding` | Koordinaten von Orten | Mit `auto` der eigene `B_API_KEY`, dann Photon direkt (Log-Warnung); mit `proxy`, wenn auch `B_API_KEY` abgelehnt wird: Orte bleiben ohne Koordinaten, `processing.warnings` nennt den Grund |
 
-Das gilt für den Nutzer- und den Gast-Schlüssel, die edu-sharing verwendet, und
-für `B_API_KEY`. Die Rechte werden in der B-API vergeben, nicht im Agent. Wer
+Das gilt für den Nutzer- und den Gast-Schlüssel, die edu-sharing verwendet, für
+die `delegationScopes` des Proxy-Eintrags (aktuelle B-API) und für
+`B_API_KEY`. Die Rechte werden in der B-API vergeben, nicht im Agent. Wer
 die beiden Proxy-Dienste nicht nutzen will, setzt
 `METADATA_AGENT_B_API_SERVICES=direct`.
 
@@ -215,7 +278,7 @@ $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api
 |---|---|
 | `main` | Jedem Push auf `main` |
 | `develop` | Jedem Push auf `develop` |
-| `v4.0.2` | Dem Git-Tag `v4.0.2`. Ein Release-Tag muss die Form `vX.Y.Z` haben und zur Version in `pyproject.toml` passen; andere Tags veröffentlichen nichts |
+| `v4.0.3` | Dem Git-Tag `v4.0.3`. Ein Release-Tag muss die Form `vX.Y.Z` haben und zur Version in `pyproject.toml` passen; andere Tags veröffentlichen nichts |
 
 Vor dem Push startet die Pipeline das Image schreibgeschützt und ohne
 Schlüssel (`scripts/smoke-image.sh`): Sie wartet auf `/health`, prüft `/ready`,
@@ -228,7 +291,7 @@ ein Jahr aufbewahrt). In der Produktion Versions-Tags verwenden; `main` und
 `develop` wandern.
 
 ```bash
-docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v4.0.2
+docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v4.0.3
 ```
 
 Der GitHub-Spiegel (`.github/workflows/docker-publish.yml`) führt dieselben
@@ -284,7 +347,7 @@ docker run -d \
   -e WLO_GUEST_PASSWORD=<password> \
   -e METADATA_AGENT_B_API_BASE_URL=https://b-api.prod.openeduhub.net \
   -e METADATA_AGENT_REPOSITORY_URL=https://redaktion.openeduhub.net/edu-sharing/rest \
-  $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v4.0.2
+  $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v4.0.3
 ```
 
 | Option | Warum |
@@ -310,7 +373,7 @@ Ein Dienst für die Produktion mit dem Image aus der Registry:
 ```yaml
 services:
   metadata-agent-api:
-    image: ${DOCKER_REGISTRY}/projects/wlo/meta-services/metadata-agent-api:v4.0.2
+    image: ${DOCKER_REGISTRY}/projects/wlo/meta-services/metadata-agent-api:v4.0.3
     ports:
       - "127.0.0.1:8000:8000"   # nur dieser Rechner; andere nur hinter einer Zugangsbeschränkung
     read_only: true
@@ -363,8 +426,8 @@ Client-Adresse einer Anfrage übernimmt.
 ## Kubernetes mit dem Helm-Chart
 
 Der Chart liegt unter [`helm/metadata-agent/`](helm/metadata-agent/README.md).
-Seine Version ist die Version des Dienstes: Chart 4.0.2 deployt das Image-Tag
-`v4.0.2`. Der Chart ist bisher statisch geprüft (`helm lint`, kubeconform,
+Seine Version ist die Version des Dienstes: Chart 4.0.3 deployt das Image-Tag
+`v4.0.3`. Der Chart ist bisher statisch geprüft (`helm lint`, kubeconform,
 Tests), nicht in einem Cluster. Die erste Installation ist die
 [Prüfliste unten](#erste-installation-im-cluster-prüfliste).
 
@@ -393,7 +456,7 @@ kubectl rollout restart deployment/metadata-agent
 | Wert | Default | Was zu tun ist |
 |---|---|---|
 | `image.repository` | leer | **Pflicht.** Ohne ihn scheitert das Rendern |
-| `image.tag` | `v4.0.2` | Das Image muss in der Registry liegen und aus demselben Stand gebaut sein wie der Chart (siehe [Updates](#updates)) |
+| `image.tag` | `v4.0.3` | Das Image muss in der Registry liegen und aus demselben Stand gebaut sein wie der Chart (siehe [Updates](#updates)) |
 | `image.digest` | leer | `sha256:` und 64 Hex-Ziffern legen das Image fest: Es wird als `<repository>@<digest>` geholt, das Tag wird nicht verwendet. Ein Tag lässt sich auf ein anderes Image umsetzen, ein Digest nicht |
 | `secret.existingSecret` | leer | Name des Secrets mit `B_API_KEY`, `WLO_GUEST_USERNAME`, `WLO_GUEST_PASSWORD`. Leer: Der Chart erwartet ein Secret, das wie seine Ressourcen heißt. `B_API_KEY` ist im Modus `forward` nicht nötig |
 | `env.METADATA_AGENT_B_API_BASE_URL`, `env.METADATA_AGENT_REPOSITORY_URL` | Produktion | Für Staging beide setzen. Keine der beiden darf leer sein |
@@ -585,7 +648,7 @@ Einen ausgefallenen oder neu startenden Pod melden die Regeln des Clusters
 
 | Pfad | Antwort | Bedeutung |
 |---|---|---|
-| `/health` | `200` `{"status": "healthy", "version": "4.0.2"}`. Auf dem internen Port zusätzlich `llm_provider` und `b_api_auth_mode` | Der Prozess antwortet. Über die abhängigen Dienste sagt das nichts |
+| `/health` | `200` `{"status": "healthy", "version": "4.0.3"}`. Auf dem internen Port zusätzlich `llm_provider` und `b_api_auth_mode` | Der Prozess antwortet. Über die abhängigen Dienste sagt das nichts |
 | `/ready` | `200` `{"status": "ready"}`, oder `503` mit `status: "not_ready"`, `detail` und `error.code` `NOT_READY`. Auf dem internen Port zusätzlich die Gründe (`problems`) | Die Konfiguration kann arbeiten |
 
 `/ready` antwortet mit `503`, wenn:
@@ -786,7 +849,7 @@ Anfragen stehen nur auf `DEBUG` im Log.
 
 | Header | Richtung | Wozu |
 |---|---|---|
-| `Authorization: Bearer <key>` | ein | Der Schlüssel des Aufrufers vom B-API-Proxy (`forwardApiKey`). Er geht unverändert an die B-API weiter |
+| `Authorization: Bearer <key>` | ein | Vom B-API-Proxy: die Anmeldung des Aufrufers: sein Schlüssel (`forwardApiKey`, ältere B-API) oder ein Delegations-Token dafür (`forwardDelegation`). Sie geht unverändert an die B-API weiter |
 | `x-client-trace-id`, `x-request-id`, `x-b3-traceid`, `x-b3-spanid`, `x-b3-parentspanid`, `x-b3-sampled`, `x-b3-flags`, `b3` | ein, weitergereicht | Tracing (B3). Gehen unverändert an die B-API, die Textextraktion und das Repository weiter. Nie an Dritte wie ein direkt aufgerufenes Photon oder Seiten, von denen ein Screenshot entsteht |
 | `X-Request-ID` | aus | Die Anfrage-ID, in jeder Antwort |
 | `X-Forwarded-Proto`, `X-Forwarded-For` | ein | Nur von `FORWARDED_ALLOW_IPS` übernommen (siehe [Hinter TLS](#hinter-tls-ingress-proxy)) |
@@ -904,7 +967,7 @@ der Agent üblicherweise verarbeitet.
 | `200`, `success`, Inhaltstyp `(llm)` | In Ordnung. `keySource: forwarded` heißt, der Schlüssel kam über den Proxy |
 | `502`, `LLM_AUTH_FORBIDDEN` | Die B-API lehnt den Schlüssel ab (`403`). Rechte des Schlüssels prüfen |
 | `502`, `LLM_AUTH_REJECTED` | Die B-API nimmt den Schlüssel nicht an (`401`) |
-| `502`, `LLM_AUTH_MISSING` | Modus `forward`, aber kein `Authorization`-Header angekommen. `forwardApiKey` prüfen |
+| `502`, `LLM_AUTH_MISSING` | Modus `forward`, aber kein `Authorization`-Header angekommen. `forwardDelegation` bzw. `forwardApiKey` prüfen |
 | `503`, `LLM_RATE_LIMITED` | Kontingent oder Limit des Schlüssels ist erschöpft |
 | `partial` | Ein Teil der Felder ist gescheitert; `processing.errors` nennt die Ursachen |
 | Inhaltstyp `(keywords)` | Der Inhaltstyp ist nur über Schlüsselwörter geraten; das LLM gab keine brauchbare Antwort |
@@ -919,9 +982,9 @@ Test 2, mit diesem Body:
 
 | Ergebnis | Bedeutung |
 |---|---|
-| `200`, `success` | In Ordnung: Der Schlüssel darf den Proxy-Dienst `text-extraction` nutzen |
-| `502`, `TEXT_EXTRACTION_AUTH_REFUSED` | Die B-API lehnt den Schlüssel für die Textextraktion ab. Recht für den Proxy-Dienst `text-extraction` ergänzen |
-| `502`, `TEXT_EXTRACTION_AUTH_MISSING` | Kein Schlüssel für den Aufruf: Modus `forward` ohne `Authorization`, oder `auto` ohne `B_API_KEY` |
+| `200`, `success` | Der Text kam an. Ob die weitergereichte Anmeldung `text-extraction` nutzen darf, zeigt erst das Log oder `GET /debug/dependencies`: Mit `auto` steht `text-extraction:forwarded` in `refused_ways`, wenn der Agent auf den eigenen Schlüssel oder den direkten Weg ausweichen musste. Dann das Recht (bzw. den Scope) für den Proxy-Dienst `text-extraction` ergänzen |
+| `502`, `TEXT_EXTRACTION_AUTH_REFUSED` | Alle Wege sind gescheitert (mit `proxy`: beide Anmeldungen abgelehnt). Recht für den Proxy-Dienst `text-extraction` ergänzen |
+| `502`, `TEXT_EXTRACTION_AUTH_MISSING` | Keine Anmeldung und kein anderer Weg: es kam kein `Authorization` an (Modus `forward`) bzw. `B_API_KEY` fehlt, und es gibt keinen direkten Weg (`proxy`, oder ein Repository außerhalb von Staging und Produktion) |
 | `503`, `TEXT_EXTRACTION_NOT_CONFIGURED` | Betrieb ohne B-API mit einem Repository, das weder Staging noch Produktion ist: `METADATA_AGENT_TEXT_EXTRACTION_API_URL` setzen |
 | `504`, `TEXT_EXTRACTION_CONNECT_TIMEOUT` | Der Textextraktionsdienst ist nicht erreichbar |
 
@@ -972,11 +1035,11 @@ Ziel-Namespace, `<release>` der Release-Name und `<name>` der Name der
 Ressourcen: der Release-Name, wenn er „metadata-agent“ enthält, sonst
 `<release>-metadata-agent` (`helm install` nennt ihn).
 
-1. **Image bauen und pushen.** Das Git-Tag der Version (`v4.0.2`) auf den
+1. **Image bauen und pushen.** Das Git-Tag der Version (`v4.0.3`) auf den
    Commit setzen, aus dem der Chart stammt. Die GitLab-Pipeline baut, startet
    den Smoke-Test (schreibgeschützt, Chromium), scannt mit Trivy und pusht
    erst danach. Prüfen:
-   `docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v4.0.2`.
+   `docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v4.0.3`.
    Ohne dieses Tag in der Registry endet `helm install` mit den Defaults in
    `ImagePullBackOff`.
 2. **Namespaces und Ports ermitteln:**
@@ -1066,7 +1129,7 @@ Ressourcen: der Release-Name, wenn er „metadata-agent“ enthält, sonst
    antworten.
 10. **Ende zu Ende über den B-API-Proxy:** die Tests 1 bis 4 aus
     [Nach dem Deployment prüfen](#nach-dem-deployment-prüfen). Mit
-    `forwardApiKey` zeigt Test 2 `keySource: forwarded`. Die Tests 3 und 4
+    `forwardDelegation` bzw. `forwardApiKey` zeigt Test 2 `keySource: forwarded`. Die Tests 3 und 4
     prüfen die Rechte für `text-extraction` und `photon_geocoding`, je einmal
     eingeloggt und als Gast.
 11. **Überwachung:** `kubectl -n <ns> get servicemonitor,prometheusrule`. In
@@ -1093,8 +1156,8 @@ Der Agent ist zustandslos: Es gibt keine Datenbank und keine Migration.
 
 ### Update von 3.0.x auf 4.0.0
 
-Die Einzelheiten stehen im CHANGELOG unter 4.0.0 bis 4.0.2. Der Chart nennt
-`image.tag: v4.0.2` und braucht das Image dieser Version: Mit
+Die Einzelheiten stehen im CHANGELOG unter 4.0.0 bis 4.0.3. Der Chart nennt
+`image.tag: v4.0.3` und braucht das Image dieser Version: Mit
 dem am 20.10.2026 als 3.0.1 veröffentlichten Image funktioniert er nicht (siehe
 „Chart und Image zusammenhalten“ unten).
 
@@ -1103,9 +1166,11 @@ dem am 20.10.2026 als 3.0.1 veröffentlichten Image funktioniert er nicht (siehe
 - [ ] **Schlüsselrechte in der B-API ergänzen.** Jeder Schlüssel, mit dem der
       Agent aufgerufen wird (Nutzer- und Gast-Schlüssel aus edu-sharing,
       `B_API_KEY`), braucht zusätzlich zu den LLM-Endpunkten die Proxy-Dienste
-      `text-extraction` und `photon_geocoding`. Sonst endet die Erschließung
-      aus einer URL mit `502` `TEXT_EXTRACTION_AUTH_REFUSED`. Den Geocoder
-      fragt der Agent dann direkt bei Photon (nur mit `auto`). Wer beim
+      `text-extraction` und `photon_geocoding`, mit der aktuellen B-API in den
+      `delegationScopes` des Proxy-Eintrags. Sonst weicht der Agent mit `auto`
+      auf seinen eigenen `B_API_KEY` und dann auf die Dienste direkt aus (Log,
+      `refused_ways`); mit `proxy` endet die Erschließung aus einer URL mit
+      `502` `TEXT_EXTRACTION_AUTH_REFUSED`. Wer beim
       bisherigen Weg bleiben will, setzt
       `METADATA_AGENT_B_API_SERVICES=direct`.
 - [ ] **Eigene Values-Dateien durchsehen.** Steht dort

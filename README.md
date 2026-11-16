@@ -7,7 +7,7 @@ with a large language model (LLM). It reads a text, a web page or a repository
 node, returns metadata that follows the
 [WLO/OEH schema](https://wirlernenonline.de), and can write the result to a
 WLO edu-sharing repository. The service is a FastAPI application for
-Python 3.13 (version 4.0.2). It also serves the web component
+Python 3.13 (version 4.0.3). It also serves the web component
 `<metadata-agent-canvas>` that displays and edits the metadata.
 
 ## Contents
@@ -107,7 +107,7 @@ uv run uvicorn src.main:app --reload --port 8000
 
 ```bash
 curl http://localhost:8000/health
-# → {"status":"healthy","version":"4.0.2"}
+# → {"status":"healthy","version":"4.0.3"}
 
 curl -X POST http://localhost:8000/generate \
   -H "Content-Type: application/json" \
@@ -194,7 +194,7 @@ logged. `processing.auth_source` in the response names the source
 | | Behind the B-API proxy | Standalone |
 |---|---|---|
 | Caller | edu-sharing and the web component, through the B-API proxy entry `metadata-agent-canvas` (`/api/v1/proxy/metadata-agent-canvas/…`) | Any client that reaches port 8000 |
-| Key for the LLM calls | The caller's key (user or guest key). The proxy forwards it when the entry has `forwardApiKey` set, and the B-API books usage and limits on it | `B_API_KEY`, or `OPENAI_API_KEY` with the provider `openai` |
+| Key for the LLM calls | The caller's credential (user or guest key). The proxy forwards the key (`forwardApiKey`, older B-API) or a delegation token for it (`forwardDelegation`), and the B-API books usage and limits on it | `B_API_KEY`, or `OPENAI_API_KEY` with the provider `openai` |
 | Auth mode | `auto`, or `forward` to run on forwarded keys only (no `B_API_KEY` needed) | `auto` or `static` |
 | Access | The service must be reachable through the B-API only. The NetworkPolicy of the Helm chart enforces this | Put an access restriction in front. In mode `auto` anyone who reaches the port runs extractions on `B_API_KEY` |
 
@@ -213,10 +213,11 @@ Text extraction (for URL input) and the geocoder exist once per environment.
   use needs the rights for the proxy services `text-extraction` and
   `photon_geocoding`, in addition to the LLM endpoints. Direct calls carry no
   key.
-- If the right is missing, extraction from a URL ends with `502`
-  `TEXT_EXTRACTION_AUTH_REFUSED`. The geocoder is then asked at Photon
-  itself with `auto`; with `proxy` places stay without coordinates, and
-  `processing.warnings` says why.
+- If the right is missing, the agent with `auto` tries its own `B_API_KEY`
+  and then the service directly (Photon, the text extraction of the
+  repository's environment). Only when every way fails, or with `proxy`,
+  extraction from a URL ends with `502` `TEXT_EXTRACTION_AUTH_REFUSED`, and
+  places stay without coordinates (`processing.warnings` says why).
 - `METADATA_AGENT_TEXT_EXTRACTION_API_URL` names a text extraction of your
   own and overrides the choice. Set it when `direct` applies and the
   repository is not an OpenEduHub host; otherwise extraction from a URL
@@ -397,11 +398,11 @@ The CI publishes the image `metadata-agent-api` to the internal registry: tag
 `v<version>` for a release tag, `main` and `develop` for the branches.
 
 ```bash
-docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v4.0.2
+docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v4.0.3
 docker run -d --name metadata-agent-api -p 127.0.0.1:8000:8000 \
   --read-only --tmpfs /tmp --tmpfs /home/appuser --stop-timeout 320 \
   -e B_API_KEY=<key> \
-  $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v4.0.2
+  $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v4.0.3
 ```
 
 - The image contains Chromium (the headless shell) for screenshots and the

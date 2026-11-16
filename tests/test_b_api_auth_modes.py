@@ -2,7 +2,7 @@
 Which credentials an LLM call to the B-API carries.
 
 Since 2026-10-13 the B-API proxy can forward the caller's key to a registered
-service as `Authorization: Bearer <key>` (option forwardApiKey). The agent must
+service as `Authorization: Bearer <key>` (option forwardDelegation/forwardApiKey). The agent must
 pass that header on unchanged, per request, and never mix it up with another
 request's key. The original way - the agent's own B_API_KEY sent as X-API-KEY -
 stays available. METADATA_AGENT_B_API_AUTH_MODE selects:
