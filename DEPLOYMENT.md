@@ -307,9 +307,13 @@ pipeline also writes a software bill of materials (CycloneDX, job artifact
 docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v4.0.4
 ```
 
-The GitHub mirror (`.github/workflows/docker-publish.yml`) runs the same checks
-and publishes to Docker Hub, for `main` and tags `v*`, if the secret
-`DOCKERHUB_PASSWORD` is set.
+The GitLab pipeline is the primary one. The GitHub mirror has its own
+workflow (`.github/workflows/docker-publish.yml`; GitLab ignores the `.github`
+folder): the same checks, and it publishes to Docker Hub as
+`<GitHub owner>/<repo>:<tag>`, for `main` and tags `v*`, if the repository
+secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` (access token with write
+access) are set. If one is missing, it only builds and checks and reports
+"Image built but not published".
 
 A published image is checked again on a schedule, because vulnerabilities are
 also found after a release:

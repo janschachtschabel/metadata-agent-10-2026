@@ -533,6 +533,24 @@ def test_github_publishes_only_main_and_tags():
     assert "refs/heads/main" in publish and "refs/tags/v" in publish
 
 
+def test_github_publishes_with_the_secrets_the_repository_has():
+    """
+    The GitHub repository holds DOCKERHUB_USERNAME and DOCKERHUB_TOKEN. The
+    workflow read DOCKERHUB_PASSWORD, so it never published and only left a
+    notice. Gate and login must name the same secrets.
+    """
+    workflow = GITHUB.read_text(encoding="utf-8")
+    publish = re.search(r"PUBLISH: \$\{\{(.*?)\}\}", workflow, re.DOTALL).group(1)
+    login = workflow[workflow.index("docker/login-action") :]
+    login = login[: login.index("- name:")]
+
+    assert "secrets.DOCKERHUB_TOKEN != ''" in publish
+    assert "secrets.DOCKERHUB_USERNAME != ''" in publish
+    assert "username: ${{ secrets.DOCKERHUB_USERNAME }}" in login
+    assert "password: ${{ secrets.DOCKERHUB_TOKEN }}" in login
+    assert "DOCKERHUB_PASSWORD" not in workflow
+
+
 # ------------------------------------------------- audit 14.11.2026 (O-32, O-43)
 
 SCHEDULED = ROOT / ".github" / "workflows" / "scheduled-checks.yml"

@@ -1,3 +1,6 @@
+# Primary build. The GitHub mirror builds the same image with its own
+# workflow (.github/workflows/docker-publish.yml, to Docker Hub, secrets
+# DOCKERHUB_USERNAME and DOCKERHUB_TOKEN); GitLab ignores that folder.
 stages:
   - build
   - test

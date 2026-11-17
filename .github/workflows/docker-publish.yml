@@ -1,5 +1,10 @@
 name: Docker Build & Publish
 
+# GitHub mirror only. The primary build is GitLab (.gitlab-ci.yml: own registry,
+# variables DOCKER_REGISTRY, DOCKER_USERNAME, DOCKER_PASSWORD); GitLab ignores
+# this folder. Here the image goes to Docker Hub with the repository secrets
+# DOCKERHUB_USERNAME and DOCKERHUB_TOKEN (an access token with write access).
+
 on:
   push:
     branches: [ main ]
@@ -8,8 +13,8 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
-# The jobs only read the repository; the DockerHub password is a secret, not
-# the token (audit OPS-09).
+# The jobs only read the repository; the Docker Hub token is a secret, not
+# the GitHub token (audit OPS-09).
 permissions:
   contents: read
 
@@ -93,12 +98,12 @@ jobs:
     runs-on: ubuntu-24.04   # pinned: ubuntu-latest moves to 26.04 from 2026-10-19
     env:
       # Publish only outside pull requests (their code must not run next to the
-      # DockerHub password, and an unmerged change must not be published) and
+      # Docker Hub token, and an unmerged change must not be published) and
       # only where the secret exists — a fork or a fresh copy of the repo still
       # builds and checks the image, it just does not push it.
       # Only main and version tags: a manual run (workflow_dispatch) of another
       # branch builds and checks, but does not publish (audit 13.11., OPS-22).
-      PUBLISH: ${{ github.event_name != 'pull_request' && secrets.DOCKERHUB_PASSWORD != '' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}
+      PUBLISH: ${{ github.event_name != 'pull_request' && secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: Inject slug/short variables
@@ -126,16 +131,16 @@ jobs:
           docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.67.2@sha256:e2b22eac59c02003d8749f5b8d9bd073b62e30fefaef5b7c8371204e0a4b0c08
           image --exit-code 1 --severity CRITICAL --ignore-unfixed --no-progress
           ${{ github.repository }}:${{ env.GITHUB_REF_SLUG }}
-      # Only now the password reaches the runner: the steps above run containers
+      # Only now the token reaches the runner: the steps above run containers
       # with the Docker socket.
       - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6  # v4.7.0 (Docker Hub by default)
         if: env.PUBLISH == 'true'
         with:
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.DOCKERHUB_PASSWORD }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Publish to DockerHub
         if: env.PUBLISH == 'true'
         run: docker push ${{ github.repository }}:${{ env.GITHUB_REF_SLUG }}
       - name: Not published
         if: env.PUBLISH != 'true'
-        run: echo "::notice::Image built but not published (pull request or no DOCKERHUB_PASSWORD secret)."
+        run: echo "::notice::Image built but not published (pull request, other branch, or secret DOCKERHUB_USERNAME/DOCKERHUB_TOKEN missing)."

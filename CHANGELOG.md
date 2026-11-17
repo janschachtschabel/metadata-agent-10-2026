@@ -1,5 +1,16 @@
 # Änderungen
 
+## Unveröffentlicht
+
+- **GitHub-Spiegel veröffentlicht wieder nach Docker Hub.** Der Workflow
+  `.github/workflows/docker-publish.yml` las seit 2.1.0 das Secret
+  `DOCKERHUB_PASSWORD`; im Repository heißen die Secrets aber
+  `DOCKERHUB_USERNAME` und `DOCKERHUB_TOKEN`. Der Push wurde deshalb immer
+  übersprungen (nur ein Hinweis im Log), aufgefallen ist es erst am täglichen
+  Image-Scan, der `:v4.0.4` nicht fand. Der Workflow liest jetzt diese beiden
+  Secrets; ein Test hält die Namen fest. Die GitLab-Pipeline (eigene Registry,
+  `DOCKER_USERNAME`/`DOCKER_PASSWORD`) ist unverändert.
+
 ## 4.0.4 — 2026-11-17 — Betrieb mit Delegations-Token der B-API
 
 Webkomponente 4.0.4 (ohne Änderung am Code; das Widget trägt die Version des

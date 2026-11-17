@@ -317,9 +317,13 @@ ein Jahr aufbewahrt). In der Produktion Versions-Tags verwenden; `main` und
 docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v4.0.4
 ```
 
-Der GitHub-Spiegel (`.github/workflows/docker-publish.yml`) führt dieselben
-Prüfungen aus und veröffentlicht nach Docker Hub, für `main` und Tags `v*`,
-wenn das Secret `DOCKERHUB_PASSWORD` gesetzt ist.
+Maßgeblich ist die GitLab-Pipeline. Der GitHub-Spiegel hat einen eigenen
+Workflow (`.github/workflows/docker-publish.yml`; GitLab ignoriert den Ordner
+`.github`): dieselben Prüfungen, veröffentlicht wird nach Docker Hub als
+`<GitHub-Besitzer>/<Repo>:<Tag>`, für `main` und Tags `v*`, wenn die
+Repository-Secrets `DOCKERHUB_USERNAME` und `DOCKERHUB_TOKEN` (Access Token mit
+Schreibrecht) gesetzt sind. Fehlt eines, baut und prüft er nur und meldet „Image
+built but not published“.
 
 Ein veröffentlichtes Image wird nach Zeitplan erneut geprüft, weil Lücken auch
 nach einem Release bekannt werden:
