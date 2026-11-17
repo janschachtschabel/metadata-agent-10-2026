@@ -3,7 +3,7 @@
 **English** · [Deutsch](DEPLOYMENT.de.md)
 
 How to run the Metadata Agent API (service id `metadata-agent`, image
-`metadata-agent-api`, version 4.0.3) in production: with Docker or on
+`metadata-agent-api`, version 4.0.4) in production: with Docker or on
 Kubernetes, behind the B-API proxy or standalone.
 
 Related documents:
@@ -100,19 +100,20 @@ The proxy entry belongs to the B-API and is set up there. It needs:
 
 - the address of the agent inside the cluster, for example
   `http://metadata-agent.<namespace>:8000`;
-- forwarding of the caller's credential. Older B-API versions have
-  `forwardApiKey` for it: the proxy passes the caller's key on as
-  `Authorization: Bearer <key>`. The current one has `forwardDelegation`
-  instead (checked against `/v3/api-docs` of the staging B-API, 2026-11-16):
-  it forwards a time-limited token with the rights in `delegationScopes`, in
-  the header named by `delegationHeader` (the agent reads `Authorization`),
-  valid for `delegationLifetimeSeconds`. edu-sharing chooses the key, one for
-  logged-in users and one for guests, and the B-API books usage and limits on
-  it;
-- in `delegationScopes`, besides the LLM endpoints, the proxy services
-  `text-extraction` and `photon_geocoding`, and a `delegationLifetimeSeconds`
-  above the length of a run (≥ 320 s). On staging (2026-11-16) the token was
-  enough for the LLM calls, `photon_geocoding` answered `401`;
+- forwarding of the caller's credential. Since 2026-11-10
+  `forwardDelegation: true`: the B-API forwards a delegation token `bdt_…`, as
+  `Authorization: Bearer bdt_…` (or raw in the header named by
+  `delegationHeader`; then set `METADATA_AGENT_B_API_DELEGATION_HEADER` to the
+  same name). The caller's key does not leave the B-API; usage and limits keep
+  being booked on it. Older B-API versions forward the key itself with
+  `forwardApiKey`; the agent understands that as well;
+- `delegationScopes: llm`. Allowed are `llm`, `edu-sharing-llm` and
+  `edu-sharing-repo` (read), never write scopes; the agent needs only `llm`,
+  because it calls the repository directly. Whether the proxy services
+  `text-extraction` and `photon_geocoding` can be scopes is open: without them
+  the B-API answers `401` there (staging, 2026-11-16), and the agent goes
+  around it. Leave `delegationLifetimeSeconds` empty (the response timeout then
+  applies) or ≥ 320 s;
 - a `responseTimeout` of at least 310 000 ms, better 320 000 (see
   [Timeouts and request size](#timeouts-and-request-size)). On staging the
   entry stood at 300 000 ms on 2026-11-16: the B-API then cuts runs close to
@@ -124,12 +125,28 @@ The proxy entry belongs to the B-API and is set up there. It needs:
   bundle of the web component, `text/javascript`, `text/css`, `font/woff2`,
   `text/html`.
 
-The agent passes the forwarded token or key on unchanged: to the LLM endpoints
-of the B-API and to its proxy services for text extraction and geocoder. If the
-B-API refuses it for text extraction or geocoder, the agent with
-`METADATA_AGENT_B_API_SERVICES=auto` tries its own `B_API_KEY` first and then
-the service directly ([How text extraction and geocoder are
-reached](#how-text-extraction-and-geocoder-are-reached)).
+The agent passes the forwarded token or key on unchanged, within the request
+only and never into the log: to the LLM endpoints of the B-API and to its proxy
+services for text extraction and geocoder. It sets neither `X-Edu-User-Id` nor
+`X-API-KEY` next to it. If the B-API refuses the token for text extraction or
+geocoder, the agent with `METADATA_AGENT_B_API_SERVICES=auto` tries its own
+`B_API_KEY` (if set) and then the service directly ([How text extraction and
+geocoder are reached](#how-text-extraction-and-geocoder-are-reached)).
+
+Recommended behind the current B-API, because a service key as fallback is no
+longer intended there: `METADATA_AGENT_B_API_AUTH_MODE=forward` without
+`B_API_KEY`, and `METADATA_AGENT_TEXT_EXTRACTION_FALLBACK_URL` pointing to the
+text extraction inside the cluster. Whether the B-API grants the token the proxy
+services, the agent then finds out itself (ENV-PARAMETER.md, "Behind the
+current B-API").
+
+**Writing to the repository** (`/upload`, `/nodes`, `/workflow`) is not
+possible with the token. The agent therefore keeps writing directly with its
+own account (`WLO_GUEST_USERNAME`/`WLO_GUEST_PASSWORD`). That stays the way
+until the B-API offers services a way to write; whether T6 allows it like this
+is open. The defaults
+(`auto`) stay, so existing deployments and operation without the B-API run
+unchanged.
 
 **The agent must be reachable only through the B-API.** It does not check the
 header itself. If anyone else can reach port 8000, requests without a header
@@ -219,11 +236,16 @@ With `auto` a call tries three ways until one gives a usable answer
   (`TEXT_EXTRACTION_AUTH_REFUSED`, the geocoder's warning).
 - Way 2 books text extraction or geocoder on the agent's key instead of the
   caller's. The LLM calls keep carrying the caller's credential only.
-- Way 3 always exists for the geocoder. The text extraction directly is
-  reachable only where the address of the repository's environment is public
-  with a valid certificate: on staging yes, on production not on 2026-11-16
-  (self-signed certificate). If every way fails, the answer names the reason of
-  the first.
+- Way 3 always exists for the geocoder. For the text extraction it is
+  `METADATA_AGENT_TEXT_EXTRACTION_FALLBACK_URL`, without it the public address
+  of the repository's environment: reachable on staging, not on production on
+  2026-11-16 (self-signed certificate). In production enter the text
+  extraction inside the cluster. If every way fails, the answer names the
+  reason of the first.
+- Delegation tokens (`bdt_…`) all carry the scopes of the same proxy entry,
+  and each request brings a new one. The agent therefore remembers a refusal
+  for all delegation tokens; a forwarded key (`forwardApiKey`) still only for
+  itself.
 - `proxy` has ways 1 and 2 only, `direct` way 3 only.
 
 For `direct`, the agent derives the text extraction from
@@ -270,7 +292,7 @@ $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api
 |---|---|
 | `main` | Every push to `main` |
 | `develop` | Every push to `develop` |
-| `v4.0.3` | The Git tag `v4.0.3`. A release tag must have the form `vX.Y.Z` and match the version in `pyproject.toml`; other tags publish nothing |
+| `v4.0.4` | The Git tag `v4.0.4`. A release tag must have the form `vX.Y.Z` and match the version in `pyproject.toml`; other tags publish nothing |
 
 Before the push, the pipeline starts the image read-only and without keys
 (`scripts/smoke-image.sh`): it waits for `/health`, checks `/ready`, the
@@ -282,7 +304,7 @@ pipeline also writes a software bill of materials (CycloneDX, job artifact
 `develop` move.
 
 ```bash
-docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v4.0.3
+docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v4.0.4
 ```
 
 The GitHub mirror (`.github/workflows/docker-publish.yml`) runs the same checks
@@ -338,7 +360,7 @@ docker run -d \
   -e WLO_GUEST_PASSWORD=<password> \
   -e METADATA_AGENT_B_API_BASE_URL=https://b-api.prod.openeduhub.net \
   -e METADATA_AGENT_REPOSITORY_URL=https://redaktion.openeduhub.net/edu-sharing/rest \
-  $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v4.0.3
+  $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v4.0.4
 ```
 
 | Option | Why |
@@ -364,7 +386,7 @@ A service for production with the image from the registry:
 ```yaml
 services:
   metadata-agent-api:
-    image: ${DOCKER_REGISTRY}/projects/wlo/meta-services/metadata-agent-api:v4.0.3
+    image: ${DOCKER_REGISTRY}/projects/wlo/meta-services/metadata-agent-api:v4.0.4
     ports:
       - "127.0.0.1:8000:8000"   # only this host; other hosts only behind an access restriction
     read_only: true
@@ -416,8 +438,8 @@ address of a request.
 ## Kubernetes with the Helm chart
 
 The chart is in [`helm/metadata-agent/`](helm/metadata-agent/README.md)
-(README in German). Its version is the version of the service: chart 4.0.3
-deploys image tag `v4.0.3`. The chart has been checked statically so far
+(README in German). Its version is the version of the service: chart 4.0.4
+deploys image tag `v4.0.4`. The chart has been checked statically so far
 (`helm lint`, kubeconform, tests), not in a cluster. The first installation is
 the [checklist below](#first-installation-in-a-cluster-checklist).
 
@@ -446,7 +468,7 @@ kubectl rollout restart deployment/metadata-agent
 | Value | Default | What to do |
 |---|---|---|
 | `image.repository` | empty | **Required.** Rendering fails without it |
-| `image.tag` | `v4.0.3` | The image must exist in the registry and be built from the same state as the chart (see [Updates](#updates)) |
+| `image.tag` | `v4.0.4` | The image must exist in the registry and be built from the same state as the chart (see [Updates](#updates)) |
 | `image.digest` | empty | `sha256:` and 64 hex digits pin the image: it is pulled as `<repository>@<digest>`, and the tag is not used. A tag can be moved to another image, a digest cannot |
 | `secret.existingSecret` | empty | Name of the Secret with `B_API_KEY`, `WLO_GUEST_USERNAME`, `WLO_GUEST_PASSWORD`. Empty: the chart expects a Secret named like its resources. `B_API_KEY` is not needed in mode `forward` |
 | `env.METADATA_AGENT_B_API_BASE_URL`, `env.METADATA_AGENT_REPOSITORY_URL` | Production | Set both for staging. Neither may be empty |
@@ -636,7 +658,7 @@ A pod that is down or restarting is left to the cluster's own rules
 
 | Path | Answer | Meaning |
 |---|---|---|
-| `/health` | `200` `{"status": "healthy", "version": "4.0.3"}`. On the internal port also `llm_provider` and `b_api_auth_mode` | The process answers. It says nothing about the dependencies |
+| `/health` | `200` `{"status": "healthy", "version": "4.0.4"}`. On the internal port also `llm_provider` and `b_api_auth_mode` | The process answers. It says nothing about the dependencies |
 | `/ready` | `200` `{"status": "ready"}`, or `503` with `status: "not_ready"`, `detail` and `error.code` `NOT_READY`. On the internal port also the reasons (`problems`) | The configuration can work |
 
 `/ready` answers `503` when:
@@ -947,7 +969,7 @@ are German, like the content the agent usually handles.
 |---|---|
 | `200`, `success`, content type `(llm)` | In order. `keySource: forwarded` means the key came through the proxy |
 | `502`, `LLM_AUTH_FORBIDDEN` | The B-API refuses the key (`403`). Check the rights of the key |
-| `502`, `LLM_AUTH_REJECTED` | The B-API does not accept the key (`401`) |
+| `502`, `LLM_AUTH_REJECTED` | The B-API does not accept the key or token (`401`). For a delegation token also: expired, call ended, or the path lies outside `delegationScopes` (`llm` missing). The exact reason is in the B-API's log, not in the answer |
 | `502`, `LLM_AUTH_MISSING` | Mode `forward`, but no `Authorization` header arrived. Check `forwardDelegation` or `forwardApiKey` |
 | `503`, `LLM_RATE_LIMITED` | The quota or limit of the key is used up |
 | `partial` | Some fields failed; `processing.errors` names the causes |
@@ -1016,11 +1038,11 @@ namespace, `<release>` the release name, and `<name>` the name of the
 resources: the release name if it contains "metadata-agent", otherwise
 `<release>-metadata-agent` (`helm install` prints it).
 
-1. **Build and push the image.** Set the Git tag of the version (`v4.0.3`) on
+1. **Build and push the image.** Set the Git tag of the version (`v4.0.4`) on
    the commit the chart is taken from. The GitLab pipeline builds, runs the
    smoke test (read-only, Chromium), scans with Trivy and pushes only after
    that. Check:
-   `docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v4.0.3`.
+   `docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v4.0.4`.
    Without this tag in the registry, `helm install` with the defaults ends in
    `ImagePullBackOff`.
 2. **Find namespaces and ports:**
@@ -1134,8 +1156,8 @@ The agent is stateless: there is no database and no migration.
 
 ### Update from 3.0.x to 4.0.0
 
-The details are in the CHANGELOG under 4.0.0 to 4.0.3. The chart names
-`image.tag: v4.0.3` and needs the image of that version: the image
+The details are in the CHANGELOG under 4.0.0 to 4.0.4. The chart names
+`image.tag: v4.0.4` and needs the image of that version: the image
 released as 3.0.1 on 2026-10-20 does not work with it (see "Keep chart and
 image together" below).
 

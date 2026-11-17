@@ -6,7 +6,7 @@ Die Metadata Agent API erschließt Bildungsinhalte mit einem Sprachmodell
 (LLM). Aus einem Text, einer Webseite oder einem Repository-Node erzeugt sie
 strukturierte Metadaten nach dem [WLO/OEH-Schema](https://wirlernenonline.de)
 und kann das Ergebnis in ein WLO-edu-sharing-Repository schreiben. Der Dienst
-ist eine FastAPI-Anwendung für Python 3.13 (Version 4.0.3). Er liefert auch
+ist eine FastAPI-Anwendung für Python 3.13 (Version 4.0.4). Er liefert auch
 die Webkomponente `<metadata-agent-canvas>` aus, die die Metadaten anzeigt und
 bearbeitbar macht.
 
@@ -112,7 +112,7 @@ uv run uvicorn src.main:app --reload --port 8000
 
 ```bash
 curl http://localhost:8000/health
-# → {"status":"healthy","version":"4.0.3"}
+# → {"status":"healthy","version":"4.0.4"}
 
 curl -X POST http://localhost:8000/generate \
   -H "Content-Type: application/json" \
@@ -410,11 +410,11 @@ Die CI veröffentlicht das Image `metadata-agent-api` in der internen Registry:
 Tag `v<version>` für einen Release-Tag, `main` und `develop` für die Branches.
 
 ```bash
-docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v4.0.3
+docker pull $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v4.0.4
 docker run -d --name metadata-agent-api -p 127.0.0.1:8000:8000 \
   --read-only --tmpfs /tmp --tmpfs /home/appuser --stop-timeout 320 \
   -e B_API_KEY=<key> \
-  $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v4.0.3
+  $DOCKER_REGISTRY/projects/wlo/meta-services/metadata-agent-api:v4.0.4
 ```
 
 - Das Image enthält Chromium (die Headless-Shell) für Screenshots und die

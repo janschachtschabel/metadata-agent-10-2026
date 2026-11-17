@@ -1,5 +1,7 @@
 """Application configuration."""
 
+import re
+
 from pydantic_settings import BaseSettings
 from pydantic import Field, ValidationInfo, field_validator, model_validator
 from typing import Any, Literal, Optional
@@ -140,7 +142,7 @@ class Settings(BaseSettings):
 
     # API Settings
     app_name: str = "Metadata Agent API"
-    app_version: str = "4.0.3"
+    app_version: str = "4.0.4"
 
     # Logs go to stdout. text: the message alone, as the agent always wrote
     # them; json: one object per line with timestamp, level, service, logger,
@@ -189,6 +191,12 @@ class Settings(BaseSettings):
     #   forward  only the forwarded key; a request without it fails (LLM_AUTH_MISSING)
     #   static   only B_API_KEY (X-API-KEY), an incoming header is ignored
     b_api_auth_mode: Literal["static", "forward", "auto"] = "auto"
+
+    # The header in which the B-API proxy forwards a delegation token, when
+    # its entry sets `delegationHeader` (the raw token, no "Bearer "). Empty:
+    # Authorization, as forwardApiKey and the default of forwardDelegation do.
+    # Either way the token goes on as `Authorization: Bearer ...`.
+    b_api_delegation_header: str = ""
 
     # GET /debug/auth (does a forwarded key arrive - masked: presence, scheme,
     # length) and GET /debug/dependencies (are B-API, text extraction and
@@ -355,6 +363,12 @@ class Settings(BaseSettings):
     # Set it to name one yourself, e.g. the service inside the cluster.
     text_extraction_api_url: str = ""
 
+    # The way out when the text extraction through the B-API fails (auto):
+    # called directly, without a key. Empty: the public service of the
+    # repository's environment - which has no valid certificate in production
+    # (16.11.2026), so name the service inside the cluster there.
+    text_extraction_fallback_url: str = ""
+
     # WLO Repository Upload Credentials (for /upload endpoint)
     wlo_guest_username: str = Field(default="", alias="WLO_GUEST_USERNAME")
     wlo_guest_password: str = Field(default="", alias="WLO_GUEST_PASSWORD")
@@ -419,6 +433,24 @@ class Settings(BaseSettings):
     def upper_case_level(cls, v: Any) -> Any:
         return v.strip().upper() if isinstance(v, str) else v
 
+    @field_validator("b_api_delegation_header")
+    @classmethod
+    def a_header_name(cls, v: str) -> str:
+        """A token-character name, lower-case; never X-API-KEY (the B-API reads it first)."""
+        name = v.strip().lower()
+        if not name:
+            return ""
+        if (
+            len(name) > 64
+            or not re.fullmatch(r"[a-z0-9!#$%&'*+.^_`|~-]+", name)
+            or name == "x-api-key"
+        ):
+            raise ValueError(
+                "METADATA_AGENT_B_API_DELEGATION_HEADER ist kein gültiger "
+                "Header-Name (oder X-API-KEY, den die B-API vor dem Token liest)."
+            )
+        return name
+
     @field_validator("allowed_llm_models")
     @classmethod
     def names_at_least_one_model(cls, v: str) -> str:
@@ -449,6 +481,9 @@ class Settings(BaseSettings):
         """Bring the URL settings into one form and derive B-API endpoints."""
         self.b_api_base_url = _normalized_url(self.b_api_base_url)
         self.text_extraction_api_url = _normalized_url(self.text_extraction_api_url)
+        self.text_extraction_fallback_url = _normalized_url(
+            self.text_extraction_fallback_url
+        )
         self.repository_url = _normalized_url(self.repository_url)
         self.openai_api_base = _normalized_url(self.openai_api_base)
 
@@ -712,6 +747,7 @@ class Settings(BaseSettings):
             ("B-API", self.b_api_base_url),
             ("Repository", self.repository_url),
             ("Textextraktion", self.text_extraction_api_url),
+            ("Textextraktion (Ausweg)", self.text_extraction_fallback_url),
         ):
             env = _environment_of(url)
             if env:
@@ -762,6 +798,16 @@ class Settings(BaseSettings):
             "Text Extraction URL": _without_credentials(self.text_extraction_api_url),
             "Geocoder URL": _without_credentials(self.geocoder_api_url),
             "Repository URL": _without_credentials(self.repository_url),
+            # Only when set: the start lines stay as before without it.
+            **(
+                {
+                    "Text Extraction Fallback URL": _without_credentials(
+                        self.text_extraction_fallback_url
+                    )
+                }
+                if self.text_extraction_fallback_url
+                else {}
+            ),
         }
 
     def get_throughput_limits(self, provider: str) -> dict:

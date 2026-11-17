@@ -1,5 +1,57 @@
 # Änderungen
 
+## 4.0.4 — 2026-11-17 — Betrieb mit Delegations-Token der B-API
+
+Webkomponente 4.0.4 (ohne Änderung am Code; das Widget trägt die Version des
+Agents), Bundle neu gebaut und ausgeliefert (`dist/build.json`).
+
+Die B-API reicht seit dem 10.11.2026 statt des Schlüssels ein
+Delegations-Token `bdt_…` weiter (`forwardDelegation`, Seite „B-API Personen
+Nachweis bei Delegation“). Der Agent reicht es schon unverändert weiter; die
+Änderungen machen den Betrieb damit einstellbar und die Fehler verständlich.
+Ohne neue Einstellung bleibt alles wie in 4.0.3: ohne B-API, mit
+`forwardApiKey` und mit `forwardDelegation` über `Authorization`.
+
+- **Neu: `METADATA_AGENT_B_API_DELEGATION_HEADER`** (leer = `Authorization`,
+  wie bisher). Setzt der Proxy-Eintrag `delegationHeader`, steht das rohe Token
+  in diesem Header; der Agent liest es dort und gibt es als
+  `Authorization: Bearer …` weiter. Fehlt der Header, gilt weiter
+  `Authorization`. `X-API-KEY` ist als Name abgelehnt, weil die B-API ihn vor
+  dem Token liest. `/debug/auth` zeigt den Header maskiert.
+- **Neu: `METADATA_AGENT_TEXT_EXTRACTION_FALLBACK_URL`** (leer = öffentliche
+  Adresse der Repository-Umgebung, wie bisher). Der direkte Ausweg der
+  Textextraktion, wenn der Weg über die B-API scheitert (`auto`). In Produktion
+  hat die öffentliche Adresse kein gültiges Zertifikat; dort den Dienst im
+  Cluster eintragen. Anders als `METADATA_AGENT_TEXT_EXTRACTION_API_URL`
+  schaltet sie die B-API nicht ab. Steht gesetzt im Startlog.
+- **Delegations-Tokens gemeinsam gemerkt:** Alle Tokens eines Proxy-Eintrags
+  tragen dieselben Scopes, und jede Anfrage bringt ein neues. Eine Ablehnung
+  (`401`/`403`) bei Textextraktion oder Geocoder gilt deshalb 10 Minuten für
+  alle Delegations-Tokens (erkannt am Präfix `bdt_`, das Token wird nicht
+  gelesen). So zahlt ohne Proxy-Scope nur die erste Anfrage den Fehlversuch;
+  gibt die B-API den Scope frei, nutzt der Agent sie nach spätestens 10 Minuten
+  wieder. Ein weitergereichter Schlüssel (`forwardApiKey`) bleibt für sich
+  gemerkt.
+- **Seite nicht abrufbar (`424`):** Antwortet der Textextraktionsdienst `424`
+  (er konnte die Seite nicht holen; auf Staging am 17.11. bei example.org),
+  heißt das jetzt `422` `TEXT_EXTRACTION_PAGE_UNAVAILABLE` mit verständlicher
+  Meldung statt `502` `TEXT_EXTRACTION_HTTP_ERROR`, und es gibt keinen zweiten
+  Abruf über den direkten Weg. Bei `node_url` gilt das wie eine Seite ohne
+  Text: Titel und Beschreibung des Knotens reichen.
+- **Fehlermeldungen bei `401`:** LLM, Textextraktion und Geocoder nennen jetzt
+  auch die Fälle eines Tokens: abgelaufen, Aufruf beendet, Pfad außerhalb der
+  `delegationScopes`. Die B-API unterscheidet sie nach außen nicht.
+- **Doku:** DEPLOYMENT und ENV-PARAMETER beschreiben den Proxy-Eintrag mit
+  `forwardDelegation` (`delegationScopes: llm`, kein `delegationHeader`,
+  `responseTimeout` ≥ 320 000 ms) und die empfohlenen Einstellungen dahinter:
+  `B_API_AUTH_MODE=forward` ohne `B_API_KEY`, `B_API_SERVICES=auto` und
+  `TEXT_EXTRACTION_FALLBACK_URL` auf die Textextraktion im Cluster - beides
+  ohne Umstellen, ob die B-API die Proxy-Scopes freigibt oder nicht. Schreiben
+  ins Repository bleibt direkt mit eigenem Konto, bis die B-API einen
+  Schreibweg für Dienste anbietet. Die Defaults bleiben `auto`. Steckbrief und
+  b-api-kurzinfo nennen die offenen Fragen (Proxy-Scopes, direktes Schreiben
+  ins Repository mit eigenem Konto).
+
 ## 4.0.3 — 2026-11-16 — Ausweichkette zu Textextraktion und Geocoder
 
 Schnittstellen und Einstellungen wie 4.0.0; neu ist nur `refused_ways` in

@@ -65,7 +65,13 @@ SETUP_ERROR_CODES = frozenset(
 
 # Failures that say something about the page, not about the way to the
 # extraction: another way would wait as long or find as little.
-_ABOUT_THE_PAGE = frozenset({"TEXT_EXTRACTION_TIMEOUT", "TEXT_EXTRACTION_EMPTY"})
+_ABOUT_THE_PAGE = frozenset(
+    {
+        "TEXT_EXTRACTION_TIMEOUT",
+        "TEXT_EXTRACTION_EMPTY",
+        "TEXT_EXTRACTION_PAGE_UNAVAILABLE",
+    }
+)
 # Failures of a credential: the next way may carry another one.
 _ABOUT_THE_CREDENTIAL = frozenset(
     {"TEXT_EXTRACTION_AUTH_REFUSED", "TEXT_EXTRACTION_RATE_LIMITED"}
@@ -439,15 +445,25 @@ class InputSourceService:
             if auth and response.status_code in (401, 403):
                 raise failure(
                     "TEXT_EXTRACTION_AUTH_REFUSED",
-                    "Die B-API hat den Schlüssel für die Textextraktion abgelehnt "
+                    "Die B-API hat die Anmeldung für die Textextraktion abgelehnt "
                     f"(HTTP {response.status_code}): "
                     + (
-                        "Sie kennt ihn nicht, oder er ist ungültig "
-                        "(Proxy-Dienst text-extraction)."
+                        "Schlüssel bzw. Token unbekannt, abgelaufen, der Aufruf "
+                        "beendet, oder der Pfad liegt außerhalb der Scopes eines "
+                        "Delegations-Tokens (Proxy-Dienst text-extraction)."
                         if response.status_code == 401
-                        else "Ihm fehlt das Recht für den Proxy-Dienst text-extraction."
+                        else "Ihr fehlt das Recht für den Proxy-Dienst text-extraction."
                     ),
                     502,
+                )
+            if response.status_code == 424:
+                # The service could not fetch the page itself (blocked, gone,
+                # refused it): the caller's URL, not the way (staging 17.11.).
+                raise failure(
+                    "TEXT_EXTRACTION_PAGE_UNAVAILABLE",
+                    "Der Textextraktionsdienst konnte die Seite nicht abrufen "
+                    "(HTTP 424). Die Adresse prüfen oder den Text direkt übergeben.",
+                    422,
                 )
             if response.status_code == 504:
                 # A gateway on the way gave up waiting for the page: as slow as

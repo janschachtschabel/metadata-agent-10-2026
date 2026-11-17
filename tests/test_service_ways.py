@@ -536,3 +536,101 @@ async def test_extraction_static_mode_ignores_a_forwarded_header(monkeypatch, up
 
     assert text == "Text über own"
     assert upstream["calls"] == [(B_API, "own")]
+
+
+# ------------------------------------------------------------ delegation tokens
+#
+# Every delegation token of a proxy entry carries the same delegationScopes, and
+# each request brings a new one. A refusal of one token for a proxy service is
+# therefore remembered for all of them - otherwise every request would pay the
+# failed attempt until the B-API team grants the scope. After the pause the
+# B-API is tried again, so a granted scope is used without a change (17.11.).
+
+DELEGATION = "Bearer bdt_first-request"
+NEXT_DELEGATION = "Bearer bdt_second-request"
+
+
+def test_a_refused_delegation_token_holds_for_the_next_token_too():
+    REFUSALS.refused("geocoder", "forwarded", "HTTP 401", credential=DELEGATION)
+
+    with forwarded_authorization(NEXT_DELEGATION):
+        assert _way_names(geocoder_ways(_settings())) == ["own", "direct"]
+
+
+def test_a_refused_key_still_holds_for_that_key_only():
+    """forwardApiKey: one caller's bad key must not move the others."""
+    REFUSALS.refused("geocoder", "forwarded", "HTTP 401", credential="Bearer key-a")
+
+    with forwarded_authorization("Bearer key-b"):
+        assert _way_names(geocoder_ways(_settings()))[0] == "forwarded"
+
+
+def test_a_granted_scope_is_used_again_after_the_pause(monkeypatch):
+    now = [5000.0]
+    monkeypatch.setattr(service_ways.time, "monotonic", lambda: now[0])
+    REFUSALS.refused("geocoder", "forwarded", "HTTP 401", credential=DELEGATION)
+    now[0] += service_ways.REFUSED_FOR_SECONDS
+
+    with forwarded_authorization(NEXT_DELEGATION):
+        assert _way_names(geocoder_ways(_settings()))[0] == "forwarded"
+
+
+@pytest.mark.asyncio
+async def test_extraction_the_second_request_skips_the_refused_token_class(
+    monkeypatch, upstream
+):
+    upstream["answers"] = {"forwarded": 401}
+    await _extract(monkeypatch, _settings(b_api_key=""), forwarded=DELEGATION)
+    upstream["calls"].clear()
+
+    await _extract(monkeypatch, _settings(b_api_key=""), forwarded=NEXT_DELEGATION)
+
+    assert upstream["calls"] == [(DIRECT_EXTRACTION, "direct")]
+
+
+# ------------------------------------------------------------ fallback address
+
+
+def test_a_fallback_address_is_the_direct_way_of_the_extraction():
+    """Production: the public extraction has a self-signed certificate (16.11.)."""
+    settings = _settings(
+        repository_url="https://redaktion.openeduhub.net/edu-sharing/rest",
+        text_extraction_fallback_url="http://full-text.b-api/",
+    )
+
+    with forwarded_authorization(FORWARDED):
+        ways = text_extraction_ways(settings)
+
+    assert _way_names(ways) == ["forwarded", "own", "direct"]
+    assert ways[0].url.startswith("https://b-api.staging.openeduhub.net")
+    assert ways[-1].url == "http://full-text.b-api" and ways[-1].headers == {}
+
+
+def test_without_a_fallback_address_the_environment_one_stays():
+    (direct,) = [w for w in text_extraction_ways(_settings()) if w.name == "direct"]
+
+    assert direct.url == f"https://{DIRECT_EXTRACTION}"
+
+
+def test_the_fallback_address_is_not_used_with_proxy():
+    settings = _settings(
+        b_api_services="proxy", text_extraction_fallback_url="http://full-text.b-api"
+    )
+
+    assert "direct" not in _way_names(text_extraction_ways(settings))
+
+
+@pytest.mark.asyncio
+async def test_extraction_a_page_the_service_cannot_fetch_is_not_fetched_twice(
+    monkeypatch, upstream
+):
+    """424: the text extraction could not fetch the page (staging, 17.11.:
+    example.org). The caller's page, not the way: no second fetch, no 502."""
+    upstream["answers"] = {"forwarded": 424}
+
+    with pytest.raises(TextExtractionError) as raised:
+        await _extract(monkeypatch, _settings())
+
+    assert raised.value.code == "TEXT_EXTRACTION_PAGE_UNAVAILABLE"
+    assert raised.value.http_status == 422
+    assert len(upstream["calls"]) == 1

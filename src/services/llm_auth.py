@@ -24,6 +24,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Iterator, Optional
 
+from ..config import get_settings
 from .llm_errors import LLMCredentialsMissing
 
 _forwarded: ContextVar[Optional[str]] = ContextVar(
@@ -73,12 +74,26 @@ class ForwardedAuthorizationMiddleware:
         if scope.get("type") != "http":
             await self.app(scope, receive, send)
             return
-        raw = next(
-            (v for k, v in scope.get("headers", []) if k == b"authorization"), None
-        )
-        value = raw.decode("latin-1") if raw is not None else None
-        with forwarded_authorization(value):
+        with forwarded_authorization(_forwarded_value(scope.get("headers", []))):
             await self.app(scope, receive, send)
+
+
+def _forwarded_value(headers: list[tuple[bytes, bytes]]) -> Optional[str]:
+    """
+    The forwarded credential of a request: the raw token in the header the
+    proxy entry names in delegationHeader (METADATA_AGENT_B_API_DELEGATION_HEADER),
+    made a Bearer value; otherwise, or without it, Authorization as it came.
+    """
+    delegation = get_settings().b_api_delegation_header.encode("latin-1")
+    found: dict[bytes, str] = {}
+    for key, value in headers:
+        if key in (b"authorization", delegation) and key not in found:
+            # As received: the B-API expects the value byte for byte.
+            found[key] = value.decode("latin-1")
+    token = found.get(delegation, "").strip() if delegation else ""
+    if token:
+        return token if token.lower().startswith("bearer ") else f"Bearer {token}"
+    return found.get(b"authorization")
 
 
 def _missing_message(mode: str) -> str:

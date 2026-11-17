@@ -6,7 +6,7 @@ image:
   ## @param image.repository Registry path of the image, required (e.g. <registry>/projects/wlo/meta-services/metadata-agent-api)
   repository: ""
   ## @param image.tag Image tag; the chart version names the service version it deploys
-  tag: v4.0.3
+  tag: v4.0.4
   # Set, the image is pulled as <repository>@<digest> and the tag is not used:
   # a tag can be moved to another image, a digest cannot.
   ## @param image.digest Digest of the image (sha256:...) to pin it; empty: pulled by tag
@@ -82,6 +82,8 @@ env:
   METADATA_AGENT_LLM_PROVIDER: b-api-openai
   ## @param env.METADATA_AGENT_B_API_AUTH_MODE auto: forwarded key of the caller, else B_API_KEY; forward or static force one of them
   METADATA_AGENT_B_API_AUTH_MODE: auto
+  ## @param env.METADATA_AGENT_B_API_DELEGATION_HEADER Header of the delegation token if the proxy entry sets delegationHeader; empty: Authorization
+  METADATA_AGENT_B_API_DELEGATION_HEADER: ""
   # Both addresses are required: empty, the agent would take the defaults of
   # its code, which are staging. B-API and repository must belong to the same
   # environment (the agent warns at start when they do not).
@@ -104,6 +106,8 @@ env:
   METADATA_AGENT_B_API_SERVICES: auto
   ## @param env.METADATA_AGENT_TEXT_EXTRACTION_API_URL Address of a text extraction of your own; empty: chosen by METADATA_AGENT_B_API_SERVICES
   METADATA_AGENT_TEXT_EXTRACTION_API_URL: ""
+  ## @param env.METADATA_AGENT_TEXT_EXTRACTION_FALLBACK_URL Direct way out when the text extraction through the B-API fails (auto); empty: public address of the environment. In production: the service inside the cluster
+  METADATA_AGENT_TEXT_EXTRACTION_FALLBACK_URL: ""
   ## @param env.METADATA_AGENT_REQUEST_TIMEOUT Seconds per LLM call, below the 300 s deadline
   METADATA_AGENT_REQUEST_TIMEOUT: "90"
   ## @param env.METADATA_AGENT_GENERATE_TIMEOUT Seconds for a whole /generate, below the ingress 320 s

@@ -3,7 +3,7 @@
 **English** · [Deutsch](ENV-PARAMETER.de.md)
 
 The complete reference of every environment variable the Metadata Agent API
-reads, for version 4.0.3; the changes since 3.0.1 are listed in
+reads, for version 4.0.4; the changes since 3.0.1 are listed in
 [CHANGELOG.md](CHANGELOG.md) (German). The source is `src/config.py`.
 `tests/test_env_parameters.py` compares this document with the settings model:
 no variable is missing here, and none is listed that the service does not read.
@@ -105,7 +105,7 @@ never prints a key, only whether `B_API_KEY` is set (`gesetzt` or
 (`https://user:password@host`) are left out of the address lines.
 
 ```text
-Starting Metadata Agent API v4.0.3
+Starting Metadata Agent API v4.0.4
 LLM Provider: b-api-academiccloud
 LLM Model: deepseek-v4-flash
 LLM API Base: https://b-api.staging.openeduhub.net/api/v1/llm/academiccloud
@@ -265,6 +265,7 @@ the body.
 | Variable | Default | Values | Meaning and use |
 |---|---|---|---|
 | `METADATA_AGENT_B_API_AUTH_MODE` | `auto` | `auto`, `forward`, `static` | Which key the calls to the B-API carry: LLM calls, text extraction and geocoder |
+| `METADATA_AGENT_B_API_DELEGATION_HEADER` | empty | header name | Only needed if the proxy entry sets `delegationHeader`: the raw delegation token is then in that header. Empty: `Authorization` as before. The agent always passes the token on as `Authorization: Bearer …`; `X-API-KEY` is not allowed as a name |
 
 The B-API can call a registered service through `/api/v1/proxy/<service>/…` and
 pass on the caller's key as `Authorization: Bearer <key>` (admin option to
@@ -402,7 +403,8 @@ Through the B-API they are always the ones that belong to that B-API.
 | Variable | Default | Values | Meaning and use |
 |---|---|---|---|
 | `METADATA_AGENT_B_API_SERVICES` | `auto` | `auto`, `proxy`, `direct` | How text extraction and geocoder are reached. `auto`: through the B-API if the provider is a B-API provider and its LLM calls go to `METADATA_AGENT_B_API_BASE_URL`, else directly. `proxy`: always through the B-API. `direct`: never through the B-API |
-| `METADATA_AGENT_TEXT_EXTRACTION_API_URL` | empty (chosen by `METADATA_AGENT_B_API_SERVICES`) | URL | Names a text extraction yourself, for example the service inside the cluster. Required if no address can be derived: no B-API and a repository that is neither OpenEduHub staging nor production |
+| `METADATA_AGENT_TEXT_EXTRACTION_API_URL` | empty (chosen by `METADATA_AGENT_B_API_SERVICES`) | URL | Names a text extraction yourself, for example the service inside the cluster. Required if no address can be derived: no B-API and a repository that is neither OpenEduHub staging nor production. When set it is the only way, behind the B-API too |
+| `METADATA_AGENT_TEXT_EXTRACTION_FALLBACK_URL` | empty (public address of the repository's environment) | URL | Only with `METADATA_AGENT_B_API_SERVICES=auto`: the direct way out when the text extraction through the B-API fails, without a key. In production enter the service inside the cluster; the public address has no valid certificate there |
 
 | Way | Text extraction | Geocoder |
 |---|---|---|
@@ -693,7 +695,7 @@ whether the B-API accepts the key. The time limit per check is 5 s.
   never a key.
 
 ```json
-{"version": "4.0.3", "llm_provider": "b-api-openai", "b_api_auth_mode": "auto",
+{"version": "4.0.4", "llm_provider": "b-api-openai", "b_api_auth_mode": "auto",
  "config_warnings": [],
  "checks": {
    "llm": {"url": "https://b-api.prod.openeduhub.net/api/v1/llm/openai/models",
@@ -716,7 +718,7 @@ whether the B-API accepts the key. The time limit per check is 5 s.
 | Variable | Default | Values | Meaning and use |
 |---|---|---|---|
 | `METADATA_AGENT_APP_NAME` | `Metadata Agent API` | Text | Name in the start log and title of the OpenAPI document. Normally not set |
-| `METADATA_AGENT_APP_VERSION` | `4.0.3` | Text | Version the service reports (`/health`, OpenAPI, `/widget/info`). Do not set it: it changes the reported version only, not the software |
+| `METADATA_AGENT_APP_VERSION` | `4.0.4` | Text | Version the service reports (`/health`, OpenAPI, `/widget/info`). Do not set it: it changes the reported version only, not the software |
 
 No setting chooses the schema: a request names its own `context`, default
 `default` (the value `GET /info/schemata` reports as `default_context`), and
@@ -752,6 +754,58 @@ In the B-API the service must be registered with `forwardDelegation` or `forward
 forwarded keys need the LLM endpoints and the proxy services `text-extraction`
 and `photon_geocoding`. The service must be reachable only through the B-API,
 and the proxy needs a timeout of at least about 310 s.
+
+### Behind the current B-API (delegation token)
+
+Since 2026-11-10 the B-API forwards no key any more but a delegation token
+`bdt_…` (`forwardDelegation`). For the agent the course stays the same: it
+takes the token from `Authorization` and passes it on unchanged with every call
+to the B-API, within the request only.
+
+What the token may do is set by the `delegationScopes` of the proxy entry:
+`llm`, `edu-sharing-llm` and `edu-sharing-repo` (read). Writing, upload and
+starting jobs are not possible with it. Whether proxy services
+(`proxy:<service>`) can be scopes is to be clarified with the B-API team;
+without them the B-API answers `/api/v1/proxy/text-extraction` and
+`/api/v1/proxy/photon_geocoding` with `401`, as on staging on 2026-11-16.
+
+Settings at the proxy entry `metadata-agent-canvas`:
+
+| Field | Value |
+|---|---|
+| `forwardDelegation` | `true` (`forwardApiKey` is gone) |
+| `delegationScopes` | `llm`; the agent calls the repository directly, not through the B-API |
+| `delegationHeader` | leave empty (then `Authorization`). If one is set, enter the same name in `METADATA_AGENT_B_API_DELEGATION_HEADER` |
+| `delegationLifetimeSeconds` | empty (then the response timeout applies) or ≥ 320 |
+| `responseTimeout` | ≥ 310 000 ms, better 320 000 |
+
+Recommended settings of the agent behind it:
+
+```env
+# A service key as fallback is no longer intended behind the B-API.
+METADATA_AGENT_B_API_AUTH_MODE=forward
+# Do not set B_API_KEY.
+# Text extraction and geocoder through the B-API first, else directly (default auto).
+METADATA_AGENT_B_API_SERVICES=auto
+# The direct way out of the text extraction: the service inside the cluster.
+# Without it the agent takes the public address of the repository's
+# environment, which has no valid certificate in production.
+METADATA_AGENT_TEXT_EXTRACTION_FALLBACK_URL=<text extraction inside the cluster>
+```
+
+This way the agent works whether or not the B-API grants the proxy scopes:
+
+- **Without the scope:** the token gets `401` at text extraction or geocoder.
+  The agent asks the service directly (fallback address or Photon) and
+  remembers the refusal for 10 minutes for all delegation tokens, which carry
+  the same scopes. Only the first request pays the failed attempt.
+- **With the scope:** after at most 10 minutes the agent tries the B-API again
+  and stays with it. Nothing needs to be changed.
+
+Without these settings the agent works as well (defaults `auto`/`auto`), then
+with `B_API_KEY` as an intermediate step if it is set, and with the public text
+extraction as the way out. Without the B-API and with `forwardApiKey`
+everything stays as before.
 
 ### Standalone with a B-API key
 

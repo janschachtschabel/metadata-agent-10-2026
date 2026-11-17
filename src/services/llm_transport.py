@@ -476,7 +476,9 @@ class LLMTransportMixin:
             )
         if status == 401:
             return LLMAuthRejected(
-                f"Der KI-Dienst hat den Schlüssel abgelehnt (HTTP 401; {key}){suffix}",
+                f"Der KI-Dienst hat die Anmeldung abgelehnt (HTTP 401; {key}): "
+                "Schlüssel bzw. Token unbekannt, abgelaufen, der Aufruf beendet, oder "
+                f"der Pfad liegt außerhalb der Scopes eines Delegations-Tokens{suffix}",
                 upstream_status=status,
                 auth_source=auth_source,
             )

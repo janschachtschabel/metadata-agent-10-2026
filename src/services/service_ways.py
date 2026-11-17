@@ -65,9 +65,22 @@ class Way:
         return self.headers.get("Authorization") if self.name == "forwarded" else None
 
 
+# The B-API's delegation tokens (forwardDelegation) start with this. Only the
+# prefix is read, the token is never parsed.
+DELEGATION_PREFIX = "bearer bdt_"
+
+
 def _fingerprint(credential: Optional[str]) -> str:
+    """
+    What a refused forwarded credential is remembered under: a key by its own
+    hash - one caller's bad key must not move the others -, every delegation
+    token under one name: they all carry the scopes of the same proxy entry,
+    and each request brings a new one (17.11.).
+    """
     if not credential:
         return ""
+    if credential.lower().startswith(DELEGATION_PREFIX):
+        return "delegation"
     return hashlib.sha256(credential.encode("utf-8")).hexdigest()[:16]
 
 
@@ -194,12 +207,15 @@ def ways_to(
 
 def text_extraction_ways(settings: Settings) -> Ways:
     """
-    An address of the B-API, with the service of the repository's environment
-    as the direct way; any other configured address is the only way.
+    An address of the B-API, with METADATA_AGENT_TEXT_EXTRACTION_FALLBACK_URL
+    - else the service of the repository's environment - as the direct way;
+    any other configured address is the only way.
     """
     configured = settings.text_extraction_api_url
     if configured and is_b_api_address(configured, settings):
-        direct = environment_text_extraction(settings.repository_url)
+        direct = settings.text_extraction_fallback_url or environment_text_extraction(
+            settings.repository_url
+        )
         return ways_to("text-extraction", settings, configured, direct or None)
     return ways_to("text-extraction", settings, None, configured or None)
 

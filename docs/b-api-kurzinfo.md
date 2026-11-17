@@ -43,11 +43,14 @@ Regeln:
 ## 2. Auth: wessen Schlüssel zahlt
 
 Die B-API ruft den Agenten über ihren Proxy auf (`/api/v1/proxy/<dienst>/…`).
-Ist dort `forwardApiKey` gesetzt (ältere B-API), reicht sie den Schlüssel des
-Aufrufers als `Authorization: Bearer <key>` durch; mit `forwardDelegation`
-(aktuelle B-API) ein Token mit den Rechten aus `delegationScopes`, in derselben
-Kopfzeile. edu-sharing wählt dabei einen Schlüssel
-für Nutzer oder Gäste, und die B-API bucht Kosten und Limits auf ihn.
+Seit dem 10.11.2026 reicht sie mit `forwardDelegation` ein Delegations-Token
+`bdt_…` durch (`Authorization: Bearer bdt_…`), nicht mehr den Schlüssel
+(`forwardApiKey`, ältere Versionen; versteht der Agent ebenso). Das Token gilt
+nur für diesen einen Aufruf und nur für die `delegationScopes` (`llm`,
+`edu-sharing-llm`, `edu-sharing-repo` lesend). edu-sharing wählt den
+Schlüssel für Nutzer oder Gäste, und die B-API bucht Kosten und Limits auf
+ihn. Steht das Token in einem eigenen Header (`delegationHeader`), nennt
+`METADATA_AGENT_B_API_DELEGATION_HEADER` dessen Namen.
 
 `METADATA_AGENT_B_API_AUTH_MODE`:
 
@@ -60,7 +63,8 @@ für Nutzer oder Gäste, und die B-API bucht Kosten und Limits auf ihn.
 - **Meist ist nichts zu setzen:** `auto` nutzt den durchgereichten Schlüssel,
   sonst `B_API_KEY`, etwa für Direktaufrufe und Tests.
 - **`forward`** nutzen, wenn nur über den Proxy abgerechnet werden soll; dann
-  ohne `B_API_KEY`.
+  ohne `B_API_KEY`. Hinter der aktuellen B-API empfohlen: Ein Dienstschlüssel
+  als Rückfall ist dort nicht mehr vorgesehen.
 - **`static`** nutzen, wenn davor ein Proxy einen `Authorization`-Header setzt,
   der kein B-API-Schlüssel ist.
 - **Gilt für alle B-API-Provider** (`b-api-openai`, `b-api-academiccloud`,

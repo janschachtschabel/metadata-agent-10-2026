@@ -3,7 +3,7 @@
 **English** · [Deutsch](API.de.md)
 
 Reference for everyone who calls the Metadata Agent API (service id
-`metadata-agent`, version 4.0.3). What changed for callers since the previous
+`metadata-agent`, version 4.0.4). What changed for callers since the previous
 release is listed under
 [Changes since release 3.0.1](#changes-since-release-301).
 
@@ -263,6 +263,7 @@ Codes of the text extraction (input from a URL):
 | `TEXT_EXTRACTION_HTTP_ERROR` | `502` | The service answered with an error status |
 | `TEXT_EXTRACTION_FAILED` | `502` | The call failed in another way, or the answer was not readable JSON |
 | `TEXT_EXTRACTION_EMPTY` | `422` | The service returned no text for the URL |
+| `TEXT_EXTRACTION_PAGE_UNAVAILABLE` | `422` | The service could not fetch the page (its status `424`): blocked, gone or refused; check the address or send the text |
 
 ### Limits and timeouts
 
@@ -415,6 +416,7 @@ Errors of the source, on all three endpoints:
 | `404` | `NOT_FOUND` | The repository does not have the node or does not show it to the service account |
 | `422` | `VALIDATION_ERROR` | `node_id` is not a UUID; `source_url` is longer than 8,192 characters; the node holds no text: neither full text nor title, description, keywords or a readable URL |
 | `422` | `TEXT_EXTRACTION_EMPTY` | The page has no text |
+| `422` | `TEXT_EXTRACTION_PAGE_UNAVAILABLE` | The text extraction could not fetch the page |
 | `502` | `UPSTREAM_ERROR` | The repository could not be read. `detail`: `Failed to fetch input: <error type>` |
 | `502`, `503`, `504` | `TEXT_EXTRACTION_*` | See [Errors](#errors). With `node_url` only the codes `…_AUTH_MISSING`, `…_AUTH_REFUSED` and `…_NOT_CONFIGURED` end the request; other failures fall back to title and description |
 
@@ -1897,7 +1899,7 @@ layout, two attributes, one event and three example pages.
 ```json
 {
   "name": "metadata-agent-canvas",
-  "version": "4.0.3",
+  "version": "4.0.4",
   "description": "Angular Web Component zur Anzeige und Bearbeitung von Metadaten. Kann als <metadata-agent-canvas> Tag in beliebige Webanwendungen eingebettet werden. Die URLs dieser Antwort sind relativ zur Adresse von /widget/info; {AGENT_URL} in den Snippets steht für die Basis-URL des Dienstes.",
   "dist_base_url": "dist",
   "scripts": {
@@ -1978,7 +1980,7 @@ there is no `/metrics`. See [DEPLOYMENT](../DEPLOYMENT.md) and
 Liveness: the process answers. It says nothing about the dependencies.
 
 ```json
-{ "status": "healthy", "version": "4.0.3" }
+{ "status": "healthy", "version": "4.0.4" }
 ```
 
 ```bash

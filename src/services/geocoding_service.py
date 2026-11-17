@@ -299,7 +299,13 @@ class GeocodingService:
                 raise GeocoderRefused(
                     "Die B-API hat den Aufruf des Geocoders abgelehnt "
                     f"(HTTP {response.status_code}, Proxy-Dienst "
-                    "photon_geocoding).",
+                    "photon_geocoding"
+                    + (
+                        "; bei einem Delegations-Token oft ein Pfad außerhalb "
+                        "seiner Scopes)."
+                        if response.status_code == 401
+                        else ")."
+                    ),
                     response.status_code,
                 )
             raise _PathFailed(

@@ -39,6 +39,8 @@ services:
       # Which key carries the LLM calls: auto (forwarded key, else B_API_KEY),
       # forward (forwarded key only), static (B_API_KEY only, as in 2.0.x)
       - METADATA_AGENT_B_API_AUTH_MODE=${METADATA_AGENT_B_API_AUTH_MODE:-auto}
+      # Header of a delegation token, only if the proxy entry sets delegationHeader
+      - METADATA_AGENT_B_API_DELEGATION_HEADER=${METADATA_AGENT_B_API_DELEGATION_HEADER:-}
       
       # OpenAI Key (only needed if using provider=openai)
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
@@ -55,6 +57,8 @@ services:
       # belong to the B-API above; an empty address is chosen that way.
       - METADATA_AGENT_B_API_SERVICES=${METADATA_AGENT_B_API_SERVICES:-auto}
       - METADATA_AGENT_TEXT_EXTRACTION_API_URL=${METADATA_AGENT_TEXT_EXTRACTION_API_URL:-}
+      # Direct way out when the text extraction through the B-API fails (auto)
+      - METADATA_AGENT_TEXT_EXTRACTION_FALLBACK_URL=${METADATA_AGENT_TEXT_EXTRACTION_FALLBACK_URL:-}
       - METADATA_AGENT_REPOSITORY_URL=${METADATA_AGENT_REPOSITORY_URL:-https://repository.staging.openeduhub.net/edu-sharing/rest}
 
       # Native OpenAI (only used when provider=openai)

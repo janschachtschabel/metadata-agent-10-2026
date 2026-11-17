@@ -55,6 +55,17 @@ async def debug_auth(request: Request):
         "mode": deps.settings.b_api_auth_mode,
         "Authorization": mask_header(request.headers.get("authorization")),
         "X-API-KEY": mask_header(request.headers.get("x-api-key")),
+        # The header of METADATA_AGENT_B_API_DELEGATION_HEADER, if one is set.
+        "delegation_header": (
+            {
+                "name": deps.settings.b_api_delegation_header,
+                **mask_header(
+                    request.headers.get(deps.settings.b_api_delegation_header)
+                ),
+            }
+            if deps.settings.b_api_delegation_header
+            else None
+        ),
         "b_api_key_configured": bool(deps.settings.b_api_key),
         "llm_calls_use": current_auth_source(deps.settings),
     }
